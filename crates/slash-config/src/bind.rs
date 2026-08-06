@@ -68,14 +68,14 @@ pub fn bind(
             continue;
         };
 
-        if let Some(choices) = &arg.choices {
-            if !choices.contains(&value) {
-                errors.push(BindError::NotInChoices {
-                    name: arg.name.clone(),
-                    choices: choices.join(", "),
-                });
-                continue;
-            }
+        if let Some(choices) = &arg.choices
+            && !choices.contains(&value)
+        {
+            errors.push(BindError::NotInChoices {
+                name: arg.name.clone(),
+                choices: choices.join(", "),
+            });
+            continue;
         }
         if !arg.free_text && !is_safe_value(&value) {
             errors.push(BindError::UnsafeValue {

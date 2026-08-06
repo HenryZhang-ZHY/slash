@@ -134,13 +134,13 @@ pub fn find_misplaced_command(
             continue;
         }
         let chars: Vec<char> = line.chars().collect();
-        if let Ok((name, _)) = scan_command_name(&chars) {
-            if configured.contains(&name) {
-                return Some(MisplacedCommand {
-                    name,
-                    line: offset + 1,
-                });
-            }
+        if let Ok((name, _)) = scan_command_name(&chars)
+            && configured.contains(&name)
+        {
+            return Some(MisplacedCommand {
+                name,
+                line: offset + 1,
+            });
         }
     }
     None
@@ -209,15 +209,14 @@ fn tokenize(chars: &[char], start: usize) -> Result<Vec<(Vec<char>, usize)>, Par
             };
 
             if in_quotes {
-                if c == '\\' {
-                    if let Some(next_c) = chars.get(idx + 1).copied() {
-                        if next_c == '"' || next_c == '\\' {
-                            buf.push(c);
-                            buf.push(next_c);
-                            idx += 2;
-                            continue;
-                        }
-                    }
+                if c == '\\'
+                    && let Some(next_c) = chars.get(idx + 1).copied()
+                    && (next_c == '"' || next_c == '\\')
+                {
+                    buf.push(c);
+                    buf.push(next_c);
+                    idx += 2;
+                    continue;
                 }
                 if c == '"' {
                     in_quotes = false;

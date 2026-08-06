@@ -375,23 +375,22 @@ async fn sweep_stale_dispatched(
                     InvocationStatus::CorrelationTimeout,
                 )
                 .await
+                    && let Some(check_run_id) = invocation.check_run_id
                 {
-                    if let Some(check_run_id) = invocation.check_run_id {
-                        let _ = client
-                            .update_check_run(
-                                check_run_id as u64,
-                                CheckRunUpdate {
-                                    status: Some(octocrab::params::checks::CheckRunStatus::Completed),
-                                    conclusion: Some(octocrab::params::checks::CheckRunConclusion::Neutral),
-                                    details_url: None,
-                                    output: Some((
-                                        "Could not confirm the run",
-                                        "Could not determine whether the workflow started. Please re-issue the command.",
-                                    )),
-                                },
-                            )
-                            .await;
-                    }
+                    let _ = client
+                        .update_check_run(
+                            check_run_id as u64,
+                            CheckRunUpdate {
+                                status: Some(octocrab::params::checks::CheckRunStatus::Completed),
+                                conclusion: Some(octocrab::params::checks::CheckRunConclusion::Neutral),
+                                details_url: None,
+                                output: Some((
+                                    "Could not confirm the run",
+                                    "Could not determine whether the workflow started. Please re-issue the command.",
+                                )),
+                            },
+                        )
+                        .await;
                 }
             }
         }

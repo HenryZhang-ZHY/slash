@@ -190,13 +190,13 @@ fn validate_arg(
     }
 
     if let Some(default) = &arg.default {
-        if let Some(choices) = &arg.choices {
-            if !choices.contains(default) {
-                errors.push(ConfigError::DefaultNotInChoices {
-                    file: file.to_string(),
-                    name: arg.name.clone(),
-                });
-            }
+        if let Some(choices) = &arg.choices
+            && !choices.contains(default)
+        {
+            errors.push(ConfigError::DefaultNotInChoices {
+                file: file.to_string(),
+                name: arg.name.clone(),
+            });
         }
         if !arg.free_text && !slash_command::is_safe_value(default) {
             errors.push(ConfigError::DefaultFailsCharset {
