@@ -4,7 +4,13 @@
 # deps as the root Dockerfile's builder stage (`ring`/`aws-lc-rs`, pulled in
 # transitively by rustls, build C code the slim image has no compiler for)
 # plus the rustfmt/clippy components the slim image's default profile omits.
-FROM rust:1.85-slim-bookworm
+#
+# Tracks current stable rather than pinning to Cargo.toml's declared
+# rust-version (1.85), matching .github/workflows/ci.yml's
+# dtolnay/rust-toolchain@stable — Cargo.lock has resolved some transitive
+# deps (cargo_metadata, time and friends) against a newer rustc than 1.85
+# already supports, so pinning to 1.85 here fails dependency resolution.
+FROM rust:slim-bookworm
 
 ENV CARGO_TERM_COLOR=always
 
