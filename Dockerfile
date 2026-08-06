@@ -6,7 +6,7 @@
 # Builder and runtime pin the same Debian codename (bookworm) so the glibc
 # the binary links against at build time matches the one it runs against.
 
-FROM rust:1.85-slim-bookworm AS builder
+FROM rust:1.88-slim-bookworm AS builder
 WORKDIR /app
 
 # `ring`/`aws-lc-rs` (pulled in transitively by rustls) build C code, which
