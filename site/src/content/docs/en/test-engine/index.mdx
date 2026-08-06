@@ -1,0 +1,37 @@
+---
+title: Test Engine
+description: "Collect test results, find flaky tests, and keep them from blocking pull requests."
+sidebar:
+  order: 1
+---
+
+Test Engine turns test history into a continuous quarantine loop. Your CI runs
+the tests; Slash receives the results, detects flaky behavior, and records the
+disposition that the next CI run should apply.
+
+Slash never executes repository code. It remains the control plane while your
+existing CI system remains the execution plane.
+
+## What you can do
+
+- Collect normalized JSON, JUnit XML, Cargo libtest JSON, or Vitest results.
+- Browse suites, tests, executions, pass rates, and recent failures.
+- Detect tests that fail and later pass within a rolling seven-day window.
+- Automatically mute flaky tests so they continue to run without blocking a
+  pull request.
+- Manually enable, mute, or skip a test.
+- Query the current quarantine list before a CI run applies its final result.
+
+## Choose your next step
+
+- [Send your first test result](/en/test-engine/getting-started/) for the
+  shortest path from an empty suite to a visible execution.
+- [Understand tests and quarantine](/en/test-engine/concepts/) for the data
+  model, test states, and flaky-detection rules.
+- [Integrate Test Engine with CI](/en/test-engine/integrate-ci/) for collection
+  tokens, result formats, and the disposal loop.
+- [Use the Test Engine console](/en/test-engine/console/) to manage suites,
+  inspect history, and change test state.
+
+Use the [management API](/en/api/test-engine/) and
+[ingestion API](/en/api/ingestion/) when you need endpoint-level details.

@@ -1,0 +1,53 @@
+---
+title: Known limitations
+description: "Understand current product boundaries before depending on Slash in a workflow."
+sidebar:
+  order: 9
+---
+
+These are current product boundaries that can affect repository policy,
+workflow design, or operations.
+
+## Pull requests and checks
+
+- **Fork pull requests are unsupported.** GitHub cannot dispatch the configured
+  workflow against a ref owned by another repository. Push the branch to the
+  base repository before invoking a command.
+- **Commands do not re-run automatically after a push.** A required
+  `slash/<command>` check returns to `Expected` on a new head commit. Invoke the
+  command again or use the check run's **Re-run** action. Review
+  [required-check behavior](/en/commands/workflows/#required-status-checks-capability-and-footgun)
+  before making a command mandatory.
+- **Concurrent invocations of one command share a check-run name.** The newest
+  invocation is the one visible in the pull-request checks list. Slash marks an
+  older invocation `superseded`, but does not cancel its workflow run.
+
+## Command configuration
+
+- **Slash does not validate `.slash/` on push.** Run `slash validate .slash/`
+  in repository CI so invalid default-branch configuration is caught before
+  someone invokes it.
+- **Command files have no shared defaults.** Every `.slash/*.yml` file owns its
+  complete permission, workflow, and argument configuration.
+- **A command must be on the first line of a comment.** Commands elsewhere in
+  a multi-line comment are ignored without a reply.
+
+## Replies and rate limiting
+
+Slash suggests a configured command when an unknown command is within edit
+distance two. It does not currently apply a token bucket, per-pull-request
+comment deduplication, or a misplaced-command reply. Most rejection paths emit
+at most one comment for each webhook event, but there is no independent reply
+rate limiter.
+
+## Operations
+
+- **There is no per-installation or global kill switch.** Stop every server
+  replica to halt dispatch activity, or suspend the GitHub App installation to
+  revoke one account's access. Durable work remains in Postgres for recovery.
+- **GitHub API rate-limit visibility is incomplete.** `/metrics` does not
+  expose per-endpoint GitHub request counts or remaining rate-limit budget.
+  Use server logs alongside the available queue and invocation metrics.
+
+See [Operate Slash](/en/self-host/operations/) for monitoring, credential
+rotation, the instance admin console, and incident response.

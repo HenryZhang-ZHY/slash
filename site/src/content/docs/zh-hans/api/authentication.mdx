@@ -1,0 +1,179 @@
+---
+title: 认证与团队
+description: "注册用户、管理会话并创建团队。"
+sidebar:
+  order: 1
+---
+
+这些端点接受 `slash_session` cookie 或[个人 Access Token](/zh-hans/api/access-tokens/)。注册和
+登录返回带 `HttpOnly`、`SameSite=Lax`、`Path=/` 和七天 `Max-Age` 的 cookie。
+
+示例使用 cookie jar，让一个请求返回的会话能被下一个请求使用：
+
+```sh
+curl -c cookies.txt -b cookies.txt https://slash.example.com/api/auth/me
+```
+
+## POST `/api/auth/register`
+
+创建一个激活账户并立即登录。
+
+```sh
+curl -i -c cookies.txt \
+  -H "Content-Type: application/json" \
+  -d '{"email":"operator@example.com","password":"correct-horse","display_name":"Release Operator"}' \
+  https://slash.example.com/api/auth/register
+```
+
+请求体：
+
+| 字段 | 类型 | 必填 | 校验 |
+| --- | --- | --- | --- |
+| `email` | string | 是 | 必须非空且包含 `@`；归一化为小写 |
+| `password` | string | 是 | 至少 8 字节 |
+| `display_name` | string | 否 | 默认为空字符串；首尾空白被移除 |
+
+成功：`200 OK`，一个 `Set-Cookie` 头，以及：
+
+```json
+{
+  "user": {
+    "id": "1165fc2c-64f4-49f6-b77c-15317cf59fb8",
+    "email": "operator@example.com",
+    "displayName": "Release Operator"
+  }
+}
+```
+
+| 状态 | 含义 |
+| --- | --- |
+| `200` | 账户和会话已创建 |
+| `409` | 已有一个账户使用归一化后的邮箱 |
+| `422` | 邮箱或密码校验失败 |
+| `500` | 密码哈希、持久化或会话创建失败 |
+
+## POST `/api/auth/login`
+
+验证激活账户并创建新的七天会话。
+
+```sh
+curl -i -c cookies.txt \
+  -H "Content-Type: application/json" \
+  -d '{"email":"operator@example.com","password":"correct-horse"}' \
+  https://slash.example.com/api/auth/login
+```
+
+请求体：
+
+```json
+{
+  "email": "operator@example.com",
+  "password": "correct-horse"
+}
+```
+
+成功：`200 OK`，一个 `Set-Cookie` 头，以及注册返回的同一 `{ "user": ... }` 形状。
+无效凭据返回 `401` 和通用错误；响应不会透露邮箱是否存在。
+
+## GitHub 登录与连接
+
+`GET /api/auth/github/sign-in` 按稳定 GitHub numeric user ID 登录；新身份会创建一个
+不带邮箱密码凭据的 Slash 账户。Slash 不申请 GitHub 邮箱权限，也绝不按邮箱匹配或
+合并账户。已有邮箱密码账户必须先登录，再调用
+`POST /api/auth/github/connect` 显式连接 GitHub。
+
+两个入口都由 GitHub 回到 `GET /api/auth/github/callback`。callback 使用 state、PKCE
+和当前会话校验，不会把 GitHub token 返回给浏览器。
+
+## POST `/api/auth/logout`
+
+清除浏览器会话 cookie。
+
+```sh
+curl -i -b cookies.txt -X POST \
+  https://slash.example.com/api/auth/logout
+```
+
+成功：`204 No Content`，带一个把 `slash_session` 设为空值、`Max-Age=0` 的
+`Set-Cookie` 头。这个端点不需要有效会话。
+
+## GET `/api/auth/me`
+
+返回当前用户、所属团队和外部身份连接状态。GitHub-only 账户的 `user.email` 为
+`null`。
+
+```sh
+curl -b cookies.txt https://slash.example.com/api/auth/me
+```
+
+成功：`200 OK`。
+
+```json
+{
+  "user": {
+    "id": "1165fc2c-64f4-49f6-b77c-15317cf59fb8",
+    "email": "operator@example.com",
+    "displayName": "Release Operator"
+  },
+  "teams": [
+    {
+      "id": "cb50f1d6-7a11-44d7-b45e-9c158b8e7774",
+      "organizationId": "b07dc85d-d18c-42fa-9a58-055d9f32801c",
+      "name": "Platform",
+      "slug": "platform",
+      "role": "maintainer"
+    }
+  ],
+  "connections": {
+    "github": {
+      "login": "octocat"
+    }
+  }
+}
+```
+
+缺失、无效、过期或未知的会话返回 `401` 和 JSON `error` 消息。
+
+## POST `/api/teams`
+
+为当前用户创建团队。如果用户没有组织，Slash 还会创建 home 组织并把用户记为它的
+owner。创建者成为团队 maintainer。
+
+```sh
+curl -b cookies.txt \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Platform","slug":"platform"}' \
+  https://slash.example.com/api/teams
+```
+
+请求体：
+
+| 字段 | 类型 | 必填 | 校验 |
+| --- | --- | --- | --- |
+| `name` | string | 是 | trim 后必须非空 |
+| `slug` | string | 否 | 1-63 个小写 ASCII 字母、数字或连字符 |
+
+省略 `slug` 时，Slash 通过把 `name` 转小写、把非字母数字的连续片段替换为 `-`、
+并去除尾部连字符来派生一个。
+
+成功：`200 OK`。
+
+```json
+{
+  "team": {
+    "id": "cb50f1d6-7a11-44d7-b45e-9c158b8e7774",
+    "organizationId": "b07dc85d-d18c-42fa-9a58-055d9f32801c",
+    "name": "Platform",
+    "slug": "platform",
+    "role": "maintainer"
+  }
+}
+```
+
+| 状态 | 含义 |
+| --- | --- |
+| `200` | 团队已创建 |
+| `401` | 无有效会话 |
+| `409` | 组织已拥有该 slug |
+| `422` | 名称或 slug 校验失败 |
+| `500` | 团队无法被创建或读回 |

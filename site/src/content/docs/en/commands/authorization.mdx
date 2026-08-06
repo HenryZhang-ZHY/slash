@@ -1,0 +1,51 @@
+---
+title: Command authorization
+description: "Understand who may invoke commands and how Slash authorizes them."
+sidebar:
+  order: 4
+---
+
+GitHub repository access is the only source of truth for command authorization.
+Invoking a command does not require a Slash account, team, or separate grant.
+Slash checks the actor's current collaborator role for every invocation and
+every check-run re-request.
+
+## Private repositories
+
+Any current collaborator with `read` access or higher may run every configured
+command. Slash ignores the command's `permission` field for private repositories:
+access to the repository itself is the trust boundary.
+
+Removing a collaborator in GitHub immediately removes their command access.
+There is no corresponding setting in the Slash web console.
+
+## Public repositories
+
+For public repositories, each `.slash/*.yml` command declares a minimum
+`permission`: `read`, `write`, or `admin`. The default is `write`.
+
+| Command permission | Accepted GitHub roles |
+| --- | --- |
+| `read` | read, triage, write, maintain, admin |
+| `write` | write, maintain, admin |
+| `admin` | admin |
+
+Slash reads GitHub's `role_name` and falls back to the detailed permission
+booleans for custom roles. It does not authorize from the webhook's
+`author_association` field.
+
+## Fail closed
+
+If repository visibility or collaborator access cannot be verified, Slash
+denies the command. A failed GitHub lookup gets at most a 😕 reaction and no
+comment because the actor's ability to participate in the repository is unknown.
+
+## Re-running
+
+Clicking **Re-run** checks the re-requester's current GitHub role—not the
+original invoker's—against the repository's current visibility and the
+command's current configuration. It cannot preserve access that GitHub has
+since removed.
+
+Fork pull requests remain unsupported; Slash cannot dispatch a workflow to a
+ref owned by another repository.

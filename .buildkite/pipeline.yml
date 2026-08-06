@@ -1,0 +1,101 @@
+# Buildkite CI for the Slash workspace.
+#
+# Mirrors .github/workflows/ci.yml (fmt, clippy, test against Postgres) and
+# adds a sanity build of the deployment image (Dockerfile), which no CI
+# currently exercises.
+#
+# No `agents.queue` is set — steps route to the pipeline's cluster's default
+# queue. If that cluster ends up with more than one queue, add an explicit
+# `agents: { queue: "..." }` to pin these steps to the one with Docker +
+# Docker Compose v2 installed.
+
+steps:
+  - label: ":rust: fmt"
+    key: fmt
+    command: cargo fmt --all -- --check
+    plugins:
+      - docker-compose#v5.13.0:
+          config: .buildkite/docker-compose.yml
+          run: lint
+          mount-checkout: true
+          workdir: /workspace
+
+  - label: ":mag: clippy"
+    key: clippy
+    command: cargo clippy --workspace --all-targets -- -D warnings
+    plugins:
+      - docker-compose#v5.13.0:
+          config: .buildkite/docker-compose.yml
+          run: lint
+          mount-checkout: true
+          workdir: /workspace
+
+  - label: ":test_tube: test"
+    key: test
+    depends_on:
+      - fmt
+      - clippy
+    # Fetched by the agent into the job's own environment under this exact
+    # key name (Buildkite Secrets, not a pipeline env var) — see the
+    # BUILDKITE_ANALYTICS_TOKEN remap in docker-compose.yml's `test` service,
+    # since buildkite-test-collector only reads that fixed name.
+    secrets:
+      - TEST_SUITE_SLASH_BUILDKITE_ANALYTICS_TOKEN
+    # `--format json --report-time` are unstable libtest options; RUSTC_
+    # BOOTSTRAP=1 unlocks them on the stable toolchain this image tracks
+    # without needing a nightly install. Output is piped through the
+    # buildkite-test-collector binary baked into Dockerfile.ci, which
+    # uploads results to Test Engine and echoes the JSON back to stdout.
+    # `bash -o pipefail` is required so the step still fails when cargo
+    # test fails — otherwise the shell reports the collector's exit code.
+    command: |
+      bash -o pipefail -c '
+        RUSTC_BOOTSTRAP=1 cargo test --workspace -- -Z unstable-options --format json --report-time \
+          | buildkite-test-collector
+      '
+    plugins:
+      - docker-compose#v5.13.0:
+          config: .buildkite/docker-compose.yml
+          run: test
+          mount-checkout: true
+          workdir: /workspace
+
+  - label: ":docker: docker build"
+    key: docker-build
+    depends_on:
+      - fmt
+      - clippy
+    # Deliberately runs alongside `test` (no `wait` before it) rather than
+    # after — it doesn't depend on test's Postgres/DB state or outcome, and
+    # fmt/clippy have already gated both. Validates the deployment image
+    # still builds; not pushed anywhere — wire up a registry + credentials
+    # plugin (e.g. ecr, docker-login) here once you have one.
+    command: docker build -t slash-server:build-$BUILDKITE_BUILD_NUMBER .
+
+  - label: ":node: web (frontend) build + lint"
+    key: web-build
+    # Frontend SPA checks (web/): typecheck via `tsc -b`, then a production
+    # Vite build and oxlint. Independent of the Rust steps; runs in a Node
+    # image (see .buildkite/docker-compose.yml `web` service) so a backend
+    # green never implies frontend health.
+    command: npm ci && npm run build && npm run lint
+    plugins:
+      - docker-compose#v5.13.0:
+          config: .buildkite/docker-compose.yml
+          run: web
+          mount-checkout: true
+          workdir: /workspace
+
+  - label: ":vitest: web tests"
+    key: web-test
+    # The official Buildkite Vitest reporter uploads once Vitest has completed
+    # the run, so test execution and collection stay in one dedicated step.
+    secrets:
+      - TEST_SUITE_SLASH_BUILDKITE_ANALYTICS_TOKEN
+    command: npm ci && npm test
+    plugins:
+      - docker-compose#v5.13.0:
+          config: .buildkite/docker-compose.yml
+          run: web-test
+          mount-checkout: true
+          workdir: /workspace

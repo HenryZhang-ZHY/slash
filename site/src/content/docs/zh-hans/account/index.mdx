@@ -1,0 +1,49 @@
+---
+title: 账户与工作区
+description: "登录、创建团队、连接 GitHub，并管理 API 凭据。"
+sidebar:
+  order: 1
+---
+
+Slash 控制台从与 REST API 相同的 origin 提供账户、工作区、设置和 Test Engine 页面。
+每个页面都通过有文档的 API 读取和更新服务端状态。
+
+## 登录或注册
+
+打开部署的控制台根路径。未认证访问会重定向到 `/login`，你可以：
+
+- 使用邮箱和至少八字节的密码创建账户；
+- 登录已有密码账户；或
+- 使用稳定的 GitHub 身份登录。
+
+认证会创建 `HttpOnly` session cookie。Slash 不把 GitHub 邮箱当作身份主键，也不会
+根据邮箱匹配来合并账户。如果已有密码账户，请先登录该账户，再从 Settings 连接
+GitHub。
+
+## 创建第一个团队
+
+没有团队的用户会进入 `/onboarding`。输入团队名和由小写字母、数字、连字符组成、
+最长 63 字符的 slug。创建第一个团队时，系统会在需要时创建 home organization，
+并把你设为团队 maintainer。
+
+团队用于组织 Test Engine suite 等 Slash 原生资源。谁能调用 slash command 则由
+GitHub 仓库权限独立决定。
+
+## 使用工作区
+
+工作区根路径显示团队和 Test Engine 汇总、你的团队，以及前往 `/tests` 的快捷入口。
+使用 [Test Engine 控制台](/zh-hans/test-engine/console/)创建 suites 并查看结果。
+
+## 连接 GitHub
+
+打开 `/settings` 查看与账户关联的 GitHub 身份。尚未关联时，可以从该页面开始连接
+流程。Slash 根据认证后的 provider callback 解析连接结果，不信任浏览器 URL 参数。
+
+## 管理 Personal Access Tokens
+
+Settings 还允许为 Agent 和 REST API 客户端创建、吊销凭据。Token 以所属用户身份
+认证，不会增加权限。明文只显示一次；之后列表只显示名称、创建时间、最近使用时间和
+到期状态。
+
+请求认证、有效期和吊销行为见
+[Personal Access Token 参考](/zh-hans/api/access-tokens/)。

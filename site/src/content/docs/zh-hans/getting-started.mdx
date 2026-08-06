@@ -1,0 +1,87 @@
+---
+title: 运行第一条命令
+description: "添加一条命令和对应 workflow，然后从拉取请求中运行它。"
+sidebar:
+  order: 1
+---
+
+本教程从一个已经可访问的 Slash 部署开始，以 GitHub check run 成功结束为目标。
+你将在仓库中添加 `/echo` 命令，并从同仓库分支创建的拉取请求中运行它。
+
+## 开始之前
+
+请确认：
+
+- Slash 已配置为接收该仓库的 GitHub 事件；
+- 你可以把文件合并到仓库默认分支；
+- GitHub Actions 已启用；以及
+- 用于测试的拉取请求 head 分支属于同一仓库，而不是 fork。
+
+## 1. 定义命令
+
+在默认分支添加 `.slash/echo.yml`：
+
+```yaml
+command: echo
+permission: write
+workflow: echo.yml
+args:
+  - name: message
+    free_text: true
+```
+
+默认分支拥有命令策略。拉取请求不能修改自己的权限要求，也不能把命令重定向到另一个
+workflow。
+
+## 2. 添加 Workflow
+
+在默认分支添加 `.github/workflows/echo.yml`：
+
+```yaml
+name: echo
+on:
+  workflow_dispatch:
+    inputs:
+      message: { required: false }
+      slash_actor: { required: false }
+jobs:
+  echo:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Echo
+        env:
+          MESSAGE: ${{ inputs.message }}
+          ACTOR: ${{ inputs.slash_actor }}
+        run: echo "$ACTOR says: $MESSAGE"
+```
+
+GitHub 必须先在默认分支注册这个 workflow，Slash 才能 dispatch。请像示例一样通过
+`env:` 传递 inputs；绝不要把不可信 input 直接插值进 `run:` 脚本。
+
+## 3. 运行命令
+
+从同一仓库的分支创建拉取请求，在新评论的第一行输入：
+
+```text
+/echo hello world
+```
+
+## 确认结果
+
+一次成功调用会产生三个可见信号：
+
+1. Slash 为评论添加 🚀 反应。
+2. 拉取请求上出现 `slash/echo` check。
+3. check 到达终态，并链接到对应的 GitHub Actions run。
+
+如果命令被忽略，先确认命令位于评论第一行。如果 dispatch 失败，确认两个文件都已在
+默认分支上，并且 workflow 声明了 `on: workflow_dispatch`。
+
+## 下一步
+
+- [Slash 命令](/zh-hans/commands/)解释完整生命周期。
+- [配置命令](/zh-hans/commands/configuration/)记录全部字段与校验规则。
+- [构建命令 Workflow](/zh-hans/commands/workflows/)介绍注入 inputs、安全传值和
+  required checks。
+- [命令授权](/zh-hans/commands/authorization/)解释谁可以运行命令。
+- [已知限制](/zh-hans/limitations/)列出刻意边界与当前缺口。

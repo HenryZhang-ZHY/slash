@@ -1,0 +1,67 @@
+---
+title: Configure Slash
+description: "Set runtime variables, mount secrets, and enable optional GitHub sign-in."
+sidebar:
+  order: 3
+---
+
+## Runtime variables
+
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `SLASH_DATABASE_URL_PATH` | yes | File containing the Postgres connection string |
+| `SLASH_WEBHOOK_SECRET_PATH` | yes | File containing the GitHub App webhook secret |
+| `SLASH_GITHUB_APP_ID` | yes | Numeric GitHub App ID |
+| `SLASH_GITHUB_PRIVATE_KEY_PATH` | yes | File containing the GitHub App private key |
+| `SLASH_AUTH_SECRET_PATH` | yes | File containing the session-signing HMAC secret |
+| `SLASH_ADMIN_SECRET_PATH` | no | Enables the separate instance admin surface |
+| `SLASH_GITHUB_CLIENT_ID` | no | Enables GitHub user sign-in with the same App |
+| `SLASH_GITHUB_CLIENT_SECRET_PATH` | with client ID | File containing the GitHub App client secret |
+| `SLASH_BASE_URL` | with GitHub sign-in | Public origin used to construct the callback URL |
+| `SLASH_WEB_DIR` | no | Built Web console directory; defaults to `web/dist` |
+| `SLASH_DELIVERY_WORKERS` | no | Positive worker count per server process; defaults to `8` |
+| `RUST_LOG` | no | `tracing_subscriber` filter, such as `info` |
+
+## File-only secrets
+
+Every secret is configured through a `*_PATH` variable. Slash reads the target
+file byte-for-byte at startup and does not trim whitespace. Mount secret files
+read-only and avoid a trailing newline unless it is deliberately part of the
+secret.
+
+Inline variants such as `SLASH_DATABASE_URL`, `SLASH_WEBHOOK_SECRET`, and
+`SLASH_AUTH_SECRET` are not recognized. A missing, unreadable, or empty required
+secret file stops startup. The optional admin secret is different only in that
+an unset path disables `/admin`; a configured but invalid file still stops
+startup.
+
+## Configure the GitHub App
+
+Set the App webhook URL to:
+
+```text
+https://slash.example.com/webhook
+```
+
+The webhook secret must exactly match the bytes in the file referenced by
+`SLASH_WEBHOOK_SECRET_PATH`. Grant `checks: write`, `actions: write`,
+`contents: read`, `pull_requests: write`, `issues: write`, and `metadata: read`.
+Subscribe the App to `issue_comment`, `workflow_run`, `check_run`, and
+`pull_request`, then install it on each repository that Slash should control.
+
+## Enable GitHub user sign-in
+
+Slash can use the same GitHub App for repository automation and user identity:
+
+1. Add `https://slash.example.com/api/auth/github/callback` to the App's
+   callback URLs.
+2. Set `SLASH_GITHUB_CLIENT_ID` to the App client ID.
+3. Store the client secret in the file referenced by
+   `SLASH_GITHUB_CLIENT_SECRET_PATH`.
+4. Set `SLASH_BASE_URL` to the public origin, without a callback path.
+5. Restart Slash and verify **Sign in with GitHub** from `/login`.
+
+Slash reads only the authenticated `/user` profile. It does not request GitHub
+email access, infer account equality from email, or persist provider access
+tokens. Existing password users should connect GitHub from `/settings` while
+signed in to the account they intend to keep.

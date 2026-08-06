@@ -1,0 +1,17 @@
+[package]
+name = "slash-command"
+description = "Slash command-line lexer and parser (pure, no IO)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+
+[dev-dependencies]
+proptest = "1"
+
+[lints]
+workspace = true

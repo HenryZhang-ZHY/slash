@@ -1,0 +1,125 @@
+---
+title: API reference
+description: "HTTP endpoints exposed by slash-server."
+sidebar:
+  order: 10
+---
+
+Slash serves its HTTP API and web console from the same origin. Replace
+`https://slash.example.com` in the examples with the origin of your Slash
+deployment. The console (see [Account and workspace](/en/account/)) is a
+thin client over these same endpoints.
+
+All request bodies share a **5 MiB limit**. UUID path parameters use the
+standard hyphenated UUID representation. Timestamps in JSON responses are
+RFC 3339 strings.
+
+## Choose an API
+
+- Use [Authentication and teams](/en/api/authentication/) for sessions,
+  external identity, the current user, and team creation.
+- Use [Personal access tokens](/en/api/access-tokens/) to issue credentials
+  for agents and other REST clients.
+- Use [Test Engine management](/en/api/test-engine/) for suites, tests,
+  execution history, state, and collection tokens.
+- Use [Test result ingestion](/en/api/ingestion/) from CI to upload results or
+  query quarantine.
+- Use [Webhook and operations](/en/api/platform/) when configuring or
+  monitoring the server boundary.
+
+## Authentication methods
+
+| Surface | Authentication |
+| --- | --- |
+| Account, team, and Test Engine management | `slash_session` cookie or personal Bearer token |
+| Personal access token management | `slash_session` cookie only |
+| Test result ingestion and quarantine lookup | `Authorization: Bearer <collection-token>` |
+| Instance administration | Separate admin session enabled by `SLASH_ADMIN_SECRET_PATH` |
+| GitHub webhook | `X-Hub-Signature-256` HMAC signature |
+| Health and metrics | None |
+
+## Endpoint inventory
+
+The tables below list every route registered by `slash-server`.
+
+### [Authentication and teams](/en/api/authentication/)
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/auth/register` | Create an account and session |
+| `POST` | `/api/auth/login` | Create a session |
+| `POST` | `/api/auth/logout` | Clear the current session |
+| `GET` | `/api/auth/me` | Read the current user, teams, and connections |
+| `GET` | `/api/auth/github/sign-in` | Start GitHub sign-in |
+| `POST` | `/api/auth/github/connect` | Connect GitHub to the current user |
+| `GET` | `/api/auth/github/callback` | Complete GitHub authentication |
+| `POST` | `/api/teams` | Create a team |
+
+### [Personal access tokens](/en/api/access-tokens/)
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/access-tokens` | List the current user's tokens |
+| `POST` | `/api/access-tokens` | Create a token and reveal it once |
+| `DELETE` | `/api/access-tokens/{id}` | Revoke a token |
+
+### [Test Engine management](/en/api/test-engine/)
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/test-engine/suites` | List owned suites |
+| `POST` | `/api/test-engine/suites` | Create or reuse a suite |
+| `GET` | `/api/test-engine/suites/{id}/tests` | List tests in a suite |
+| `GET` | `/api/test-engine/tests/{id}/executions` | List execution history |
+| `PATCH` | `/api/test-engine/tests/{id}/state` | Change a test's disposal state |
+| `GET` | `/api/test-engine/suites/{id}/tokens` | Read the latest active token |
+| `POST` | `/api/test-engine/suites/{id}/tokens` | Issue a collection token |
+| `POST` | `/api/test-engine/suites/{id}/tokens/revoke` | Revoke a collection token |
+
+### [Test result ingestion](/en/api/ingestion/)
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/v1/test-engine/upload` | Upload normalized JSON or JUnit XML |
+| `POST` | `/v1/test-engine/upload/cargo` | Upload Cargo libtest JSON events |
+| `POST` | `/v1/test-engine/upload/vitest` | Upload Vitest results |
+| `GET` | `/v1/test-engine/quarantined` | List muted or skipped test names |
+
+### [Instance administration](/en/self-host/operations/#instance-admin-console)
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/admin/auth/login` | Create an admin session |
+| `POST` | `/api/admin/auth/logout` | Clear the admin session |
+| `GET` | `/api/admin/auth/session` | Read admin session state |
+| `GET` | `/api/admin/overview` | Read instance queue and installation totals |
+| `GET` | `/api/admin/installations` | List known App installations |
+| `POST` | `/api/admin/installations/refresh` | Reconcile installations from GitHub |
+| `GET` | `/api/admin/deliveries` | List recent webhook deliveries |
+| `GET` | `/api/admin/deliveries/{guid}` | Read one delivery and related invocations |
+| `GET` | `/api/admin/invocations` | List recent command invocations |
+
+### [Webhook and operations](/en/api/platform/)
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/webhook` | Receive signed GitHub webhook deliveries |
+| `GET` | `/healthz` | Liveness probe |
+| `GET` | `/readyz` | PostgreSQL-backed readiness probe |
+| `GET` | `/metrics` | Prometheus metrics |
+
+## Error conventions
+
+Account and team endpoints return JSON errors in this shape:
+
+```json
+{
+  "error": "invalid email"
+}
+```
+
+The create-suite endpoint uses `{ "message": "..." }` for validation and
+ownership conflicts. Other Test Engine management and ingestion failures may
+return an empty body with the HTTP status documented for the operation.
+
+Unknown `/api/*` routes return `404` with `{ "error": "not found" }`.

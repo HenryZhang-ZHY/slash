@@ -1,0 +1,63 @@
+---
+import Icon from "@cloudflare/nimbus-docs/components/Icon.astro";
+import { basePath } from "@/lib/urls";
+import {
+  getLocaleByPath,
+  getLocalePath,
+  getTranslations,
+  LOCALES,
+} from "@/lib/i18n";
+
+const currentLocale = getLocaleByPath(Astro.url.pathname, basePath);
+const t = getTranslations(currentLocale.languageTag);
+const currentUrl = `${Astro.url.pathname}${Astro.url.search}`;
+---
+
+<details class="group/language relative" data-language-menu>
+  <summary
+    aria-label={t.language.select}
+    class="flex h-8 cursor-pointer list-none items-center gap-1.5 rounded-md px-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2 [&::-webkit-details-marker]:hidden"
+  >
+    <Icon name="ph:globe" class="h-4 w-4" />
+    <span class="hidden sm:inline">{currentLocale.label}</span>
+    <Icon name="ph:caret-down" class="hidden h-3 w-3 transition-transform group-open/language:rotate-180 sm:block" />
+  </summary>
+
+  <div class="absolute right-0 z-50 mt-1 min-w-40 rounded-lg border border-border bg-card p-1 shadow-lg">
+    {Object.values(LOCALES).map((locale) => {
+      const isCurrent = locale.languageTag === currentLocale.languageTag;
+      return (
+        <a
+          href={getLocalePath(currentUrl, locale.languageTag, basePath)}
+          lang={locale.languageTag}
+          hreflang={locale.languageTag}
+          aria-current={isCurrent ? "page" : undefined}
+          data-locale-option={locale.languageTag}
+          class:list={[
+            "flex items-center justify-between gap-4 rounded-md px-2.5 py-2 text-sm no-underline transition-colors",
+            isCurrent
+              ? "bg-accent font-medium text-foreground"
+              : "text-muted-foreground hover:bg-accent hover:text-foreground",
+          ]}
+        >
+          <span>{locale.label}</span>
+          {isCurrent && <Icon name="ph:check" class="h-4 w-4" />}
+        </a>
+      );
+    })}
+  </div>
+</details>
+
+<script>
+  import { LOCALE_STORAGE_KEY } from "@/lib/i18n";
+
+  document.querySelectorAll<HTMLElement>("[data-locale-option]").forEach((option) => {
+    option.addEventListener("click", () => {
+      const locale = option.dataset.localeOption;
+      if (locale) localStorage.setItem(LOCALE_STORAGE_KEY, locale);
+      if (window.location.hash && option instanceof HTMLAnchorElement) {
+        option.href = `${option.href.split("#", 1)[0]}${window.location.hash}`;
+      }
+    });
+  });
+</script>

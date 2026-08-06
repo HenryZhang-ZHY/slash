@@ -1,0 +1,57 @@
+---
+title: 部署 Slash
+description: "用 Postgres 运行 Slash 服务器并验证部署。"
+sidebar:
+  order: 2
+---
+
+## 参考拓扑
+
+从一个无状态 `slash-server` 容器和一个 Postgres 数据库开始。Postgres 拥有持久工作、
+唯一性约束、受保护的状态转换和 worker 协调。正确性不依赖内存队列，因此需要横向
+扩展时，多台服务器可以共享同一数据库。
+
+通过环境中的 HTTPS 入口暴露服务器端口 `8080`。Web 控制台、REST API、GitHub
+webhook、健康端点和指标端点共享同一个 origin。
+
+## 运行容器
+
+构建仓库镜像，并以只读方式挂载必需的 secret 文件：
+
+```sh
+docker build -t slash-server .
+docker run -p 8080:8080 \
+  -e SLASH_DATABASE_URL_PATH=/run/secrets/database-url \
+  -e SLASH_WEBHOOK_SECRET_PATH=/run/secrets/webhook-secret \
+  -e SLASH_AUTH_SECRET_PATH=/run/secrets/auth-secret \
+  -e SLASH_GITHUB_APP_ID=123456 \
+  -e SLASH_GITHUB_PRIVATE_KEY_PATH=/run/secrets/github-app-key.pem \
+  -v /path/to/database-url:/run/secrets/database-url:ro \
+  -v /path/to/webhook-secret:/run/secrets/webhook-secret:ro \
+  -v /path/to/auth-secret:/run/secrets/auth-secret:ro \
+  -v /path/to/github-app-key.pem:/run/secrets/github-app-key.pem:ro \
+  slash-server
+```
+
+仓库根目录的 `docker-compose.yml` 提供已经连接 Postgres 与服务器的本地参考。适配到
+其他环境前，请先阅读[配置](/zh-hans/self-host/configuration/)。
+
+## 数据库迁移
+
+迁移嵌入服务器二进制，并在启动时执行。数据库不可用或迁移失败时进程直接退出，
+绝不会使用只迁移一部分的 schema 提供请求。
+
+请为 Postgres 使用持久存储，并把数据库纳入备份与恢复计划。Invocation 和 webhook
+状态是持久工作记录，不是可随时重建的缓存。
+
+## 验证部署
+
+启动后请求存活端点：
+
+```sh
+curl https://slash.example.com/healthz
+```
+
+运行中的进程返回带 `ok` 的 `200 OK`。接着把 GitHub App webhook URL 配置为
+`https://slash.example.com/webhook`，确认签名 delivery 被接受。使用
+[运维 Slash](/zh-hans/self-host/operations/)查看队列健康与近期 delivery。

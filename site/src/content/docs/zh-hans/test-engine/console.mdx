@@ -1,0 +1,32 @@
+---
+title: 使用 Test Engine 控制台
+description: "从 Web UI 创建 suites、查看 executions 并管理测试状态。"
+sidebar:
+  order: 5
+---
+
+在 Slash 控制台打开 `/tests`。该页面是 Test Engine 管理 API 的用户界面；状态存储在
+服务端，而不是只存在浏览器中。
+
+## 管理 Suites
+
+使用 suite 选择器查看 execution 总数、通过率以及 muted 或 skipped 数量。创建 suite
+需要 owner、repository 和 suite key，并返回供 CI ingestion 使用的 collection token。
+
+## 查找并检查测试
+
+按状态过滤，按名称、文件或 label 搜索，并按最近时间、名称、时长或失败数排序。选择
+测试后可以查看元数据、聚合历史和单条 execution。
+
+## 修改测试状态
+
+你可以 enable、mute 或 skip 测试。Mute 会让测试继续提供观测数据，同时防止失败阻塞
+拉取请求；skip 是停止产生新 execution 证据的手动决策。
+
+## 管理 Collection Tokens
+
+为 suite 签发 token，或在凭据可能泄露时吊销当前 token。明文凭据在签发时返回，
+应直接保存到负责上传结果的 CI 系统。
+
+状态语义见[测试与隔离](/zh-hans/test-engine/concepts/)，精确请求和错误见
+[管理 API](/zh-hans/api/test-engine/)。

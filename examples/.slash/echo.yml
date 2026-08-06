@@ -1,0 +1,14 @@
+# A safe, copy-pasteable starting point — see
+# docs/user/slash-config-reference.md for the full schema.
+#
+# Copy this file (and the paired .github/workflows/echo.yml) to your own
+# repository's default branch, then try commenting `/echo hello world` on a
+# pull request.
+command: echo
+description: Echo a message back, to confirm Slash is wired up correctly
+permission: write
+workflow: echo.yml
+args:
+  - name: message
+    description: What to echo
+    free_text: true

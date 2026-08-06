@@ -1,0 +1,37 @@
+---
+title: Use the Test Engine console
+description: "Create suites, inspect executions, and manage test state from the Web UI."
+sidebar:
+  order: 5
+---
+
+Open `/tests` in the Slash console. The page is a user interface over the
+documented Test Engine management API; state is stored on the server rather
+than only in the browser.
+
+## Manage suites
+
+Use the suite selector to review execution totals, pass rate, and muted or
+skipped counts. Creating a suite requires an owner, repository, and suite key,
+and returns the collection token used by CI ingestion.
+
+## Find and inspect tests
+
+Filter tests by state, search by name, file, or label, and sort by recency,
+name, duration, or failure count. Select a test to inspect its metadata,
+aggregate history, and individual execution rows.
+
+## Change test state
+
+You can enable, mute, or skip a test. Muting keeps the test observable while
+preventing its failure from blocking a pull request; skipping is a manual
+decision that stops new execution evidence.
+
+## Manage collection tokens
+
+Issue a token for a suite or revoke the current token when it may be exposed.
+The plaintext credential is returned when issued and should be moved directly
+into the CI system that uploads results.
+
+See [Tests and quarantine](/en/test-engine/concepts/) for state semantics and
+the [management API](/en/api/test-engine/) for exact requests and errors.

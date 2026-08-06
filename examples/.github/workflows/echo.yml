@@ -1,0 +1,38 @@
+# Paired with ../../.slash/echo.yml — see
+# docs/user/workflow-requirements.md for why inputs are declared here and
+# consumed through `env:`, never inline `${{ }}` interpolation in `run:`.
+#
+# This file (and the workflow it dispatches) must exist on your
+# repository's default branch with the `workflow_dispatch` trigger below,
+# or GitHub cannot resolve it as a dispatch target.
+name: echo
+on:
+  workflow_dispatch:
+    inputs:
+      message:
+        description: What to echo
+        required: false
+      slash_head_sha:
+        description: Injected by Slash — the PR head SHA at invocation time
+        required: false
+      slash_actor:
+        description: Injected by Slash — the verified comment author's login
+        required: false
+      slash_actor_id:
+        description: Injected by Slash — the comment author's numeric user ID
+        required: false
+
+jobs:
+  echo:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.slash_head_sha }}
+
+      - name: Echo
+        env:
+          MESSAGE: ${{ inputs.message }}
+          ACTOR: ${{ inputs.slash_actor }}
+        run: |
+          echo "${ACTOR:-someone} says: ${MESSAGE:-(no message)}"

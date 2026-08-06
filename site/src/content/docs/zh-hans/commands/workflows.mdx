@@ -1,0 +1,112 @@
+---
+title: 构建命令 Workflow
+description: "为 Slash 命令准备安全的 workflow_dispatch workflow。"
+sidebar:
+  order: 3
+---
+
+## workflow 必须存在的位置，以及它从哪里运行
+
+workflow 文件必须存在于**默认分支**上，并带有 `on: workflow_dispatch` 触发器
+—— GitHub 只能针对从默认分支注册的 workflow 解析 `workflow_dispatch` 调用的目标，
+只由 PR 引入的 workflow 根本无法被 dispatch（404）。这是 GitHub 平台行为，不是
+Slash 的限制。
+
+实际**运行**的，是 **PR head 分支**上那个 workflow 文件的版本 —— "测试这个 PR"
+的语义。PR 可以改变 `/deploy` 具体**做什么**（只要该文件已存在于默认分支），
+但不能改变*谁能调用它*或*它需要什么权限* —— 那条策略永远来自默认分支的 `.slash/`。
+
+`workflow_dispatch` 接受分支 ref 而非 commit SHA，所以实际执行的是 **dispatch
+时刻**的分支 tip，可能与评论发出时被审查的 SHA 略有不同。Slash 会尽量缩小这个
+窗口（dispatch 前立即重读 tip，若已移动则中止），并在 check run 摘要里注明任何
+由此产生的不一致。如果你的 workflow 无论如何都要固定到精确 commit，请显式 checkout
+`inputs.slash_head_sha`，而不是依赖默认 checkout ref。
+
+## 注入的 inputs
+
+Slash 每次 dispatch 都会注入这些 `workflow_dispatch` inputs，外加你的命令定义的
+所有参数：
+
+| Input             | 值                                                  |
+|-------------------|---------------------------------------------------------|
+| `slash_run_id`    | 每次调用生成的 UUID v4（用于你自己的日志/关联） |
+| `slash_pr_number` | PR 号 |
+| `slash_head_sha`  | 命令被调用那一刻 PR 的 head SHA |
+| `slash_actor`     | 评论作者经验证的 GitHub 登录名 |
+| `slash_actor_id`  | 评论作者的数值用户 ID（用户名改名后保持稳定） |
+
+`slash_actor`/`slash_actor_id` 的存在是因为 run 使用 App 的 installation token
+执行 —— 在 run 内部，`github.actor` 是 `slash[bot]`，而不是输入命令的人。任何做
+基于身份的逻辑（审计日志、审批、环境门禁）的 workflow **必须**以
+`inputs.slash_actor_id` 为准，而不是 `github.actor`，否则你的审计记录只会显示
+"slash[bot] 部署到生产"——不管到底是谁提出的。
+
+Slash 目前无条件发送全部注入 inputs 加每个已配置参数，不解析 workflow 文件来判断
+它声明了哪些 inputs。GitHub 会忽略你的 workflow 未声明的 `workflow_dispatch` inputs，
+所以未声明的 inputs 是无害的；反过来，一个未声明注入 inputs 的 workflow 只是永远
+看不到它们。这意味着"你配置了 workflow 未声明的参数"目前会在 dispatch 时以 GitHub
+422 的形式浮现，而不是 dispatch 前的精确报错。
+
+## `env:`-而非-`${{ }}` 规则
+
+inputs 必须通过 `env:` 到达 `run:` 步骤，**绝不**通过 `run:` 块内的直接 `${{ }}`
+插值：
+
+```yaml
+# .github/workflows/deploy.yml
+name: deploy
+on:
+  workflow_dispatch:
+    inputs:
+      slash_head_sha: { required: false }
+      slash_actor: { required: false }
+      env: { required: true }
+      timeout: { required: false, default: "15m" }
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.slash_head_sha }}   # check run 上报的 SHA
+      - name: Deploy
+        env:
+          TARGET: ${{ inputs.env }}           # 通过 env，而非在 run: 内联
+          ACTOR: ${{ inputs.slash_actor }}
+        run: ./deploy.sh "$TARGET" "$ACTOR"
+```
+
+```yaml
+# 不要这样做 —— 可被 shell 注入的命令行：
+      - run: ./deploy.sh "${{ inputs.env }}"
+```
+
+参数值被限制在安全字符集内，正是为了让 `env:` 传入的值永远无法逃出 shell 命令
+（见[命令配置参考](/zh-hans/commands/configuration/#value-charset)）。在 `run:`
+内联 `${{ }}` 插值会完全绕过这层保护 —— GitHub 会在 shell 脚本运行前把原始字符串
+替换进去，所以任何通过你的命令权限门的人都可能注入任意 shell。只有当参数的
+workflow 完全通过 `env:` 消费它时，才把它排除在安全字符集之外（`free_text: true`）。
+
+Slash 关联 dispatch 与其结果 run，靠的是 dispatch 响应里 run 自己的 id（或者，
+如果那个丢了，靠 `triggering_actor` 范围的轮询）——绝不匹配 workflow 自己展示的
+任何文本，因此不需要也不使用 `run-name:` 做关联。
+
+## Required status checks：能力与坑
+
+`slash/<command>` 是一个稳定的 check-run 名称，所以分支保护**可以**要求它。在这样做
+之前，先理解两个后果：
+
+- **没人运行命令的 PR 永远不会可合并。** 必需的 check 只会一直停在 `Expected` ——
+  没有自动运行。
+- **每次 push 都会重置它。** 必需 check 是针对 head commit 评估的，而 Slash 只在
+  命令被调用时处于当前状态的 SHA 上创建 check run。任何 push 之后都必须重新发布
+  命令。check run 的 **Re-run** 按钮（右键 check run，或 PR checks 列表里的
+  "Re-run" 链接）一键重发，并重新校验*当前*调用者的权限与*当前* `.slash/` 配置
+  —— 它不会照原样重放原始命令。
+
+考虑到这些，把 `slash/<command>` 标记为必需 check 适合两种情况：你的团队期望每个
+PR 修订都运行该命令，或者把它当作刻意的手动合并门禁 —— 它不是那种默认就该打开的
+东西。
+
+参见 [已知限制](/zh-hans/limitations/) 了解相关缺口：Slash 不会像某些 CI bot 那样在
+`synchronize` 时自动重新触发命令；Re-run 按钮是目前替代方案。

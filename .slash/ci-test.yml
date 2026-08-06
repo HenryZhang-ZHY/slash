@@ -1,0 +1,4 @@
+command: ci-test
+description: Run the Rust CI test suite and collect individual test results
+permission: write
+workflow: ci-test.yml

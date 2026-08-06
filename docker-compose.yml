@@ -1,0 +1,59 @@
+# Local-dev setup (plan M4/M7): Postgres plus the Slash server itself.
+# Where Docker Desktop is unavailable (e.g. a corporate Windows machine), a
+# free hosted Postgres (Neon, Fly) is the supported fallback: write its URL
+# to a file and point SLASH_DATABASE_URL_PATH at it, then `cargo run -p
+# slash-server` against it stands in for the `server` service below.
+#
+# `server` needs a real GitHub App to do anything useful — see
+# docs/user/getting-started.md. Point the paths below at your secret files
+# and fill in an `.env` file (docker-compose reads it automatically) with:
+#   WEBHOOK_SECRET_FILE=./webhook-secret.txt        (must exist)
+#   DATABASE_URL_FILE=./database-url.txt            (must exist; e.g. postgres://slash:slash@postgres:5432/slash)
+#   AUTH_SECRET_FILE=./auth-secret.txt                (must exist)
+#   SLASH_GITHUB_APP_ID=...
+#   GITHUB_PRIVATE_KEY_PATH=./your-app-key.pem
+# Secrets (webhook secret, DB URL, App private key) are mounted as read-only
+# files under /run/secrets/ — never passed as inline environment variables,
+# so `docker inspect` can't leak them.
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: slash
+      POSTGRES_PASSWORD: slash
+      POSTGRES_DB: slash
+    ports:
+      - "5432:5432"
+    volumes:
+      - slash-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U slash"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  server:
+    build: .
+    environment:
+      SLASH_DATABASE_URL_PATH: /run/secrets/database-url
+      SLASH_WEBHOOK_SECRET_PATH: /run/secrets/webhook-secret
+      SLASH_AUTH_SECRET_PATH: /run/secrets/auth-secret
+      SLASH_GITHUB_APP_ID: ${SLASH_GITHUB_APP_ID:?set SLASH_GITHUB_APP_ID in .env}
+      SLASH_GITHUB_PRIVATE_KEY_PATH: /run/secrets/github-app-key.pem
+      RUST_LOG: info
+    ports:
+      - "8080:8080"
+    volumes:
+      # Secrets are mounted read-only, never baked into the image (spec §7.1,
+      # §7.5), and read from files rather than env so `docker inspect` can't
+      # leak them.
+      - ${WEBHOOK_SECRET_FILE:?set WEBHOOK_SECRET_FILE in .env}:/run/secrets/webhook-secret:ro
+      - ${DATABASE_URL_FILE:?set DATABASE_URL_FILE in .env}:/run/secrets/database-url:ro
+      - ${AUTH_SECRET_FILE:?set AUTH_SECRET_FILE in .env}:/run/secrets/auth-secret:ro
+      - ${GITHUB_PRIVATE_KEY_PATH:?set GITHUB_PRIVATE_KEY_PATH in .env}:/run/secrets/github-app-key.pem:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  slash-postgres-data:

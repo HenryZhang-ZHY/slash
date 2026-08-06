@@ -1,0 +1,57 @@
+---
+title: Account and workspace
+description: "Sign in, create a team, connect GitHub, and manage API credentials."
+sidebar:
+  order: 1
+---
+
+The Slash console serves account, workspace, settings, and Test Engine screens
+from the same origin as the REST API. Each screen reads and updates server-side
+state through the documented API.
+
+## Sign in or register
+
+Open the deployment's console root. An unauthenticated visit redirects to
+`/login`, where you can:
+
+- create an account with an email and a password of at least eight bytes;
+- sign in to an existing password account; or
+- sign in with a stable GitHub identity.
+
+Authentication creates an `HttpOnly` session cookie. Slash does not use a
+GitHub email address as an identity key and does not merge accounts by matching
+email. If you already have a password account, sign in to that account before
+connecting GitHub from Settings.
+
+## Create your first team
+
+A user without a team is sent to `/onboarding`. Enter a team name and a slug
+containing lowercase letters, numbers, and hyphens, up to 63 characters.
+Creating the first team also creates a home organization when needed and makes
+you the team's maintainer.
+
+Teams organize Slash-native resources such as Test Engine suites. GitHub
+repository access independently controls who may invoke slash commands.
+
+## Use the workspace
+
+The workspace root shows team and Test Engine totals, your teams, and a
+shortcut to `/tests`. Use the [Test Engine console](/en/test-engine/console/)
+to create suites and inspect results.
+
+## Connect GitHub
+
+Open `/settings` to view the GitHub identity linked to the account. If none is
+linked, start the connection flow from that page. Slash resolves the connection
+from the authenticated provider callback rather than trusting browser URL
+parameters.
+
+## Manage personal access tokens
+
+Settings also lets you create and revoke credentials for agents and REST API
+clients. A token authenticates as its owning user and does not add permissions.
+Its plaintext value is shown once; the token list later shows only its name,
+creation time, last use, and expiry state.
+
+See the [personal access token reference](/en/api/access-tokens/) for request
+authentication, lifetime rules, and revocation behavior.

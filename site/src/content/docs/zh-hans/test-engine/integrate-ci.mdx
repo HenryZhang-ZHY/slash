@@ -1,0 +1,53 @@
+---
+title: 把 Test Engine 接入 CI
+description: "从 CI 上传结果，并应用当前的隔离处置状态。"
+sidebar:
+  order: 4
+---
+
+接入闭环为：
+
+1. 查询当前隔离列表。
+2. 运行测试并收集结果。
+3. 上传每个观测到的 execution。
+4. 在决定 CI 结果时，对已隔离测试执行 soft-fail 或 skip。
+
+## 认证 Suite
+
+每次上传和隔离查询都使用限定到单个 suite 的 collection token：
+
+```http
+Authorization: Bearer collection-token-value
+```
+
+在 [Test Engine 控制台](/zh-hans/test-engine/console/)或通过
+[管理 API](/zh-hans/api/test-engine/)创建或轮换 token，并把它保存为 CI secret。
+吊销会立即生效。
+
+## 查询隔离列表
+
+在应用 run 的最终处置前调用 `GET /v1/test-engine/quarantined`。响应包含当前状态为
+`muted` 或 `skipped` 的测试。完整响应语义见
+[Ingestion API](/zh-hans/api/ingestion/#get-v1test-enginequarantined)。
+
+## 上传结果
+
+选择与 runner 输出匹配的端点：
+
+| 端点 | 接受的结果 |
+| --- | --- |
+| `POST /v1/test-engine/upload` | 归一化 JSON 或 JUnit XML |
+| `POST /v1/test-engine/upload/cargo` | 换行分隔的 Cargo libtest JSON |
+| `POST /v1/test-engine/upload/vitest` | Vitest 结果数组或 `{ "tests": [...] }` |
+
+一次被接受的 batch 中，全部 executions 会在一个数据库事务中提交。无效状态会拒绝
+整个 batch，而不是记录部分数据。
+
+## 应用处置状态
+
+继续运行 muted 测试，让 Test Engine 能够观察恢复，但不要让它们的失败阻塞拉取请求。
+只有状态明确为 `skipped` 的测试才应跳过。runner 发送的测试名称必须保持稳定，因为
+隔离列表通过 suite 内的名称识别测试。
+
+精确 payload、状态码和格式归一化规则见
+[测试结果 Ingestion 参考](/zh-hans/api/ingestion/)。

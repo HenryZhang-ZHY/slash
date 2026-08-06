@@ -1,0 +1,89 @@
+# Backs the docker-compose-buildkite-plugin steps in pipeline.yml. `lint`
+# and `test` are separate services (not one) so that fmt/clippy don't pay
+# the cost of starting Postgres, which only `test` needs.
+services:
+  lint:
+    image: slash-ci:latest
+    build:
+      context: ..
+      dockerfile: .buildkite/Dockerfile.ci
+    # Without this, Compose skips the build whenever `slash-ci:latest`
+    # already exists locally — a persistent agent would silently keep
+    # running fmt/clippy/test against a stale image after Dockerfile.ci
+    # changes.
+    pull_policy: build
+
+  test:
+    image: slash-ci:latest
+    build:
+      context: ..
+      dockerfile: .buildkite/Dockerfile.ci
+    pull_policy: build
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - SLASH_TEST_DATABASE_URL=postgres://slash:slash@postgres:5432/slash
+      # Bare keys (no `=value`) pull from the buildkite-agent job's own
+      # environment, same as any other Compose env passthrough — the agent
+      # already sets BUILDKITE_* for every job. buildkite-test-collector
+      # reads these to detect the CI provider and attach branch/commit/build
+      # metadata to uploaded results.
+      #
+      # BUILDKITE_ANALYTICS_TOKEN itself is renamed on the way in: the
+      # pipeline's `test` step (pipeline.yml) declares a Buildkite Secret
+      # under the key TEST_SUITE_SLASH_BUILDKITE_ANALYTICS_TOKEN, which the
+      # agent exports into the job's environment under that same name — the
+      # `${...}` substitution below is resolved by Compose from that host
+      # env var at `docker-compose run` time and handed to the container as
+      # the name buildkite-test-collector actually reads.
+      - BUILDKITE_ANALYTICS_TOKEN=${TEST_SUITE_SLASH_BUILDKITE_ANALYTICS_TOKEN}
+      - BUILDKITE
+      - BUILDKITE_BUILD_ID
+      - BUILDKITE_BUILD_NUMBER
+      - BUILDKITE_BUILD_URL
+      - BUILDKITE_BRANCH
+      - BUILDKITE_COMMIT
+      - BUILDKITE_MESSAGE
+      - BUILDKITE_JOB_ID
+      - BUILDKITE_LABEL
+      - BUILDKITE_ORGANIZATION_SLUG
+      - BUILDKITE_PIPELINE_ID
+      - BUILDKITE_PIPELINE_SLUG
+      - BUILDKITE_REPO
+      - BUILDKITE_RETRY_COUNT
+
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: slash
+      POSTGRES_PASSWORD: slash
+      POSTGRES_DB: slash
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U slash"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Frontend (web/ SPA) checks: a Node image with no Rust toolchain needed,
+  # kept separate from `lint`/`test` so a badge or green pipeline never
+  # conflates backend and frontend health.
+  web:
+    image: node:24-slim
+    working_dir: /workspace/web
+    environment:
+      CI: "true"
+
+  web-test:
+    image: node:24-slim
+    working_dir: /workspace/web
+    environment:
+      - CI=true
+      - BUILDKITE_ANALYTICS_TOKEN=${TEST_SUITE_SLASH_BUILDKITE_ANALYTICS_TOKEN}
+      - BUILDKITE_BUILD_ID
+      - BUILDKITE_BUILD_NUMBER
+      - BUILDKITE_BUILD_URL
+      - BUILDKITE_BRANCH
+      - BUILDKITE_COMMIT
+      - BUILDKITE_JOB_ID
+      - BUILDKITE_MESSAGE

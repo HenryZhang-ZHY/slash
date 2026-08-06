@@ -1,0 +1,25 @@
+[package]
+name = "slash-github"
+description = "GitHub App authentication, webhook verification, and typed REST wrappers"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+octocrab = "0.54.1"
+jsonwebtoken = "10.3.0"
+hmac = "0.13.0"
+sha2 = "0.11.0"
+chrono = "0.4.45"
+tokio = { version = "1.53.1", features = ["rt", "macros", "time"] }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+wiremock = "0.6.5"

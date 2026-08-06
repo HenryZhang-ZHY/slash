@@ -1,0 +1,34 @@
+---
+title: Test Engine
+description: "收集测试结果、发现 flaky 测试，并防止它们阻塞拉取请求。"
+sidebar:
+  order: 1
+---
+
+Test Engine 把测试历史变成持续隔离闭环。你的 CI 负责运行测试；Slash 接收结果、
+检测 flaky 行为，并记录下一次 CI run 应当采用的处置方式。
+
+Slash 不执行仓库代码。它始终是控制面，现有 CI 系统仍是执行面。
+
+## 可以完成什么
+
+- 收集归一化 JSON、JUnit XML、Cargo libtest JSON 或 Vitest 结果。
+- 浏览 suites、tests、executions、通过率和近期失败。
+- 检测在滚动七天窗口内先失败、后通过的测试。
+- 自动 mute flaky 测试，让它继续运行但不再阻塞拉取请求。
+- 手动 enable、mute 或 skip 测试。
+- 在 CI 决定最终结果前查询当前隔离列表。
+
+## 选择下一步
+
+- [发送第一条测试结果](/zh-hans/test-engine/getting-started/)：从空 suite 到可见
+  execution 的最短路径。
+- [理解测试与隔离](/zh-hans/test-engine/concepts/)：了解数据模型、测试状态和
+  flaky 检测规则。
+- [把 Test Engine 接入 CI](/zh-hans/test-engine/integrate-ci/)：配置 collection
+  token、结果格式和处置闭环。
+- [使用 Test Engine 控制台](/zh-hans/test-engine/console/)：管理 suites、查看历史并
+  修改测试状态。
+
+需要端点级细节时，使用[管理 API](/zh-hans/api/test-engine/)和
+[Ingestion API](/zh-hans/api/ingestion/)。

@@ -1,0 +1,95 @@
+---
+title: Run your first command
+description: "Add one command and workflow, then run it from a pull request."
+sidebar:
+  order: 1
+---
+
+This tutorial starts with an available Slash deployment and ends with a
+completed GitHub check run. You will add an `/echo` command to a repository and
+run it from a same-repository pull request.
+
+## Before you start
+
+Make sure that:
+
+- Slash is configured to receive GitHub events for the repository;
+- you can merge files into the repository's default branch;
+- GitHub Actions is enabled; and
+- the test pull request's head branch belongs to the same repository, not a
+  fork.
+
+## 1. Define the command
+
+Add `.slash/echo.yml` to the default branch:
+
+```yaml
+command: echo
+permission: write
+workflow: echo.yml
+args:
+  - name: message
+    free_text: true
+```
+
+The default branch owns command policy. A pull request cannot change its own
+permission requirement or redirect the command to another workflow.
+
+## 2. Add the workflow
+
+Add `.github/workflows/echo.yml` to the default branch:
+
+```yaml
+name: echo
+on:
+  workflow_dispatch:
+    inputs:
+      message: { required: false }
+      slash_actor: { required: false }
+jobs:
+  echo:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Echo
+        env:
+          MESSAGE: ${{ inputs.message }}
+          ACTOR: ${{ inputs.slash_actor }}
+        run: echo "$ACTOR says: $MESSAGE"
+```
+
+GitHub must register the workflow on the default branch before Slash can
+dispatch it. Pass inputs through `env:` as shown; never interpolate untrusted
+input directly into a `run:` script.
+
+## 3. Run the command
+
+Open a pull request from a branch in the same repository. On the first line of
+a new comment, enter:
+
+```text
+/echo hello world
+```
+
+## Confirm the result
+
+A successful invocation produces three visible signals:
+
+1. Slash adds a 🚀 reaction to the comment.
+2. A `slash/echo` check appears on the pull request.
+3. The check reaches a terminal conclusion and links to the GitHub Actions run.
+
+If the command is ignored, first confirm that it is on the comment's first
+line. If dispatch fails, confirm that both files are already on the default
+branch and that the workflow declares `on: workflow_dispatch`.
+
+## Next steps
+
+- [Slash commands](/en/commands/) explains the complete lifecycle.
+- [Configure commands](/en/commands/configuration/) documents every field and
+  validation rule.
+- [Build command workflows](/en/commands/workflows/) covers injected inputs,
+  secure input handling, and required checks.
+- [Command authorization](/en/commands/authorization/) explains who may run a
+  command.
+- [Known limitations](/en/limitations/) lists deliberate boundaries and
+  current gaps.

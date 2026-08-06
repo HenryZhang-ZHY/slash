@@ -1,0 +1,28 @@
+[package]
+name = "slash-config"
+description = "Parsing and validation of .slash/*.yml command definitions (pure, no IO)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+slash-command.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+# `serde_yaml` is archived. Chose `serde_norway` over `serde_yaml_ng`: 7
+# releases through 2024-12 vs. 3 releases frozen at 2024-05, and it maintains
+# its own libyaml fork (`unsafe-libyaml-norway`) rather than depending on the
+# same unmaintained lower layer serde_yaml_ng still uses (spec §4.1, plan M2).
+# Aliases/anchors are not exposed as a disable switch by either crate (both
+# resolve them transparently during deserialization) — `slash-config`'s
+# `limits::scan_yaml_resource_risks` rejects them with a pre-parse text scan
+# instead, crate-agnostically.
+serde_norway = "0.9.42"
+
+[dev-dependencies]
+proptest = "1"
+
+[lints]
+workspace = true

@@ -1,0 +1,63 @@
+---
+title: Deploy Slash
+description: "Run the Slash server with Postgres and verify the deployment."
+sidebar:
+  order: 2
+---
+
+## Reference topology
+
+Start with one stateless `slash-server` container and one Postgres database.
+Postgres owns durable work, uniqueness, guarded state transitions, and worker
+coordination. No in-memory queue is required for correctness, so additional
+server replicas can share the same database when you need to scale out.
+
+Expose the server's port `8080` through the HTTPS ingress used by your
+environment. The Web console, REST API, GitHub webhook, health endpoint, and
+metrics endpoint share that origin.
+
+## Run the container
+
+Build the repository image and mount the required secret files read-only:
+
+```sh
+docker build -t slash-server .
+docker run -p 8080:8080 \
+  -e SLASH_DATABASE_URL_PATH=/run/secrets/database-url \
+  -e SLASH_WEBHOOK_SECRET_PATH=/run/secrets/webhook-secret \
+  -e SLASH_AUTH_SECRET_PATH=/run/secrets/auth-secret \
+  -e SLASH_GITHUB_APP_ID=123456 \
+  -e SLASH_GITHUB_PRIVATE_KEY_PATH=/run/secrets/github-app-key.pem \
+  -v /path/to/database-url:/run/secrets/database-url:ro \
+  -v /path/to/webhook-secret:/run/secrets/webhook-secret:ro \
+  -v /path/to/auth-secret:/run/secrets/auth-secret:ro \
+  -v /path/to/github-app-key.pem:/run/secrets/github-app-key.pem:ro \
+  slash-server
+```
+
+The repository's `docker-compose.yml` provides a local reference with Postgres
+and the server already connected. Review [configuration](/en/self-host/configuration/)
+before adapting it to another environment.
+
+## Database migrations
+
+Migrations are embedded in the server binary and run at startup. The process
+exits if the database is unavailable or a migration fails; it never serves
+requests from a partially migrated schema.
+
+Use persistent Postgres storage and include the database in your backup and
+recovery plan. Invocation and webhook state are durable work records, not a
+rebuildable cache.
+
+## Verify the deployment
+
+Request the liveness endpoint after startup:
+
+```sh
+curl https://slash.example.com/healthz
+```
+
+A running process returns `200 OK` with `ok`. Next, configure the GitHub App's
+webhook URL as `https://slash.example.com/webhook` and confirm that a signed
+delivery is accepted. Use [Operate Slash](/en/self-host/operations/) to inspect
+queue health and recent deliveries.

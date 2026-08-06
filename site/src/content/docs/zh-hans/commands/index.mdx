@@ -1,0 +1,34 @@
+---
+title: Slash 命令
+description: "了解命令的运行过程，并按任务选择对应指南。"
+sidebar:
+  order: 1
+---
+
+Slash 命令把拉取请求评论转换成一次 GitHub Actions workflow run。Slash 负责控制面：
+解析评论、检查调用者当前的仓库权限、创建 check run、dispatch workflow，并同步最终
+结果；真正执行 workflow 的仍是你的 GitHub Actions runner。
+
+## 一条命令如何运行
+
+1. 贡献者在拉取请求评论的第一行输入 `/command arguments`。
+2. Slash 从仓库默认分支读取全部 `.slash/*.yml` 文件，组成一个原子命令目录。
+3. Slash 校验调用者当前的 GitHub 仓库角色；无法确认授权时拒绝命令。
+4. Slash 创建 `slash/<command>` check run，并针对拉取请求的 head 分支 dispatch
+   配置的 `workflow_dispatch` workflow。
+5. Slash 跟踪 workflow run，并把终态同步到最初的 check run。
+
+目前只支持 head 分支属于同一仓库的拉取请求。配置与授权策略始终来自默认分支，
+因此拉取请求中的代码无法放宽自己的权限门槛。
+
+## 选择下一步
+
+- [运行第一条命令](/zh-hans/getting-started/)：通过一个最小完整示例看到可验证的结果。
+- [配置命令](/zh-hans/commands/configuration/)：查询完整 `.slash/` schema、校验规则、
+  参数和限制。
+- [构建命令 Workflow](/zh-hans/commands/workflows/)：了解注入 inputs、安全的 shell
+  传值、精确 SHA checkout 和 required checks。
+- [了解命令授权](/zh-hans/commands/authorization/)：确认私有与公开仓库中谁可以调用命令。
+
+在把命令用作合并门禁或处理来自 fork 的拉取请求之前，请先阅读
+[已知限制](/zh-hans/limitations/)。

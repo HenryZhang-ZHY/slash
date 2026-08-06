@@ -1,0 +1,43 @@
+---
+title: 命令授权
+description: "了解谁可以调用命令，以及 Slash 如何授权。"
+sidebar:
+  order: 4
+---
+
+GitHub 仓库权限是命令授权的唯一事实来源。调用命令不需要 Slash 账户、团队或额外授权。
+每次命令调用和 check run 重跑时，Slash 都会查询操作者当前的 GitHub collaborator 角色。
+
+## 私有仓库
+
+任何拥有 `read` 或更高权限的当前 collaborator 都可以运行全部已配置命令。对于私有
+仓库，Slash 会忽略命令的 `permission` 字段：能否访问仓库本身就是信任边界。
+
+从 GitHub 仓库移除 collaborator 后，对方会立即失去命令权限。Slash Web 控制台中
+没有另一套对应配置。
+
+## 公共仓库
+
+对于公共仓库，每个 `.slash/*.yml` 命令通过 `permission` 声明最低权限：`read`、
+`write` 或 `admin`，默认是 `write`。
+
+| 命令权限 | 可调用的 GitHub 角色 |
+| --- | --- |
+| `read` | read、triage、write、maintain、admin |
+| `write` | write、maintain、admin |
+| `admin` | admin |
+
+Slash 读取 GitHub 的 `role_name`；遇到自定义角色时回退到详细 permission 布尔值。
+Webhook 中的 `author_association` 不能作为放行依据。
+
+## 失败时拒绝
+
+如果无法确认仓库可见性或 collaborator 权限，Slash 会拒绝命令。GitHub 查询失败时
+最多添加 😕 reaction，不发表评论，因为此时无法确认操作者是否有权参与仓库。
+
+## 重跑
+
+点击 **Re-run** 时，Slash 会检查重新请求者当前的 GitHub 角色，而不是原调用者的
+角色，并使用仓库当前可见性和命令当前配置。GitHub 已撤销的权限不会被保留。
+
+Fork PR 仍不受支持；Slash 无法向另一个仓库拥有的 ref dispatch workflow。

@@ -1,0 +1,43 @@
+---
+title: 已知限制
+description: "在工作流中依赖 Slash 前，了解当前产品边界。"
+sidebar:
+  order: 9
+---
+
+以下当前产品边界可能影响仓库策略、workflow 设计或运维。
+
+## 拉取请求与 Checks
+
+- **不支持 fork 拉取请求。** GitHub 无法针对另一个仓库拥有的 ref dispatch 已配置
+  workflow。调用命令前，请把分支推到 base 仓库。
+- **push 后命令不会自动重跑。** head commit 更新后，必需的 `slash/<command>` check
+  会回到 `Expected`。请重新调用命令或使用 check run 的 **Re-run**。把命令设为必需
+  check 前，先阅读[必需 check 行为](/zh-hans/commands/workflows/#required-status-checks-capability-and-footgun)。
+- **同一命令的并发调用共享 check-run 名称。** 拉取请求 checks 列表只显示最新调用。
+  Slash 会把更早的调用标记为 `superseded`，但不会取消其 workflow run。
+
+## 命令配置
+
+- **Slash 不会在 push 时校验 `.slash/`。** 请在仓库 CI 中运行
+  `slash validate .slash/`，在有人调用之前发现默认分支上的无效配置。
+- **命令文件没有共享默认值。** 每个 `.slash/*.yml` 文件都拥有完整的权限、workflow
+  和参数配置。
+- **命令必须位于评论第一行。** 多行评论其他位置的命令会被忽略，且不会收到回复。
+
+## 回复与速率限制
+
+当未知命令与已配置命令的编辑距离不超过二时，Slash 会给出建议。目前没有 token
+bucket、按拉取请求评论去重或 misplaced-command 回复。大多数拒绝路径对每个 webhook
+事件最多发一条评论，但不存在独立的回复 rate limiter。
+
+## 运维
+
+- **没有按 installation 或全局 kill switch。** 停止全部服务器副本可以终止 dispatch
+  活动；暂停 GitHub App installation 可以撤销单个账户的访问。持久工作仍保留在
+  Postgres 中等待恢复。
+- **GitHub API rate-limit 可见性不完整。** `/metrics` 不暴露按端点的 GitHub 请求数
+  或剩余 rate-limit 预算。请把服务器日志与现有队列和 invocation 指标结合使用。
+
+监控、凭据轮换、实例管理后台和故障响应见
+[运维 Slash](/zh-hans/self-host/operations/)。

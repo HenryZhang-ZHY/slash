@@ -1,0 +1,61 @@
+minimum_prek_version = "0.4.14"
+default_install_hook_types = ["pre-commit", "pre-push"]
+
+[[repos]]
+repo = "builtin"
+hooks = [
+  { id = "check-case-conflict", stages = ["pre-commit"] },
+  { id = "check-merge-conflict", stages = ["pre-commit"] },
+  { id = "check-toml", stages = ["pre-commit"] },
+  { id = "check-yaml", stages = ["pre-commit"] },
+  { id = "detect-private-key", stages = ["pre-commit"] },
+  { id = "end-of-file-fixer", stages = ["pre-commit"] },
+  { id = "trailing-whitespace", stages = ["pre-commit"] },
+]
+
+[[repos]]
+repo = "local"
+hooks = [
+  {
+    id = "rust-format",
+    name = "Rust formatting",
+    entry = "mise run check:rust-format",
+    language = "system",
+    files = "(^Cargo\\.(toml|lock)$|^crates/.*\\.rs$)",
+    pass_filenames = false,
+    stages = ["pre-commit"],
+  },
+  {
+    id = "rust-pre-push",
+    name = "Rust pre-push gate",
+    entry = "mise run check:rust",
+    language = "system",
+    files = "(^Cargo\\.(toml|lock)$|^crates/|^migrations/)",
+    pass_filenames = false,
+    stages = ["pre-push"],
+  },
+  {
+    id = "web-pre-push",
+    name = "Web UI pre-push gate",
+    entry = "mise run check:web",
+    language = "system",
+    files = "^web/",
+    pass_filenames = false,
+    stages = ["pre-push"],
+  },
+  {
+    id = "site-pre-push",
+    name = "Documentation site pre-push gate",
+    entry = "mise run check:site",
+    language = "system",
+    files = "^(site/|docs/)",
+    pass_filenames = false,
+    stages = ["pre-push"],
+  },
+]
+
+[[repos]]
+repo = "meta"
+hooks = [
+  { id = "check-useless-excludes", stages = ["pre-commit"] },
+]

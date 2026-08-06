@@ -1,0 +1,21 @@
+[package]
+name = "slash-core"
+description = "Slash domain logic: invocation state machine, check-run lifecycle, user-facing messages"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+slash-command.workspace = true
+slash-config.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+aes-gcm = "0.10.3"
+sha2 = "0.11.0"
+
+[lints]
+workspace = true

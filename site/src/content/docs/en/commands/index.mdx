@@ -1,0 +1,43 @@
+---
+title: Slash commands
+description: "Understand the command lifecycle and choose the right guide for your task."
+sidebar:
+  order: 1
+---
+
+A Slash command turns a pull-request comment into a GitHub Actions workflow
+run. Slash handles the control plane—parsing the comment, checking the actor's
+current repository access, creating a check run, dispatching the workflow, and
+reconciling the final result. Your repository's GitHub Actions runners execute
+the workflow.
+
+## How a command runs
+
+1. A contributor writes `/command arguments` on the first line of a pull
+   request comment.
+2. Slash loads every `.slash/*.yml` file from the repository's default branch
+   as one atomic command catalog.
+3. Slash verifies the actor's current GitHub repository role and rejects the
+   command when authorization cannot be established.
+4. Slash creates a `slash/<command>` check run and dispatches the configured
+   `workflow_dispatch` workflow against the pull request's head branch.
+5. Slash follows the workflow run and reflects its terminal result on the
+   original check run.
+
+Only pull requests whose head branch belongs to the same repository are
+supported. Configuration and authorization policy always come from the default
+branch, so pull-request code cannot loosen its own permission gate.
+
+## Choose your next step
+
+- [Run your first command](/en/getting-started/) for a complete, minimal
+  example with an observable result.
+- [Configure commands](/en/commands/configuration/) for the full `.slash/`
+  schema, validation rules, arguments, and limits.
+- [Build command workflows](/en/commands/workflows/) for injected inputs,
+  safe shell handling, exact-SHA checkout, and required checks.
+- [Understand command authorization](/en/commands/authorization/) to see who
+  may invoke commands in private and public repositories.
+
+Review [known limitations](/en/limitations/) before relying on commands for a
+merge gate or accepting pull requests from forks.

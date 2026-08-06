@@ -1,0 +1,196 @@
+---
+title: Authentication and teams
+description: "Register users, manage sessions, and create teams."
+sidebar:
+  order: 1
+---
+
+These endpoints accept the `slash_session` cookie or a [personal access
+token](/en/api/access-tokens/). Register and login return the cookie with
+`HttpOnly`, `SameSite=Lax`, `Path=/`, and a seven-day `Max-Age`.
+
+The examples use a cookie jar so the session returned by one request can be
+used by the next:
+
+```sh
+curl -c cookies.txt -b cookies.txt https://slash.example.com/api/auth/me
+```
+
+## POST `/api/auth/register`
+
+Creates an active account and immediately signs it in.
+
+```sh
+curl -i -c cookies.txt \
+  -H "Content-Type: application/json" \
+  -d '{"email":"operator@example.com","password":"correct-horse","display_name":"Release Operator"}' \
+  https://slash.example.com/api/auth/register
+```
+
+Request body:
+
+| Field | Type | Required | Validation |
+| --- | --- | --- | --- |
+| `email` | string | yes | Must be non-empty and contain `@`; normalized to lowercase |
+| `password` | string | yes | At least 8 bytes |
+| `display_name` | string | no | Defaults to an empty string; surrounding whitespace is removed |
+
+Success: `200 OK`, a `Set-Cookie` header, and:
+
+```json
+{
+  "user": {
+    "id": "1165fc2c-64f4-49f6-b77c-15317cf59fb8",
+    "email": "operator@example.com",
+    "displayName": "Release Operator"
+  }
+}
+```
+
+| Status | Meaning |
+| --- | --- |
+| `200` | Account and session created |
+| `409` | An account already uses the normalized email |
+| `422` | Email or password validation failed |
+| `500` | Password hashing, persistence, or session creation failed |
+
+## POST `/api/auth/login`
+
+Verifies an active account and creates a new seven-day session.
+
+```sh
+curl -i -c cookies.txt \
+  -H "Content-Type: application/json" \
+  -d '{"email":"operator@example.com","password":"correct-horse"}' \
+  https://slash.example.com/api/auth/login
+```
+
+Request body:
+
+```json
+{
+  "email": "operator@example.com",
+  "password": "correct-horse"
+}
+```
+
+Success: `200 OK`, a `Set-Cookie` header, and the same `{ "user": ... }`
+shape returned by registration. Invalid credentials return `401` with a
+generic error; the response does not reveal whether the email exists.
+
+## GitHub sign-in and connection
+
+`GET /api/auth/github/sign-in` starts GitHub sign-in. If the stable GitHub
+user id is already connected, Slash signs in its owner. Otherwise Slash
+creates a credential-free user linked to that identity. Slash does not request
+GitHub email access and never matches or merges accounts by email. A user with
+an existing password account must sign in to it before connecting GitHub.
+
+`POST /api/auth/github/connect` starts connection for the current Slash user.
+The callback requires a valid session for that same user. A GitHub identity
+connected elsewhere, or a Slash user already connected to a different
+GitHub identity, produces a conflict notice without replacing either side.
+
+Both initiation routes redirect the browser to GitHub. GitHub returns to
+`GET /api/auth/github/callback`; the callback then redirects to `/`,
+`/onboarding`, `/settings`, or `/login`. These routes implement a browser
+flow and do not return GitHub access tokens to API clients.
+
+## POST `/api/auth/logout`
+
+Clears the browser session cookie.
+
+```sh
+curl -i -b cookies.txt -X POST \
+  https://slash.example.com/api/auth/logout
+```
+
+Success: `204 No Content` with a `Set-Cookie` header that sets
+`slash_session` to an empty value and `Max-Age=0`. This endpoint does not
+require a valid session.
+
+## GET `/api/auth/me`
+
+Returns the current user, every team the user belongs to, and authoritative
+external-account connection state.
+
+```sh
+curl -b cookies.txt https://slash.example.com/api/auth/me
+```
+
+Success: `200 OK`.
+
+```json
+{
+  "user": {
+    "id": "1165fc2c-64f4-49f6-b77c-15317cf59fb8",
+    "email": "operator@example.com",
+    "displayName": "Release Operator"
+  },
+  "teams": [
+    {
+      "id": "cb50f1d6-7a11-44d7-b45e-9c158b8e7774",
+      "organizationId": "b07dc85d-d18c-42fa-9a58-055d9f32801c",
+      "name": "Platform",
+      "slug": "platform",
+      "role": "maintainer"
+    }
+  ],
+  "connections": {
+    "github": {
+      "login": "octocat"
+    }
+  }
+}
+```
+
+`connections.github` is `null` when the user has not connected GitHub.
+For a GitHub-only account, `user.email` is `null`.
+
+Missing, invalid, expired, or unknown sessions return `401` with a JSON
+`error` message.
+
+## POST `/api/teams`
+
+Creates a team for the current user. If the user has no organization, Slash
+also creates a home organization and records the user as its owner. The
+creator becomes a team maintainer.
+
+```sh
+curl -b cookies.txt \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Platform","slug":"platform"}' \
+  https://slash.example.com/api/teams
+```
+
+Request body:
+
+| Field | Type | Required | Validation |
+| --- | --- | --- | --- |
+| `name` | string | yes | Must not be empty after trimming |
+| `slug` | string | no | 1-63 lowercase ASCII letters, digits, or hyphens |
+
+When `slug` is omitted, Slash derives one from `name` by lowercasing it,
+replacing non-alphanumeric runs with `-`, and trimming trailing hyphens.
+
+Success: `200 OK`.
+
+```json
+{
+  "team": {
+    "id": "cb50f1d6-7a11-44d7-b45e-9c158b8e7774",
+    "organizationId": "b07dc85d-d18c-42fa-9a58-055d9f32801c",
+    "name": "Platform",
+    "slug": "platform",
+    "role": "maintainer"
+  }
+}
+```
+
+| Status | Meaning |
+| --- | --- |
+| `200` | Team created |
+| `401` | No valid session |
+| `409` | The organization already has the slug |
+| `422` | Name or slug validation failed |
+| `500` | The team could not be created or read back |

@@ -1,0 +1,23 @@
+name: Fake CI Test Pass
+
+on:
+  workflow_dispatch:
+    inputs:
+      slash_run_id: { required: false }
+      slash_pr_number: { required: false }
+      slash_head_sha: { required: false }
+      slash_actor: { required: false }
+      slash_actor_id: { required: false }
+
+jobs:
+  fake-ci:
+    runs-on: ubuntu-slim
+    steps:
+      - name: Simulate passing CI
+        env:
+          ACTOR: ${{ inputs.slash_actor }}
+          PR_NUMBER: ${{ inputs.slash_pr_number }}
+        run: |
+          echo "Starting fake CI for PR #${PR_NUMBER} requested by ${ACTOR}"
+          echo "Running fake checks..."
+          echo "All fake checks passed."
