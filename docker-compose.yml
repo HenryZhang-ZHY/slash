@@ -1,0 +1,50 @@
+# Local-dev setup (plan M4/M7): Postgres plus the Slash server itself.
+# Where Docker Desktop is unavailable (e.g. a corporate Windows machine), a
+# free hosted Postgres (Neon, Fly) via SLASH_DATABASE_URL /
+# SLASH_TEST_DATABASE_URL is the supported fallback, and `cargo run -p
+# slash-server` against it stands in for the `server` service below.
+#
+# `server` needs a real GitHub App to do anything useful — see
+# docs/user/getting-started.md. Point GITHUB_PRIVATE_KEY_PATH (below) at
+# your `.pem` file and fill in an `.env` file (docker-compose reads it
+# automatically) with:
+#   SLASH_WEBHOOK_SECRET=...
+#   SLASH_GITHUB_APP_ID=...
+#   GITHUB_PRIVATE_KEY_PATH=./your-app-key.pem
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: slash
+      POSTGRES_PASSWORD: slash
+      POSTGRES_DB: slash
+    ports:
+      - "5432:5432"
+    volumes:
+      - slash-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U slash"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  server:
+    build: .
+    environment:
+      SLASH_DATABASE_URL: postgres://slash:slash@postgres:5432/slash
+      SLASH_WEBHOOK_SECRET: ${SLASH_WEBHOOK_SECRET:?set SLASH_WEBHOOK_SECRET in .env}
+      SLASH_GITHUB_APP_ID: ${SLASH_GITHUB_APP_ID:?set SLASH_GITHUB_APP_ID in .env}
+      SLASH_GITHUB_PRIVATE_KEY_PATH: /run/secrets/github-app-key.pem
+      RUST_LOG: info
+    ports:
+      - "8080:8080"
+    volumes:
+      # Mounted read-only; the App's private key is never baked into the
+      # image (spec §7.1, §7.5).
+      - ${GITHUB_PRIVATE_KEY_PATH:?set GITHUB_PRIVATE_KEY_PATH in .env}:/run/secrets/github-app-key.pem:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  slash-postgres-data:

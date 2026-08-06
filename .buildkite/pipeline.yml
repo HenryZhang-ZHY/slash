@@ -1,0 +1,58 @@
+# Buildkite CI for the Slash workspace.
+#
+# Mirrors .github/workflows/ci.yml (fmt, clippy, test against Postgres) and
+# adds a sanity build of the deployment image (Dockerfile), which no CI
+# currently exercises.
+#
+# All steps need an agent with Docker + Docker Compose v2 installed.
+# `queue: "default"` is a placeholder — point it at your agent fleet's tag.
+
+steps:
+  - label: ":rust: fmt"
+    key: fmt
+    command: cargo fmt --all -- --check
+    plugins:
+      - docker-compose#v5.13.0:
+          config: .buildkite/docker-compose.yml
+          run: lint
+          mount-checkout: true
+          workdir: /workspace
+    agents:
+      queue: "default"
+
+  - label: ":mag: clippy"
+    key: clippy
+    command: cargo clippy --workspace --all-targets -- -D warnings
+    plugins:
+      - docker-compose#v5.13.0:
+          config: .buildkite/docker-compose.yml
+          run: lint
+          mount-checkout: true
+          workdir: /workspace
+    agents:
+      queue: "default"
+
+  - wait
+
+  - label: ":test_tube: test"
+    key: test
+    command: cargo test --workspace
+    plugins:
+      - docker-compose#v5.13.0:
+          config: .buildkite/docker-compose.yml
+          run: test
+          mount-checkout: true
+          workdir: /workspace
+    agents:
+      queue: "default"
+
+  - label: ":docker: docker build"
+    key: docker-build
+    # Deliberately runs alongside `test` (no `wait` before it) rather than
+    # after — it doesn't depend on test's Postgres/DB state or outcome, and
+    # fmt/clippy have already gated both. Validates the deployment image
+    # still builds; not pushed anywhere — wire up a registry + credentials
+    # plugin (e.g. ecr, docker-login) here once you have one.
+    command: docker build -t slash-server:build-$BUILDKITE_BUILD_NUMBER .
+    agents:
+      queue: "default"

@@ -1,0 +1,38 @@
+# Backs the docker-compose-buildkite-plugin steps in pipeline.yml. `lint`
+# and `test` are separate services (not one) so that fmt/clippy don't pay
+# the cost of starting Postgres, which only `test` needs.
+services:
+  lint:
+    image: slash-ci:latest
+    build:
+      context: ..
+      dockerfile: .buildkite/Dockerfile.ci
+    # Without this, Compose skips the build whenever `slash-ci:latest`
+    # already exists locally — a persistent agent would silently keep
+    # running fmt/clippy/test against a stale image after Dockerfile.ci
+    # changes.
+    pull_policy: build
+
+  test:
+    image: slash-ci:latest
+    build:
+      context: ..
+      dockerfile: .buildkite/Dockerfile.ci
+    pull_policy: build
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - SLASH_TEST_DATABASE_URL=postgres://slash:slash@postgres:5432/slash
+
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: slash
+      POSTGRES_PASSWORD: slash
+      POSTGRES_DB: slash
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U slash"]
+      interval: 5s
+      timeout: 5s
+      retries: 5

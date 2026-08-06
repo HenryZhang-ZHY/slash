@@ -1,0 +1,19 @@
+/target
+**/*.rs.bk
+*.pdb
+
+# Local secrets and environment
+.env
+.env.*
+*.pem
+*.private-key.pem
+# Not a secret: a throwaway RSA keypair generated for slash-github's own
+# App-JWT tests, checked in so CI has it too.
+!crates/slash-github/tests/fixtures/*.pem
+
+# Terraform (.buildkite/terraform)
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+.terraform.lock.hcl.bak

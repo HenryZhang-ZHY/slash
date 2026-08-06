@@ -1,0 +1,54 @@
+# Permissions
+
+## The gate
+
+Every command declares a `permission` in its `.slash/*.yml` file: one of
+`write`, `maintain`, or `admin` (default `write` if omitted). When someone
+comments a command, Slash resolves their actual repository role and only
+dispatches if that role is **at or above** the command's declared level.
+
+Role resolution reads `GET /repos/{owner}/{repo}/collaborators/{username}/permission`
+and looks at the response's `role_name` field specifically — not the
+top-level `permission` field, which collapses `maintain` into `write` and
+`triage` into `read` and would otherwise make a `maintain`-gated command
+passable by plain write access. An unrecognized custom role name falls back
+to the nearest base role via the response's individual permission booleans.
+
+## Why `read` and `triage` don't exist as command permissions
+
+A command that dispatches a workflow runs code from the PR's head branch
+with your repository's own secrets. Because only users with **push access**
+can create branches in the repository at all, allowing a sub-write role to
+invoke a command would silently undermine that trust boundary — someone
+without push access could get their own branch's code executed with your
+production credentials. `write` is the floor, not a default that happens to
+be configurable downward.
+
+(GitHub's own permission API collapses `triage` into `read` for the legacy
+`permission` field anyway, so those tiers were never faithfully
+distinguishable through that field even if you wanted to use them.)
+
+## Fail closed
+
+If role resolution doesn't cleanly succeed — a 5xx, a 403, a 404, a timeout,
+or a response Slash can't parse — the command is **denied**, unconditionally.
+There is no comment in this case, because a resolution failure means the
+commenter's trust level is genuinely unknown, and Slash only posts comments
+to authors it has confirmed are at least `read`. At most, the comment gets a
+😕 reaction (itself subject to a rate limit), so this failure mode can't be
+used to make Slash spend unbounded API budget either.
+
+## What forks change
+
+Fork PRs are not supported in 0.0.1 (see [limitations.md](limitations.md)):
+`workflow_dispatch` cannot target a ref on a fork, so there is nothing to
+dispatch even if permission resolution succeeds. Slash detects this and
+comments once per PR rather than silently doing nothing.
+
+## Re-running
+
+Clicking **Re-run** on a check run re-resolves the *rerequester's* current
+permission — not the original invoker's — against the command's *current*
+configuration. A user whose access has since been downgraded (or removed)
+gets a denial on the check run itself, with no new comment; a re-run is
+never a way to bypass the original gate.

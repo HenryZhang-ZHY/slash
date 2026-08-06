@@ -1,0 +1,14 @@
+# CI toolchain image for Buildkite. No source is copied in — the docker-
+# compose-buildkite-plugin bind-mounts the checkout at run time (see
+# pipeline.yml's `mount-checkout`) — this just needs the same native build
+# deps as the root Dockerfile's builder stage (`ring`/`aws-lc-rs`, pulled in
+# transitively by rustls, build C code the slim image has no compiler for)
+# plus the rustfmt/clippy components the slim image's default profile omits.
+FROM rust:1.85-slim-bookworm
+
+ENV CARGO_TERM_COLOR=always
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential pkg-config \
+    && rm -rf /var/lib/apt/lists/* \
+    && rustup component add rustfmt clippy

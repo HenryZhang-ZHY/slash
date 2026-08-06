@@ -1,0 +1,89 @@
+# Known limitations
+
+This is 0.0.1: a validated idea, not a finished product. These are
+deliberate scope decisions or known gaps, listed here so first contact with
+them isn't a surprise.
+
+## From the design
+
+- **Fork PRs are unsupported.** `workflow_dispatch` cannot target a ref on a
+  fork — this is a GitHub platform limitation, not a bug. Workaround: a
+  maintainer pushes the branch to the base repository. Supporting forks
+  safely requires a second, content-trust axis (a per-head-SHA,
+  maintainer-issued, revocable grant, re-required on every push) distinct
+  from the commenter-trust gate this version already has, since Slash's
+  execution plane carries repository secrets.
+- **No automatic re-trigger on push.** After a push, a required
+  `slash/<command>` check reverts to `Expected` and must be re-issued — the
+  check run's **Re-run** button is the current substitute. See
+  [workflow-requirements.md](workflow-requirements.md#required-status-checks-capability-and-footgun).
+- **Concurrent invocations of the same command mask each other in the PR
+  UI.** `/deploy staging` and `/deploy production` in flight together on the
+  same PR share one check-run name; the newer one wins and the older is
+  marked `superseded` with a final update linking the newer run, but only the
+  latest is visible in GitHub's PR checks list at any moment. The superseded
+  run itself is not cancelled.
+- **No server-side `.slash/` validation on push.** Whoever breaks the config
+  on the default branch is not necessarily the person who discovers it —
+  possibly days later, when someone else tries to invoke the affected
+  command. Run `slash validate .slash/` in your own repository's CI to catch
+  this before merge; a `slash/config` check run that validates on every push
+  automatically is the planned fix, not yet built.
+- **No shared defaults across command files** — e.g. a repository-wide
+  permission floor. Every `.slash/*.yml` file is fully self-contained.
+- **Commands must be on the first line of a comment.** A command anywhere
+  else in a multi-line comment is not executed; Slash detects this specific
+  case (only for configured command names) and replies once per PR rather
+  than silently ignoring it.
+
+## Additional gaps found during implementation
+
+These aren't called out in the design doc itself but are worth knowing:
+
+- **No kill switch.** The design calls for a per-installation and global
+  kill switch checked before every mutating GitHub API call, so a
+  misbehaving installation could be paused without affecting others. This is
+  not implemented in 0.0.1 — the only lever today is stopping the server
+  process entirely, which pauses every installation at once. See
+  [deployment.md](deployment.md#incident-procedure).
+- **The `installations` table is not yet maintained.** The schema exists
+  (tracking `active`/`suspended`/`deleted` state), but no code currently
+  writes to it: `installation`/`installation_repositories` webhooks are
+  parsed and acknowledged but not acted on, and a `401` that survives a
+  token re-mint does not yet mark the installation `deleted`. In practice
+  this means a suspended or uninstalled App keeps trying (and failing) its
+  normal token-mint/retry paths rather than recognizing the installation is
+  gone and stopping cleanly.
+- **The §6.4 anti-spam rules are implemented but not fully wired up.** The
+  edit-distance reply gate and token bucket exist as tested, standalone
+  logic (`slash-core`'s `antispam` module), but the dispatch pipeline does
+  not yet call them, nor does it implement per-PR comment deduplication or
+  the §3.2 scan for a command appearing outside the first line. Today,
+  Slash's actual comment volume is bounded by its guard structure (most
+  rejections post at most one comment per event) rather than by an explicit
+  rate limiter.
+- **No `slash_github_api_calls_total`/rate-limit-remaining metric.** Every
+  other metric the design calls for is implemented (see
+  [deployment.md](deployment.md#observability)), but per-endpoint GitHub API
+  call counts and remaining rate-limit budget are not yet exposed through
+  `/metrics` — the underlying GitHub client discards response headers today,
+  and wiring this through cleanly needs more than an incremental change.
+
+## Not yet demonstrated
+
+The design's success criteria (numbered results on a real test repository —
+20/20 invocations reaching a terminal conclusion, correlation strategy
+breakdown, multi-tenancy isolation, and so on) require a live GitHub App
+installed on a real repository to measure. That demonstration has not been
+run in this environment and is the remaining step before tagging a release.
+
+One release-checklist item *doesn't* need live GitHub, since the webhook
+handler never calls out to GitHub in its own request path — only signature
+verification and a Postgres insert — and has been measured directly: a burst
+of 1000 concurrent, individually-signed `POST /webhook` redeliveries against
+a release build and a real Postgres produced p99 ≈ 10ms
+(`slash_webhook_handler_seconds{outcome="accepted"}`: 999/1000 in the ≤10ms
+bucket, 1000/1000 in the ≤25ms bucket), comfortably inside the <1s bar. Repro:
+run the server against any Postgres with a known `SLASH_WEBHOOK_SECRET`, then
+fire a batch of HMAC-SHA256-signed requests with unique
+`X-GitHub-Delivery` values and read `GET /metrics` afterward.

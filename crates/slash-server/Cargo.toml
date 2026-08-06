@@ -1,0 +1,42 @@
+[package]
+name = "slash-server"
+description = "Slash control plane: webhook endpoint, delivery inbox, workers, sweeper"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "slash-server"
+path = "src/main.rs"
+
+[dependencies]
+axum = "0.8.9"
+chrono = "0.4.45"
+octocrab = "0.54.1"
+prometheus = "0.14.0"
+serde.workspace = true
+serde_json.workspace = true
+slash-command.workspace = true
+slash-config.workspace = true
+slash-core.workspace = true
+slash-github.workspace = true
+sqlx = { version = "0.8.6", features = ["postgres", "runtime-tokio", "uuid", "chrono", "migrate", "macros"] }
+thiserror.workspace = true
+tokio = { version = "1.53.1", features = ["full"] }
+tower-http = { version = "0.7.0", features = ["catch-panic", "limit", "trace"] }
+tracing.workspace = true
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+uuid = { workspace = true, features = ["v4", "serde"] }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+base64 = "0.23.1"
+hmac = "0.13.0"
+reqwest = { version = "0.13.4", features = ["json"] }
+serial_test = "3.5.0"
+sha2 = "0.11.0"
+wiremock = "0.6.5"
