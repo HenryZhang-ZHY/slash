@@ -17,7 +17,6 @@
 //! introspected).
 
 use serde_json::{Map, Value as Json};
-use slash_config::ValidatedCommand;
 use slash_core::{ResolvedRole, messages};
 use slash_github::octocrab_types::ReactionContent;
 use slash_github::{GithubApp, RepoClient, WebhookEventPayload};
@@ -476,36 +475,6 @@ async fn report_catalog_error(
     {
         tracing::warn!(error = %feedback_error, "failed to react to command catalog failure");
     }
-}
-
-pub(crate) async fn load_commands(
-    files: &[octocrab::models::repos::Content],
-    client: &RepoClient,
-    default_branch: &str,
-) -> Vec<(String, ValidatedCommand)> {
-    let mut commands = Vec::new();
-    for file in files {
-        if file.r#type != "file" {
-            continue;
-        }
-        let is_yaml = file.name.ends_with(".yml") || file.name.ends_with(".yaml");
-        if !is_yaml {
-            continue;
-        }
-        let Ok(content_files) = client.get_content(&file.path, default_branch).await else {
-            continue;
-        };
-        let Some(content) = content_files.first() else {
-            continue;
-        };
-        let Some(decoded) = content.decoded_content() else {
-            continue;
-        };
-        if let Ok(validated) = slash_config::load_command_file(&file.name, decoded.as_bytes()) {
-            commands.push((validated.command.clone(), validated));
-        }
-    }
-    commands
 }
 
 async fn supersede_older_invocations(
