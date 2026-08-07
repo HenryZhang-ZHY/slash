@@ -110,14 +110,35 @@ pub async fn handle_issue_comment(
     // Resolve author permission (spec §5.2). Fail closed: any resolution
     // failure denies, with at most a best-effort 😕 reaction, never a
     // comment (the author's trust level is unknown).
-    let permission = client
+    let permission = match client
         .get_collaborator_permission(&payload.comment.user.login)
-        .await;
-    let Ok(permission) = permission else {
-        let _ = client
-            .create_comment_reaction(payload.comment.id.0, ReactionContent::Confused)
-            .await;
-        return Ok(());
+        .await
+    {
+        Ok(permission) => permission,
+        Err(error) => {
+            log_permission_api_failure(
+                "lookup",
+                &ctx.owner,
+                &ctx.repo,
+                &payload.comment.user.login,
+                payload.comment.id.0,
+                &error,
+            );
+            if let Err(reaction_error) = client
+                .create_comment_reaction(payload.comment.id.0, ReactionContent::Confused)
+                .await
+            {
+                log_permission_api_failure(
+                    "reaction",
+                    &ctx.owner,
+                    &ctx.repo,
+                    &payload.comment.user.login,
+                    payload.comment.id.0,
+                    &reaction_error,
+                );
+            }
+            return Ok(());
+        }
     };
     let role =
         slash_core::ResolvedRole::from_role_name(&permission.role_name).unwrap_or_else(|| {
@@ -434,6 +455,26 @@ pub async fn handle_issue_comment(
     Ok(())
 }
 
+fn log_permission_api_failure(
+    stage: &'static str,
+    owner: &str,
+    repo: &str,
+    username: &str,
+    comment_id: u64,
+    error: &slash_github::ClientError,
+) {
+    tracing::warn!(
+        stage,
+        owner,
+        repo,
+        username,
+        comment_id,
+        status = ?error.status_code(),
+        error = %error,
+        "collaborator permission API failed"
+    );
+}
+
 async fn report_catalog_error(
     ctx: &PipelineContext<'_>,
     client: &RepoClient,
@@ -527,6 +568,9 @@ async fn supersede_older_invocations(
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::expect_used)]
 mod tests {
+    use std::io::{self, Write};
+    use std::sync::{Arc, Mutex};
+
     use base64::Engine;
     use base64::engine::general_purpose::STANDARD as BASE64;
     use octocrab::models::webhook_events::payload::IssueCommentWebhookEventPayload;
@@ -541,6 +585,49 @@ mod tests {
 
     const TEST_KEY_PEM: &[u8] =
         include_bytes!("../../slash-github/tests/fixtures/test-app-key.pem");
+
+    #[derive(Clone)]
+    struct CaptureWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for CaptureWriter {
+        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buffer);
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn permission_failure_log_contains_diagnostic_context() {
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let writer = CaptureWriter(Arc::clone(&output));
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        let error = slash_github::ClientError::Api {
+            message: "GitHub rejected permission lookup".to_string(),
+            status: Some(403),
+        };
+
+        tracing::subscriber::with_default(subscriber, || {
+            log_permission_api_failure("lookup", "acme", "widgets", "alice", 555, &error);
+        });
+
+        let output = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+        assert!(output.contains("collaborator permission API failed"));
+        assert!(output.contains("stage=\"lookup\""));
+        assert!(output.contains("owner=\"acme\""));
+        assert!(output.contains("repo=\"widgets\""));
+        assert!(output.contains("username=\"alice\""));
+        assert!(output.contains("comment_id=555"));
+        assert!(output.contains("status=Some(403)"));
+        assert!(output.contains("GitHub rejected permission lookup"));
+    }
 
     async fn test_pool() -> Option<PgPool> {
         let url = crate::test_support::test_database_url()?;
