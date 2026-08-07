@@ -1,0 +1,4 @@
+command: fake-ci-test-pass
+description: Run a lightweight fake CI workflow that succeeds
+permission: write
+workflow: fake-ci-test-pass.yml

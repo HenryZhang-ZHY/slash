@@ -1,0 +1,4 @@
+command: fake-ci-test-failure
+description: Run a lightweight fake CI workflow that fails
+permission: write
+workflow: fake-ci-test-failure.yml
