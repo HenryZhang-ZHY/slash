@@ -1,0 +1,120 @@
+name: Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: ${{ github.repository }}-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Check out release commit
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Pin the toolchain (rust-version in Cargo.toml) instead of relying on
+      # whatever cargo happens to be preinstalled on the runner image.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.88.0
+
+      - name: Resolve release metadata
+        id: metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="$(
+            cargo metadata --no-deps --format-version 1 |
+              jq -r '[.packages[] | select(.name == "slash-server") | .version] | if length == 1 then .[0] else empty end'
+          )"
+
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Unable to resolve a Docker-compatible slash-server version"
+            exit 1
+          fi
+
+          repository="${GITHUB_REPOSITORY,,}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          echo "image=ghcr.io/$repository" >> "$GITHUB_OUTPUT"
+
+      - name: Verify release tag is new
+        shell: bash
+        env:
+          TAG: ${{ steps.metadata.outputs.tag }}
+        run: |
+          set +e
+          git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1
+          status=$?
+          set -e
+
+          case "$status" in
+            0)
+              echo "::error::Tag $TAG already exists"
+              exit 1
+              ;;
+            2)
+              ;;
+            *)
+              echo "::error::Unable to check whether tag $TAG exists"
+              exit "$status"
+              ;;
+          esac
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and publish image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          tags: |
+            ${{ steps.metadata.outputs.image }}:${{ steps.metadata.outputs.version }}
+            ${{ steps.metadata.outputs.image }}:latest
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ steps.metadata.outputs.version }}
+          provenance: true
+          sbom: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Tag released commit
+        shell: bash
+        env:
+          TAG: ${{ steps.metadata.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag --annotate "$TAG" "$GITHUB_SHA" --message "Release $TAG"
+          git push origin "refs/tags/$TAG"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.metadata.outputs.tag }}
+          name: ${{ steps.metadata.outputs.tag }}
+          generate_release_notes: true
+          # Build-metadata/prerelease versions (e.g. v0.2.0-rc.1) are marked
+          # as prereleases on the Release page.
+          prerelease: ${{ contains(steps.metadata.outputs.version, '-') }}
