@@ -1,0 +1,9 @@
+command: fake-cd-release
+description: Run a lightweight fake CD release workflow
+permission: write
+workflow: fake-cd-release.yml
+args:
+  - name: release_type
+    description: Release type to simulate
+    required: true
+    choices: [preview, prerelease]
