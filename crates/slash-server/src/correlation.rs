@@ -20,6 +20,7 @@ use slash_core::{CheckConclusion, InvocationStatus, ResolvedRole, messages};
 use slash_github::{CheckRunUpdate, RepoClient, WebhookEvent, WorkflowRun};
 use sqlx::PgPool;
 
+use crate::catalog::{CatalogError, CatalogOutcome, load_catalog, resolve_default_branch};
 use crate::invocations::{self, Invocation, NewInvocation};
 use crate::pipeline::{PipelineContext, PipelineError, TOKEN_PERMISSIONS};
 
@@ -32,6 +33,26 @@ pub(crate) fn to_octocrab_conclusion(conclusion: CheckConclusion) -> CheckRunCon
         CheckConclusion::ActionRequired => CheckRunConclusion::ActionRequired,
         CheckConclusion::Neutral => CheckRunConclusion::Neutral,
     }
+}
+
+fn record_catalog_error(ctx: &PipelineContext<'_>, error: &CatalogError, message: &'static str) {
+    let outcome = match error {
+        CatalogError::Invalid { .. } => "invalid",
+        CatalogError::Unavailable { .. } => "unavailable",
+    };
+    ctx.metrics
+        .command_catalog_loads_total
+        .with_label_values(&[outcome, error.stage()])
+        .inc();
+    tracing::warn!(
+        owner = %ctx.owner,
+        repo = %ctx.repo,
+        stage = error.stage(),
+        path = ?error.path(),
+        status = ?error.status_code(),
+        error = %error,
+        "{message}"
+    );
 }
 
 /// Writes a freshly re-fetched, `completed` run's outcome to both the
@@ -253,17 +274,90 @@ pub async fn handle_check_run_rerequested(
     // permission requirement (config may have changed since the original
     // invocation).
     let pr = client.get_pull_request(original.pr_number as u64).await?;
-    let default_branch = pr
+    let hinted_default_branch = pr
         .base
         .repo
         .as_ref()
-        .and_then(|r| r.default_branch.clone())
-        .unwrap_or_else(|| "main".to_string());
-    let commands = match client.get_content(".slash", &default_branch).await {
-        Ok(files) => crate::pipeline::load_commands(&files, &client, &default_branch).await,
-        Err(_) => Vec::new(),
+        .and_then(|repo| repo.default_branch.as_deref());
+    let resolved = match resolve_default_branch(&client, hinted_default_branch).await {
+        Ok(resolved) => resolved,
+        Err(error) => {
+            record_catalog_error(ctx, &error, "rerequest command catalog resolution failed");
+            let body = messages::command_catalog_unavailable();
+            let _ = client
+                .update_check_run(
+                    check_run.id,
+                    CheckRunUpdate {
+                        status: Some(CheckRunStatus::Completed),
+                        conclusion: Some(CheckRunConclusion::ActionRequired),
+                        details_url: None,
+                        output: Some(("Re-run unavailable", &body)),
+                    },
+                )
+                .await;
+            return Ok(());
+        }
     };
-    let Some((_, validated)) = commands.iter().find(|(name, _)| *name == original.command) else {
+    tracing::debug!(
+        owner = %ctx.owner,
+        repo = %ctx.repo,
+        default_branch = %resolved.name,
+        config_sha = %resolved.sha,
+        "resolved rerequest command catalog snapshot"
+    );
+    let catalog = match load_catalog(&client, &resolved.sha).await {
+        Ok(CatalogOutcome::Loaded(catalog)) => {
+            ctx.metrics
+                .command_catalog_loads_total
+                .with_label_values(&["loaded", "complete"])
+                .inc();
+            catalog
+        }
+        Ok(CatalogOutcome::NotConfigured) => {
+            ctx.metrics
+                .command_catalog_loads_total
+                .with_label_values(&["not_configured", "complete"])
+                .inc();
+            let body = messages::installed_but_not_configured();
+            let _ = client
+                .update_check_run(
+                    check_run.id,
+                    CheckRunUpdate {
+                        status: Some(CheckRunStatus::Completed),
+                        conclusion: Some(CheckRunConclusion::ActionRequired),
+                        details_url: None,
+                        output: Some(("Re-run denied", &body)),
+                    },
+                )
+                .await;
+            return Ok(());
+        }
+        Err(error) => {
+            record_catalog_error(ctx, &error, "rerequest command catalog load failed");
+            let (title, body) = match &error {
+                CatalogError::Invalid { details } => {
+                    ("Re-run denied", messages::config_error(details))
+                }
+                CatalogError::Unavailable { .. } => (
+                    "Re-run unavailable",
+                    messages::command_catalog_unavailable(),
+                ),
+            };
+            let _ = client
+                .update_check_run(
+                    check_run.id,
+                    CheckRunUpdate {
+                        status: Some(CheckRunStatus::Completed),
+                        conclusion: Some(CheckRunConclusion::ActionRequired),
+                        details_url: None,
+                        output: Some((title, &body)),
+                    },
+                )
+                .await;
+            return Ok(());
+        }
+    };
+    let Some(validated) = catalog.find(&original.command) else {
         return Ok(());
     };
 
@@ -381,7 +475,7 @@ mod tests {
     use octocrab::models::webhook_events::payload::{
         PullRequestWebhookEventPayload, WorkflowRunWebhookEventPayload,
     };
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use super::*;
@@ -831,7 +925,23 @@ mod tests {
             .await;
 
         Mock::given(method("GET"))
+            .and(path("/repos/acme/widgets/git/ref/heads/main"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ref": "refs/heads/main",
+                "node_id": "REF_1",
+                "url": "https://api.github.com/repos/acme/widgets/git/refs/heads/main",
+                "object": {
+                    "type": "commit",
+                    "sha": "config-sha",
+                    "url": "https://api.github.com/repos/acme/widgets/git/commits/config-sha"
+                }
+            })))
+            .mount(server)
+            .await;
+
+        Mock::given(method("GET"))
             .and(path("/repos/acme/widgets/contents/.slash"))
+            .and(query_param("ref", "config-sha"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
                 {
                     "name": "echo.yml", "path": ".slash/echo.yml", "sha": "abc",
@@ -846,6 +956,7 @@ mod tests {
         let echo_yaml = "command: echo\nworkflow: echo.yml\nargs:\n  - name: message\n";
         Mock::given(method("GET"))
             .and(path("/repos/acme/widgets/contents/.slash/echo.yml"))
+            .and(query_param("ref", "config-sha"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "name": "echo.yml", "path": ".slash/echo.yml", "sha": "abc",
                 "size": echo_yaml.len(), "url": "https://api.github.com/repos/acme/widgets/contents/.slash/echo.yml",
@@ -943,6 +1054,87 @@ mod tests {
         assert_eq!(row.0, 2);
         assert_eq!(row.1, "correlated");
         assert_eq!(row.2, Some(1000));
+    }
+
+    #[serial_test::serial(db)]
+    #[tokio::test]
+    async fn rerequest_with_unavailable_catalog_is_denied_without_a_new_invocation() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        let id = Uuid::new_v4();
+        invocations::claim(&pool, &sample(id)).await.unwrap();
+        invocations::set_check_run_id(&pool, id, 55).await.unwrap();
+
+        let server = MockServer::start().await;
+        mount_rerequest_common(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/repos/acme/widgets/collaborators/bob/permission"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "permission": "push", "role_name": "write",
+                "user": {
+                    "login": "bob", "id": 9, "node_id": "n", "avatar_url": "https://avatars.githubusercontent.com/u/9",
+                    "gravatar_id": "", "url": "https://api.github.com/users/bob", "html_url": "https://github.com/bob",
+                    "followers_url": "https://api.github.com/users/bob/followers",
+                    "following_url": "https://api.github.com/users/bob/following{/other_user}",
+                    "gists_url": "https://api.github.com/users/bob/gists{/gist_id}",
+                    "starred_url": "https://api.github.com/users/bob/starred{/owner}{/repo}",
+                    "subscriptions_url": "https://api.github.com/users/bob/subscriptions",
+                    "organizations_url": "https://api.github.com/users/bob/orgs",
+                    "repos_url": "https://api.github.com/users/bob/repos",
+                    "events_url": "https://api.github.com/users/bob/events{/privacy}",
+                    "received_events_url": "https://api.github.com/users/bob/received_events",
+                    "type": "User", "site_admin": false,
+                    "permissions": {"admin": false, "push": true, "pull": true}
+                },
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/repos/acme/widgets/contents/.slash"))
+            .and(query_param("ref", "config-sha"))
+            .respond_with(
+                ResponseTemplate::new(500)
+                    .set_body_json(serde_json::json!({"message": "GitHub unavailable"})),
+            )
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("PATCH"))
+            .and(path("/repos/acme/widgets/check-runs/55"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": 55, "node_id": "n1", "head_sha": "deadbeef",
+                "url": "https://api.github.com/repos/acme/widgets/check-runs/55",
+                "html_url": null, "details_url": null, "conclusion": "action_required",
+                "output": {"title": null, "summary": null, "text": null, "annotations_count": 0, "annotations_url": "https://api.github.com/x"},
+                "started_at": null, "completed_at": null, "name": "slash/echo", "pull_requests": []
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let app = GithubApp::with_base_uri(1, TEST_KEY_PEM, Some(&server.uri())).unwrap();
+        let metrics = Metrics::new().unwrap();
+        handle_check_run_rerequested(
+            &ctx(&pool, &app, &server, &metrics),
+            &check_run_rerequested_event(),
+        )
+        .await
+        .unwrap();
+
+        let attempts: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM invocations WHERE comment_id = 100")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(attempts, 1);
+        assert_eq!(
+            metrics
+                .command_catalog_loads_total
+                .with_label_values(&["unavailable", "directory"])
+                .get(),
+            1
+        );
     }
 
     #[serial_test::serial(db)]

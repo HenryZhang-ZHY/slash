@@ -29,6 +29,7 @@ pub struct Metrics {
     pub correlation_total: IntCounterVec,
     /// Spec §7.4: dispatches that ended in `dispatch_failed`, by class.
     pub dispatch_failures_total: IntCounterVec,
+    pub command_catalog_loads_total: IntCounterVec,
 }
 
 impl Metrics {
@@ -92,6 +93,13 @@ impl Metrics {
             registry
         )?;
 
+        let command_catalog_loads_total = register_int_counter_vec_with_registry!(
+            "slash_command_catalog_loads_total",
+            "Command catalog loads by terminal outcome and bounded processing stage.",
+            &["outcome", "stage"],
+            registry
+        )?;
+
         Ok(Self {
             registry,
             webhook_deliveries_total,
@@ -102,6 +110,7 @@ impl Metrics {
             invocations_max_dispatched_age_seconds,
             correlation_total,
             dispatch_failures_total,
+            command_catalog_loads_total,
         })
     }
 
@@ -130,9 +139,16 @@ mod tests {
             .with_label_values(&["issue_comment", "accepted"])
             .inc();
         metrics.deliveries_pending.set(3);
+        metrics
+            .command_catalog_loads_total
+            .with_label_values(&["unavailable", "directory"])
+            .inc();
 
         let output = metrics.render();
         assert!(output.contains("slash_webhook_deliveries_total"));
         assert!(output.contains("slash_deliveries_pending 3"));
+        assert!(output.contains(
+            "slash_command_catalog_loads_total{outcome=\"unavailable\",stage=\"directory\"} 1"
+        ));
     }
 }

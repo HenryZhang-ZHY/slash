@@ -17,13 +17,13 @@
 //! introspected).
 
 use serde_json::{Map, Value as Json};
-use slash_config::ValidatedCommand;
 use slash_core::{ResolvedRole, messages};
 use slash_github::octocrab_types::ReactionContent;
 use slash_github::{GithubApp, RepoClient, WebhookEventPayload};
 use sqlx::PgPool;
 use uuid::Uuid;
 
+use crate::catalog::{CatalogError, CatalogOutcome, load_catalog, resolve_default_branch};
 use crate::invocations::{self, ClaimOutcome, NewInvocation};
 
 /// The permissions requested for the least-privilege, per-repo installation
@@ -87,9 +87,11 @@ pub async fn handle_issue_comment(
         return Ok(());
     }
 
-    let Ok(Some(parsed)) =
-        slash_command::parse_comment(&payload.comment.body.clone().unwrap_or_default())
-    else {
+    let body = payload.comment.body.clone().unwrap_or_default();
+    if body.contains('\n') || body.contains('\r') {
+        return Ok(());
+    }
+    let Ok(Some(parsed)) = slash_command::parse_comment(&body) else {
         // Not a command, or a syntax error in one: ignored silently (spec
         // §3.1). The §3.2 misplaced-command scan is deferred — it needs the
         // repository's configured command names, which requires loading
@@ -108,14 +110,35 @@ pub async fn handle_issue_comment(
     // Resolve author permission (spec §5.2). Fail closed: any resolution
     // failure denies, with at most a best-effort 😕 reaction, never a
     // comment (the author's trust level is unknown).
-    let permission = client
+    let permission = match client
         .get_collaborator_permission(&payload.comment.user.login)
-        .await;
-    let Ok(permission) = permission else {
-        let _ = client
-            .create_comment_reaction(payload.comment.id.0, ReactionContent::Confused)
-            .await;
-        return Ok(());
+        .await
+    {
+        Ok(permission) => permission,
+        Err(error) => {
+            log_permission_api_failure(
+                "lookup",
+                &ctx.owner,
+                &ctx.repo,
+                &payload.comment.user.login,
+                payload.comment.id.0,
+                &error,
+            );
+            if let Err(reaction_error) = client
+                .create_comment_reaction(payload.comment.id.0, ReactionContent::Confused)
+                .await
+            {
+                log_permission_api_failure(
+                    "reaction",
+                    &ctx.owner,
+                    &ctx.repo,
+                    &payload.comment.user.login,
+                    payload.comment.id.0,
+                    &reaction_error,
+                );
+            }
+            return Ok(());
+        }
     };
     let role =
         slash_core::ResolvedRole::from_role_name(&permission.role_name).unwrap_or_else(|| {
@@ -162,27 +185,76 @@ pub async fn handle_issue_comment(
         return Ok(());
     }
 
-    let default_branch = pr
+    let hinted_default_branch = pr
         .base
         .repo
         .as_ref()
-        .and_then(|r| r.default_branch.clone())
-        .unwrap_or_else(|| "main".to_string());
-
-    let config_files = client.get_content(".slash", &default_branch).await;
-    let commands = match config_files {
-        Ok(files) => load_commands(&files, &client, &default_branch).await,
-        Err(_) => Vec::new(),
+        .and_then(|repo| repo.default_branch.as_deref());
+    let resolved = match resolve_default_branch(&client, hinted_default_branch).await {
+        Ok(resolved) => resolved,
+        Err(error) => {
+            report_catalog_error(
+                ctx,
+                &client,
+                payload.issue.number,
+                payload.comment.id.0,
+                can_comment,
+                &error,
+            )
+            .await;
+            return Ok(());
+        }
+    };
+    tracing::debug!(
+        owner = %ctx.owner,
+        repo = %ctx.repo,
+        default_branch = %resolved.name,
+        config_sha = %resolved.sha,
+        "resolved command catalog snapshot"
+    );
+    let catalog = match load_catalog(&client, &resolved.sha).await {
+        Ok(CatalogOutcome::Loaded(catalog)) => {
+            ctx.metrics
+                .command_catalog_loads_total
+                .with_label_values(&["loaded", "complete"])
+                .inc();
+            catalog
+        }
+        Ok(CatalogOutcome::NotConfigured) => {
+            ctx.metrics
+                .command_catalog_loads_total
+                .with_label_values(&["not_configured", "complete"])
+                .inc();
+            if can_comment {
+                let _ = client
+                    .create_comment(
+                        payload.issue.number,
+                        &messages::installed_but_not_configured(),
+                    )
+                    .await;
+            }
+            let _ = client
+                .create_comment_reaction(payload.comment.id.0, ReactionContent::Confused)
+                .await;
+            return Ok(());
+        }
+        Err(error) => {
+            report_catalog_error(
+                ctx,
+                &client,
+                payload.issue.number,
+                payload.comment.id.0,
+                can_comment,
+                &error,
+            )
+            .await;
+            return Ok(());
+        }
     };
 
-    let Some((_, validated)) = commands.iter().find(|(name, _)| *name == parsed.name) else {
-        if can_comment
-            && slash_core::should_suggest_commands(
-                &parsed.name,
-                &commands.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>(),
-            )
-        {
-            let names: Vec<String> = commands.iter().map(|(n, _)| n.clone()).collect();
+    let Some(validated) = catalog.find(&parsed.name) else {
+        let names = catalog.names();
+        if can_comment && slash_core::should_suggest_commands(&parsed.name, &names) {
             let _ = client
                 .create_comment(
                     payload.issue.number,
@@ -383,34 +455,67 @@ pub async fn handle_issue_comment(
     Ok(())
 }
 
-pub(crate) async fn load_commands(
-    files: &[octocrab::models::repos::Content],
+fn log_permission_api_failure(
+    stage: &'static str,
+    owner: &str,
+    repo: &str,
+    username: &str,
+    comment_id: u64,
+    error: &slash_github::ClientError,
+) {
+    tracing::warn!(
+        stage,
+        owner,
+        repo,
+        username,
+        comment_id,
+        status = ?error.status_code(),
+        error = %error,
+        "collaborator permission API failed"
+    );
+}
+
+async fn report_catalog_error(
+    ctx: &PipelineContext<'_>,
     client: &RepoClient,
-    default_branch: &str,
-) -> Vec<(String, ValidatedCommand)> {
-    let mut commands = Vec::new();
-    for file in files {
-        if file.r#type != "file" {
-            continue;
-        }
-        let is_yaml = file.name.ends_with(".yml") || file.name.ends_with(".yaml");
-        if !is_yaml {
-            continue;
-        }
-        let Ok(content_files) = client.get_content(&file.path, default_branch).await else {
-            continue;
+    issue_number: u64,
+    comment_id: u64,
+    can_comment: bool,
+    error: &CatalogError,
+) {
+    let outcome = match error {
+        CatalogError::Invalid { .. } => "invalid",
+        CatalogError::Unavailable { .. } => "unavailable",
+    };
+    ctx.metrics
+        .command_catalog_loads_total
+        .with_label_values(&[outcome, error.stage()])
+        .inc();
+    tracing::warn!(
+        owner = %ctx.owner,
+        repo = %ctx.repo,
+        stage = error.stage(),
+        path = ?error.path(),
+        status = ?error.status_code(),
+        error = %error,
+        "command catalog load failed"
+    );
+
+    if can_comment {
+        let body = match error {
+            CatalogError::Invalid { details } => messages::config_error(details),
+            CatalogError::Unavailable { .. } => messages::command_catalog_unavailable(),
         };
-        let Some(content) = content_files.first() else {
-            continue;
-        };
-        let Some(decoded) = content.decoded_content() else {
-            continue;
-        };
-        if let Ok(validated) = slash_config::load_command_file(&file.name, decoded.as_bytes()) {
-            commands.push((validated.command.clone(), validated));
+        if let Err(feedback_error) = client.create_comment(issue_number, &body).await {
+            tracing::warn!(error = %feedback_error, "failed to post command catalog feedback");
         }
     }
-    commands
+    if let Err(feedback_error) = client
+        .create_comment_reaction(comment_id, ReactionContent::Confused)
+        .await
+    {
+        tracing::warn!(error = %feedback_error, "failed to react to command catalog failure");
+    }
 }
 
 async fn supersede_older_invocations(
@@ -463,10 +568,13 @@ async fn supersede_older_invocations(
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::expect_used)]
 mod tests {
+    use std::io::{self, Write};
+    use std::sync::{Arc, Mutex};
+
     use base64::Engine;
     use base64::engine::general_purpose::STANDARD as BASE64;
     use octocrab::models::webhook_events::payload::IssueCommentWebhookEventPayload;
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use chrono::Utc;
@@ -477,6 +585,49 @@ mod tests {
 
     const TEST_KEY_PEM: &[u8] =
         include_bytes!("../../slash-github/tests/fixtures/test-app-key.pem");
+
+    #[derive(Clone)]
+    struct CaptureWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for CaptureWriter {
+        fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buffer);
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn permission_failure_log_contains_diagnostic_context() {
+        let output = Arc::new(Mutex::new(Vec::new()));
+        let writer = CaptureWriter(Arc::clone(&output));
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        let error = slash_github::ClientError::Api {
+            message: "GitHub rejected permission lookup".to_string(),
+            status: Some(403),
+        };
+
+        tracing::subscriber::with_default(subscriber, || {
+            log_permission_api_failure("lookup", "acme", "widgets", "alice", 555, &error);
+        });
+
+        let output = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+        assert!(output.contains("collaborator permission API failed"));
+        assert!(output.contains("stage=\"lookup\""));
+        assert!(output.contains("owner=\"acme\""));
+        assert!(output.contains("repo=\"widgets\""));
+        assert!(output.contains("username=\"alice\""));
+        assert!(output.contains("comment_id=555"));
+        assert!(output.contains("status=Some(403)"));
+        assert!(output.contains("GitHub rejected permission lookup"));
+    }
 
     async fn test_pool() -> Option<PgPool> {
         let url = crate::test_support::test_database_url()?;
@@ -601,7 +752,23 @@ mod tests {
             .await;
 
         Mock::given(method("GET"))
+            .and(path("/repos/acme/widgets/git/ref/heads/main"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ref": "refs/heads/main",
+                "node_id": "REF_1",
+                "url": "https://api.github.com/repos/acme/widgets/git/refs/heads/main",
+                "object": {
+                    "type": "commit",
+                    "sha": "config-sha",
+                    "url": "https://api.github.com/repos/acme/widgets/git/commits/config-sha"
+                }
+            })))
+            .mount(server)
+            .await;
+
+        Mock::given(method("GET"))
             .and(path("/repos/acme/widgets/contents/.slash"))
+            .and(query_param("ref", "config-sha"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
                 {
                     "name": "echo.yml", "path": ".slash/echo.yml", "sha": "abc",
@@ -616,6 +783,7 @@ mod tests {
         let echo_yaml = "command: echo\nworkflow: echo.yml\nargs:\n  - name: message\n";
         Mock::given(method("GET"))
             .and(path("/repos/acme/widgets/contents/.slash/echo.yml"))
+            .and(query_param("ref", "config-sha"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "name": "echo.yml", "path": ".slash/echo.yml", "sha": "abc",
                 "size": echo_yaml.len(), "url": "https://api.github.com/repos/acme/widgets/contents/.slash/echo.yml",
@@ -717,6 +885,149 @@ mod tests {
             metrics
                 .correlation_total
                 .with_label_values(&["dispatch_response"])
+                .get(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn multiline_command_makes_no_github_requests() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://localhost/unused")
+            .unwrap();
+        let server = MockServer::start().await;
+        let app = GithubApp::with_base_uri(1, TEST_KEY_PEM, Some(&server.uri())).unwrap();
+        let metrics = Metrics::new().unwrap();
+
+        let result = handle_issue_comment(
+            &ctx(&pool, &app, &server, &metrics),
+            &issue_comment_payload("/echo hello\nsecond line"),
+        )
+        .await;
+
+        assert!(result.is_ok());
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
+
+    #[serial_test::serial(db)]
+    #[tokio::test]
+    async fn unavailable_catalog_gets_feedback_and_creates_no_invocation() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        let server = MockServer::start().await;
+        mount_common(&server, "deadbeef").await;
+        Mock::given(method("GET"))
+            .and(path("/repos/acme/widgets/contents/.slash"))
+            .and(query_param("ref", "config-sha"))
+            .respond_with(
+                ResponseTemplate::new(403)
+                    .set_body_json(serde_json::json!({"message": "Forbidden"})),
+            )
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/repos/acme/widgets/issues/7/comments"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "id": 999,
+                "node_id": "IC_999",
+                "url": "https://api.github.com/repos/acme/widgets/issues/comments/999",
+                "html_url": "https://github.com/acme/widgets/pull/7#issuecomment-999",
+                "issue_url": "https://api.github.com/repos/acme/widgets/issues/7",
+                "body": "catalog unavailable",
+                "user": author_json("slash-app", 10),
+                "created_at": "2024-01-01T00:00:00Z",
+                "updated_at": "2024-01-01T00:00:00Z"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let app = GithubApp::with_base_uri(1, TEST_KEY_PEM, Some(&server.uri())).unwrap();
+        let metrics = Metrics::new().unwrap();
+        handle_issue_comment(
+            &ctx(&pool, &app, &server, &metrics),
+            &issue_comment_payload("/echo hello"),
+        )
+        .await
+        .unwrap();
+
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM invocations")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+        assert_eq!(
+            metrics
+                .command_catalog_loads_total
+                .with_label_values(&["unavailable", "directory"])
+                .get(),
+            1
+        );
+    }
+
+    #[serial_test::serial(db)]
+    #[tokio::test]
+    async fn invalid_catalog_is_reported_instead_of_partially_loaded() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        let server = MockServer::start().await;
+        mount_common(&server, "deadbeef").await;
+        let invalid_yaml = "not: valid: yaml";
+        Mock::given(method("GET"))
+            .and(path("/repos/acme/widgets/contents/.slash/echo.yml"))
+            .and(query_param("ref", "config-sha"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "name": "echo.yml", "path": ".slash/echo.yml", "sha": "abc",
+                "size": invalid_yaml.len(),
+                "url": "https://api.github.com/repos/acme/widgets/contents/.slash/echo.yml",
+                "type": "file", "encoding": "base64",
+                "content": BASE64.encode(invalid_yaml),
+                "_links": {
+                    "self": "https://api.github.com/repos/acme/widgets/contents/.slash/echo.yml",
+                    "git": null, "html": null
+                }
+            })))
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/repos/acme/widgets/issues/7/comments"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "id": 999,
+                "node_id": "IC_999",
+                "url": "https://api.github.com/repos/acme/widgets/issues/comments/999",
+                "html_url": "https://github.com/acme/widgets/pull/7#issuecomment-999",
+                "issue_url": "https://api.github.com/repos/acme/widgets/issues/7",
+                "body": "invalid catalog",
+                "user": author_json("slash-app", 10),
+                "created_at": "2024-01-01T00:00:00Z",
+                "updated_at": "2024-01-01T00:00:00Z"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let app = GithubApp::with_base_uri(1, TEST_KEY_PEM, Some(&server.uri())).unwrap();
+        let metrics = Metrics::new().unwrap();
+        handle_issue_comment(
+            &ctx(&pool, &app, &server, &metrics),
+            &issue_comment_payload("/echo hello"),
+        )
+        .await
+        .unwrap();
+
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM invocations")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 0);
+        assert_eq!(
+            metrics
+                .command_catalog_loads_total
+                .with_label_values(&["invalid", "validation"])
                 .get(),
             1
         );

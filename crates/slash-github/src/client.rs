@@ -19,15 +19,37 @@ use octocrab::models::repos::{Content, RepoPermission};
 use octocrab::params::checks::{CheckRunConclusion, CheckRunOutput, CheckRunStatus};
 use serde::{Deserialize, Serialize};
 
-const API_VERSION_HEADER: &str = "x-github-api-version";
-const API_VERSION: &str = "2022-11-28";
-
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum ClientError {
     #[error("failed to build GitHub client: {0}")]
     ClientBuild(String),
-    #[error("GitHub API error: {0}")]
-    Api(String),
+    #[error("GitHub API error: {message}")]
+    Api {
+        message: String,
+        status: Option<u16>,
+    },
+    #[error("invalid GitHub API response: {0}")]
+    InvalidResponse(String),
+}
+
+impl ClientError {
+    fn from_octocrab(error: octocrab::Error) -> Self {
+        let status = match &error {
+            octocrab::Error::GitHub { source, .. } => Some(source.status_code.as_u16()),
+            _ => None,
+        };
+        Self::Api {
+            message: error.to_string(),
+            status,
+        }
+    }
+
+    pub fn status_code(&self) -> Option<u16> {
+        match self {
+            Self::Api { status, .. } => *status,
+            Self::ClientBuild(_) | Self::InvalidResponse(_) => None,
+        }
+    }
 }
 
 /// The `workflow_dispatch` response when `return_run_details: true` is sent
@@ -67,6 +89,11 @@ struct ListWorkflowRunsResponse {
     workflow_runs: Vec<WorkflowRun>,
 }
 
+#[derive(Deserialize)]
+struct RepositoryDefaults {
+    default_branch: String,
+}
+
 /// Filters for `GET .../actions/runs` (spec §6.3's missing-run-id poll):
 /// workflow file, triggering event, head branch, the bot's own login (never
 /// a human-started run of the same workflow on the same branch), and a
@@ -102,15 +129,7 @@ impl RepoClient {
         repo: impl Into<String>,
         base_uri: Option<&str>,
     ) -> Result<Self, ClientError> {
-        let Ok(header_name) = API_VERSION_HEADER.parse() else {
-            return Err(ClientError::ClientBuild(
-                "invalid API version header name".to_string(),
-            ));
-        };
-
-        let mut builder = Octocrab::builder()
-            .personal_token(token.to_string())
-            .add_header(header_name, API_VERSION.to_string());
+        let mut builder = Octocrab::builder().personal_token(token.to_string());
         if let Some(uri) = base_uri {
             builder = builder
                 .base_uri(uri)
@@ -132,7 +151,7 @@ impl RepoClient {
             .pulls(&self.owner, &self.repo)
             .get(number)
             .await
-            .map_err(|e| ClientError::Api(e.to_string()))
+            .map_err(ClientError::from_octocrab)
     }
 
     /// Reads `role_name`, never the legacy top-level `permission` field
@@ -146,7 +165,43 @@ impl RepoClient {
             .get_contributor_permission(username)
             .send()
             .await
-            .map_err(|e| ClientError::Api(e.to_string()))
+            .map_err(ClientError::from_octocrab)
+    }
+
+    pub async fn get_default_branch(&self) -> Result<String, ClientError> {
+        let route = format!("/repos/{}/{}", self.owner, self.repo);
+        let repository: RepositoryDefaults = self
+            .octocrab
+            .get(route, None::<&()>)
+            .await
+            .map_err(ClientError::from_octocrab)?;
+        if repository.default_branch.is_empty() {
+            return Err(ClientError::InvalidResponse(
+                "repository default_branch is empty".to_string(),
+            ));
+        }
+        Ok(repository.default_branch)
+    }
+
+    pub async fn get_branch_head_sha(&self, branch: &str) -> Result<String, ClientError> {
+        use octocrab::models::repos::Object;
+        use octocrab::params::repos::Reference;
+
+        let reference = self
+            .octocrab
+            .repos(&self.owner, &self.repo)
+            .get_ref(&Reference::Branch(branch.to_string()))
+            .await
+            .map_err(ClientError::from_octocrab)?;
+        match reference.object {
+            Object::Commit { sha, .. } => Ok(sha),
+            Object::Tag { .. } => Err(ClientError::InvalidResponse(format!(
+                "branch {branch} resolved to a tag"
+            ))),
+            _ => Err(ClientError::InvalidResponse(format!(
+                "branch {branch} resolved to an unsupported object"
+            ))),
+        }
     }
 
     /// Lists a directory (e.g. `.slash`) or fetches one file, at `git_ref`.
@@ -165,7 +220,7 @@ impl RepoClient {
             .r#ref(git_ref)
             .send()
             .await
-            .map_err(|e| ClientError::Api(e.to_string()))?;
+            .map_err(ClientError::from_octocrab)?;
         Ok(items.take_items())
     }
 
@@ -183,7 +238,7 @@ impl RepoClient {
             .external_id(external_id)
             .send()
             .await
-            .map_err(|e| ClientError::Api(e.to_string()))
+            .map_err(ClientError::from_octocrab)
     }
 
     pub async fn update_check_run(
@@ -211,10 +266,7 @@ impl RepoClient {
                 images: Vec::new(),
             });
         }
-        builder
-            .send()
-            .await
-            .map_err(|e| ClientError::Api(e.to_string()))
+        builder.send().await.map_err(ClientError::from_octocrab)
     }
 
     pub async fn create_comment(
@@ -226,7 +278,7 @@ impl RepoClient {
             .issues(&self.owner, &self.repo)
             .create_comment(issue_number, body)
             .await
-            .map_err(|e| ClientError::Api(e.to_string()))
+            .map_err(ClientError::from_octocrab)
     }
 
     /// Reacts on the *comment* (not the issue) — the triggering artifact
@@ -240,7 +292,7 @@ impl RepoClient {
             .issues(&self.owner, &self.repo)
             .create_comment_reaction(comment_id, content)
             .await
-            .map_err(|e| ClientError::Api(e.to_string()))
+            .map_err(ClientError::from_octocrab)
     }
 
     /// Dispatches `workflow_file` on `git_ref` with `return_run_details:
@@ -273,7 +325,7 @@ impl RepoClient {
         self.octocrab
             .post(route, Some(&body))
             .await
-            .map_err(|e| ClientError::Api(e.to_string()))
+            .map_err(ClientError::from_octocrab)
     }
 
     /// Re-fetches a run directly (spec §6.3: never trust the webhook body for
@@ -287,7 +339,7 @@ impl RepoClient {
         self.octocrab
             .get(route, None::<&()>)
             .await
-            .map_err(|e| ClientError::Api(e.to_string()))
+            .map_err(ClientError::from_octocrab)
     }
 
     /// The spec §6.3 missing-run-id poll: filtered by workflow file, event,
@@ -326,7 +378,7 @@ impl RepoClient {
             .octocrab
             .get(route, Some(&query))
             .await
-            .map_err(|e| ClientError::Api(e.to_string()))?;
+            .map_err(ClientError::from_octocrab)?;
         Ok(response.workflow_runs)
     }
 }
@@ -349,6 +401,34 @@ mod tests {
 
     async fn client_against(server: &MockServer) -> RepoClient {
         RepoClient::with_base_uri("tok_abc", "acme", "widgets", Some(&server.uri())).unwrap()
+    }
+
+    #[tokio::test]
+    async fn sends_exactly_one_github_api_version_header() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/repos/acme/widgets/pulls/7"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": 1, "number": 7, "state": "open",
+                "url": "https://api.github.com/repos/acme/widgets/pulls/7",
+                "head": {"ref": "feature", "sha": "deadbeef"},
+                "base": {"ref": "main", "sha": "cafef00d"}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = client_against(&server).await;
+        client.get_pull_request(7).await.unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        let versions: Vec<_> = requests[0]
+            .headers
+            .get_all("x-github-api-version")
+            .iter()
+            .map(|value| value.to_str().unwrap())
+            .collect();
+        assert_eq!(versions, ["2022-11-28"]);
     }
 
     #[tokio::test]
@@ -434,6 +514,63 @@ mod tests {
         let items = client.get_content(".slash", "main").await.unwrap();
         assert_eq!(items.len(), 1);
         assert_eq!(items[0].name, "deploy.yml");
+    }
+
+    #[tokio::test]
+    async fn content_error_preserves_github_status() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/repos/acme/widgets/contents/.slash"))
+            .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
+                "message": "Resource not accessible by integration",
+                "documentation_url": "https://docs.github.com/rest"
+            })))
+            .mount(&server)
+            .await;
+
+        let client = client_against(&server).await;
+        let error = client.get_content(".slash", "abc123").await.unwrap_err();
+        assert_eq!(error.status_code(), Some(403));
+    }
+
+    #[tokio::test]
+    async fn gets_the_repository_default_branch() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/repos/acme/widgets"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "default_branch": "trunk"
+            })))
+            .mount(&server)
+            .await;
+
+        let client = client_against(&server).await;
+        assert_eq!(client.get_default_branch().await.unwrap(), "trunk");
+    }
+
+    #[tokio::test]
+    async fn resolves_a_branch_to_its_commit_sha() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/repos/acme/widgets/git/ref/heads/trunk"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "ref": "refs/heads/trunk",
+                "node_id": "REF_1",
+                "url": "https://api.github.com/repos/acme/widgets/git/refs/heads/trunk",
+                "object": {
+                    "type": "commit",
+                    "sha": "deadbeef",
+                    "url": "https://api.github.com/repos/acme/widgets/git/commits/deadbeef"
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        let client = client_against(&server).await;
+        assert_eq!(
+            client.get_branch_head_sha("trunk").await.unwrap(),
+            "deadbeef"
+        );
     }
 
     #[tokio::test]

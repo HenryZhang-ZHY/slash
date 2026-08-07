@@ -34,6 +34,11 @@ pub fn installed_but_not_configured() -> String {
         .to_string()
 }
 
+pub fn command_catalog_unavailable() -> String {
+    "Slash could not read this repository's `.slash/` configuration. Please try again later."
+        .to_string()
+}
+
 pub fn fork_unsupported() -> String {
     "Slash does not support commands on pull requests from forks (spec §2.4, §11): \
      `workflow_dispatch` cannot target a ref in a fork. A maintainer can push the branch \
@@ -191,6 +196,14 @@ mod tests {
         let escaped = escape_user_text("plain text");
         assert!(escaped.starts_with("```"));
         assert!(escaped.ends_with("```"));
+    }
+
+    #[test]
+    fn command_catalog_unavailable_does_not_expose_internal_errors() {
+        assert_eq!(
+            command_catalog_unavailable(),
+            "Slash could not read this repository's `.slash/` configuration. Please try again later."
+        );
     }
 
     #[test]
