@@ -1,3 +1,4 @@
+mod catalog;
 mod config;
 mod correlation;
 mod db;

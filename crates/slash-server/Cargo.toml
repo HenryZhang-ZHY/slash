@@ -13,6 +13,7 @@ path = "src/main.rs"
 
 [dependencies]
 axum = "0.8.9"
+base64 = "0.23.1"
 chrono = "0.4.45"
 octocrab = "0.54.1"
 prometheus = "0.14.0"
@@ -34,7 +35,6 @@ uuid = { workspace = true, features = ["v4", "serde"] }
 workspace = true
 
 [dev-dependencies]
-base64 = "0.23.1"
 hmac = "0.13.0"
 reqwest = { version = "0.13.4", features = ["json"] }
 serial_test = "3.5.0"
