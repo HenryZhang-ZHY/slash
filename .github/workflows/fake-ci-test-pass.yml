@@ -11,7 +11,7 @@ on:
 
 jobs:
   fake-ci:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - name: Simulate passing CI
         env:
