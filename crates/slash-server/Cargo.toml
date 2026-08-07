@@ -22,7 +22,7 @@ slash-command.workspace = true
 slash-config.workspace = true
 slash-core.workspace = true
 slash-github.workspace = true
-sqlx = { version = "0.8.6", features = ["postgres", "runtime-tokio", "uuid", "chrono", "migrate", "macros"] }
+sqlx = { version = "0.8.6", features = ["postgres", "runtime-tokio-rustls", "uuid", "chrono", "migrate", "macros"] }
 thiserror.workspace = true
 tokio = { version = "1.53.1", features = ["full"] }
 tower-http = { version = "0.7.0", features = ["catch-panic", "limit", "trace"] }
