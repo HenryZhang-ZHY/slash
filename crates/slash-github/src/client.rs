@@ -19,9 +19,6 @@ use octocrab::models::repos::{Content, RepoPermission};
 use octocrab::params::checks::{CheckRunConclusion, CheckRunOutput, CheckRunStatus};
 use serde::{Deserialize, Serialize};
 
-const API_VERSION_HEADER: &str = "x-github-api-version";
-const API_VERSION: &str = "2022-11-28";
-
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum ClientError {
     #[error("failed to build GitHub client: {0}")]
@@ -132,15 +129,7 @@ impl RepoClient {
         repo: impl Into<String>,
         base_uri: Option<&str>,
     ) -> Result<Self, ClientError> {
-        let Ok(header_name) = API_VERSION_HEADER.parse() else {
-            return Err(ClientError::ClientBuild(
-                "invalid API version header name".to_string(),
-            ));
-        };
-
-        let mut builder = Octocrab::builder()
-            .personal_token(token.to_string())
-            .add_header(header_name, API_VERSION.to_string());
+        let mut builder = Octocrab::builder().personal_token(token.to_string());
         if let Some(uri) = base_uri {
             builder = builder
                 .base_uri(uri)
@@ -412,6 +401,34 @@ mod tests {
 
     async fn client_against(server: &MockServer) -> RepoClient {
         RepoClient::with_base_uri("tok_abc", "acme", "widgets", Some(&server.uri())).unwrap()
+    }
+
+    #[tokio::test]
+    async fn sends_exactly_one_github_api_version_header() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/repos/acme/widgets/pulls/7"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": 1, "number": 7, "state": "open",
+                "url": "https://api.github.com/repos/acme/widgets/pulls/7",
+                "head": {"ref": "feature", "sha": "deadbeef"},
+                "base": {"ref": "main", "sha": "cafef00d"}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let client = client_against(&server).await;
+        client.get_pull_request(7).await.unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        let versions: Vec<_> = requests[0]
+            .headers
+            .get_all("x-github-api-version")
+            .iter()
+            .map(|value| value.to_str().unwrap())
+            .collect();
+        assert_eq!(versions, ["2022-11-28"]);
     }
 
     #[tokio::test]
