@@ -7,11 +7,13 @@
 
 mod antispam;
 mod checks;
+mod grants;
 mod invocation;
 pub mod messages;
 mod permission;
 
 pub use antispam::{TokenBucket, edit_distance, should_suggest_commands};
 pub use checks::{CheckConclusion, map_conclusion};
+pub use grants::{Decision, GrantEffect, GrantRow, GrantScope, decide, tier_meets};
 pub use invocation::InvocationStatus;
 pub use permission::{ResolvedRole, meets};
