@@ -123,6 +123,20 @@ pub async fn sweep_once(
     sweep_stale_dispatched(pool, app, config, metrics).await;
     sweep_run_deadline(pool, app, config).await;
 
+    // Test Engine flaky reconcile (docs/design/1.0-test-engine.md §5): a
+    // level-triggered pass over the durable execution record. It runs on the
+    // sweeper's existing heartbeat (not a separate timer), so replicas need no
+    // leader election and a crashed pass is re-run on the next interval. Failures
+    // are logged and dropped — never fatal to the sweep.
+    match crate::flaky::reconcile(pool).await {
+        Ok(n) if n > 0 => tracing::info!(
+            transitions = n,
+            "test-engine flaky reconcile applied transitions"
+        ),
+        Ok(_) => {}
+        Err(error) => tracing::error!(%error, "test-engine flaky reconcile failed"),
+    }
+
     deleted
 }
 
