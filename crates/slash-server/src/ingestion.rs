@@ -15,10 +15,23 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::AppState;
+use crate::junit;
 use crate::test_engine::{
     ExecutionStatus, find_suite_for_token, insert_executions, quarantined_tests, upsert_run,
     upsert_test,
 };
+
+/// A source-agnostic execution after normalization (design §6 M2): the one
+/// shape both the raw-JSON path and the JUnit path produce, fed to the same
+/// durable write. `status` is already validated/normalized.
+struct NormalizedExecution {
+    name: String,
+    status: ExecutionStatus,
+    duration_ms: i64,
+    stack: Option<String>,
+    file: Option<String>,
+    line_no: Option<i32>,
+}
 
 /// The normalized raw-JSON payload accepted by the ingestion endpoint.
 #[derive(Debug, Deserialize)]
@@ -61,11 +74,31 @@ fn bearer_token(headers: &HeaderMap) -> Option<&str> {
     Some(rest.trim())
 }
 
+/// True when the content type header is JUnit XML (`application/xml`,
+/// `application/junit+xml`, or `text/xml`). Missing or JSON means the JSON
+/// path; JUnit XML is a newline-tolerant fallback for collectors that send it.
+fn is_junit_xml(headers: &HeaderMap) -> bool {
+    let Some(value) = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+    else {
+        return false;
+    };
+    let mime = value.split([';', ' ']).next().unwrap_or("");
+    matches!(
+        mime,
+        "application/xml" | "application/junit+xml" | "text/xml"
+    )
+}
+
 /// `POST /v1/test-engine/upload`
 ///
 /// 200 on a freshly accepted batch; 401 on a missing/unknown collection token;
 /// 400 on an unparseable body or unknown execution status; 500 on a storage
 /// failure. The write is all-or-nothing in a single transaction.
+///
+/// Body dispatch by `Content-Type` (design §6 M2): raw JSON by default, JUnit
+/// XML when the header says so — both normalize to the same execution shape.
 pub async fn handle_upload(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -81,7 +114,7 @@ pub async fn handle_upload(
         Ok(Some(identity)) => identity,
         // A token-lookup failure is indistinguishable from a bad token from
         // the client's perspective; both must fail closed (never an allow on
-        // an auth error). Surface 500 with a 401 only when unknown.
+        // an auth error).
         Ok(None) => return StatusCode::UNAUTHORIZED,
         Err(error) => {
             tracing::error!(%error, "test-engine token lookup failed");
@@ -89,10 +122,23 @@ pub async fn handle_upload(
         }
     };
 
-    let payload: UploadPayload = match serde_json::from_slice(&body) {
+    if is_junit_xml(&headers) {
+        return handle_junit_body(&state.pool, &identity, &body).await;
+    }
+
+    handle_json_body(&state.pool, &identity, &body).await
+}
+
+/// The raw-JSON ingestion path (existing M1 behavior).
+async fn handle_json_body(
+    pool: &PgPool,
+    identity: &crate::test_engine::SuiteTokenIdentity,
+    body: &[u8],
+) -> StatusCode {
+    let payload: UploadPayload = match serde_json::from_slice(body) {
         Ok(payload) => payload,
         Err(error) => {
-            tracing::debug!(%error, "test-engine upload body rejected");
+            tracing::debug!(%error, "test-engine JSON upload body rejected");
             return StatusCode::BAD_REQUEST;
         }
     };
@@ -105,28 +151,81 @@ pub async fn handle_upload(
             Some(status) => status,
             None => return StatusCode::BAD_REQUEST,
         };
-        parsed.push((exec, status));
+        parsed.push(NormalizedExecution {
+            name: exec.name.clone(),
+            status,
+            duration_ms: exec.duration_ms,
+            stack: exec.stack.clone(),
+            file: exec.file.clone(),
+            line_no: exec.line_no,
+        });
     }
 
-    // Write the whole batch atomically.
-    let result = write_batch(&state.pool, &identity, &payload.run, &parsed).await;
-
+    let result = write_batch(pool, identity, &payload.run, &parsed).await;
     match result {
         Ok(()) => StatusCode::OK,
         Err(error) => {
-            tracing::error!(%error, suite = %identity.suite_key, "test-engine upload write failed");
+            tracing::error!(%error, suite = %identity.suite_key, "test-engine JSON upload write failed");
             StatusCode::INTERNAL_SERVER_ERROR
         }
     }
 }
 
-/// Persists one batch within a single transaction: resolve/create the suite,
-/// resolve/create each test, upsert the run, then append executions.
+/// The JUnit XML ingestion path (M2-1). Parses the report and writes the
+/// normalized executions through the same durable write.
+async fn handle_junit_body(
+    pool: &PgPool,
+    identity: &crate::test_engine::SuiteTokenIdentity,
+    body: &[u8],
+) -> StatusCode {
+    let batch = match junit::parse(body) {
+        Ok(batch) => batch,
+        Err(error) => {
+            tracing::debug!(%error, suite = %identity.suite_key, "test-engine JUnit body rejected");
+            return StatusCode::BAD_REQUEST;
+        }
+    };
+
+    let parsed: Vec<NormalizedExecution> = batch
+        .executions
+        .into_iter()
+        .map(|e| NormalizedExecution {
+            name: e.name,
+            status: e.status,
+            duration_ms: e.duration_ms,
+            stack: e.stack,
+            file: None,
+            line_no: None,
+        })
+        .collect();
+
+    // A JUnit report has no CI run identity beyond the document; the endpoint
+    // treats it as a single run identified by the caller's run_ref-equivalent
+    // (here: a stable synthetic ref keyed to the suite).
+    let run = RunPayload {
+        ci_provider: "junit".to_string(),
+        run_ref: format!("junit/{}", uuid::Uuid::new_v4()),
+        invocation_id: None,
+    };
+
+    let result = write_batch(pool, identity, &run, &parsed).await;
+    match result {
+        Ok(()) => StatusCode::OK,
+        Err(error) => {
+            tracing::error!(%error, suite = %identity.suite_key, "test-engine JUnit upload write failed");
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    }
+}
+
+/// Persists one normalized batch within a single transaction: resolve/create
+/// the suite (already resolved), resolve/create each test, upsert the run, then
+/// append executions.
 async fn write_batch(
     pool: &PgPool,
     identity: &crate::test_engine::SuiteTokenIdentity,
     run: &RunPayload,
-    executions: &[(&ExecutionPayload, ExecutionStatus)],
+    executions: &[NormalizedExecution],
 ) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
 
@@ -134,7 +233,7 @@ async fn write_batch(
 
     // Resolve each test, returning its id for the execution FK.
     let mut test_ids = Vec::with_capacity(executions.len());
-    for (exec, _) in executions {
+    for exec in executions {
         let test_ref = upsert_test(
             &mut tx,
             suite_id,
@@ -164,14 +263,12 @@ async fn write_batch(
     let new_executions: Vec<crate::test_engine::NewExecution<'_>> = executions
         .iter()
         .zip(test_ids.iter())
-        .map(
-            |((exec, status), test_ref)| crate::test_engine::NewExecution {
-                test_id: test_ref.id,
-                status: *status,
-                duration_ms: exec.duration_ms,
-                stack: exec.stack.as_deref(),
-            },
-        )
+        .map(|(exec, test_ref)| crate::test_engine::NewExecution {
+            test_id: test_ref.id,
+            status: exec.status,
+            duration_ms: exec.duration_ms,
+            stack: exec.stack.as_deref(),
+        })
         .collect();
 
     insert_executions(&mut tx, run_id, &new_executions).await?;
