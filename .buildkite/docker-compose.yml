@@ -64,3 +64,12 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+
+  # Frontend (web/ SPA) checks: a Node image with no Rust toolchain needed,
+  # kept separate from `lint`/`test` so a badge or green pipeline never
+  # conflates backend and frontend health.
+  web:
+    image: node:24-slim
+    working_dir: /workspace/web
+    environment:
+      CI: "true"
