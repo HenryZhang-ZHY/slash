@@ -71,7 +71,7 @@ args:
 
     #[test]
     fn propagates_every_semantic_validation_error() {
-        let yaml = b"command: Bad\npermission: read\nworkflow: bad\n";
+        let yaml = b"command: Bad\npermission: maintain\nworkflow: bad\n";
         let errors = load_command_file("deploy.yml", yaml).unwrap_err();
         assert_eq!(errors.len(), 3);
     }

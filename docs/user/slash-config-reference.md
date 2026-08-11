@@ -21,7 +21,7 @@ command.
 command: deploy                  # required; unique per repo
 description: Deploy the PR to an environment   # optional; shown in errors
 permission: write                # optional; default: write
-                                  # one of: write | maintain | admin
+                                  # one of: read | write | admin
 workflow: deploy.yml             # required; file under .github/workflows/
                                   # must exist on the DEFAULT branch and
                                   # declare `on: workflow_dispatch`
@@ -49,7 +49,7 @@ command is invoked.
 |---------------|----------|---------|-------|
 | `command`     | yes      | —       | `^[a-z][a-z0-9-]*$`, case-insensitive at invocation. `help` and `slash` are reserved for future built-ins and cannot be used. |
 | `description` | no       | none    | Shown in error/usage messages only. |
-| `permission`  | no       | `write` | One of `write`, `maintain`, `admin`. **`read` and `triage` are rejected** — see [permissions.md](permissions.md) for why. |
+| `permission`  | no       | `write` | One of `read`, `write`, `admin` (default `write`). |
 | `workflow`    | yes      | —       | `^[A-Za-z0-9._-]{1,100}\.(ya?ml)$` — a filename under `.github/workflows/`, no `/`, `\`, `%`, or `..`. Must exist on the default branch with `on: workflow_dispatch`. |
 | `args`        | no       | `[]`    | Ordered list of argument definitions (below). |
 

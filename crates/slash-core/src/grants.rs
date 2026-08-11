@@ -100,16 +100,16 @@ pub fn tier_meets(granted: Permission, required: Permission) -> bool {
 
 fn tier_rank(p: Permission) -> u8 {
     match p {
-        Permission::Write => 1,
-        Permission::Maintain => 2,
+        Permission::Read => 1,
+        Permission::Write => 2,
         Permission::Admin => 3,
     }
 }
 
 fn permission_to_role(p: Permission) -> super::ResolvedRole {
     match p {
+        Permission::Read => super::ResolvedRole::Read,
         Permission::Write => super::ResolvedRole::Write,
-        Permission::Maintain => super::ResolvedRole::Maintain,
         Permission::Admin => super::ResolvedRole::Admin,
     }
 }
@@ -150,7 +150,7 @@ mod tests {
     #[test]
     fn org_write_does_not_allow_maintain_command() {
         let g = [cmdgrants(GrantScope::Org, None, None, Permission::Write, GrantEffect::Allow)];
-        assert_eq!(decide(&g, "acme/widgets", "release", Permission::Maintain), Decision::Denied);
+        assert_eq!(decide(&g, "acme/widgets", "release", Permission::Admin), Decision::Denied);
     }
 
     #[test]
@@ -238,8 +238,8 @@ mod tests {
     #[test]
     fn tier_ordering_is_increasing() {
         assert!(tier_meets(Permission::Write, Permission::Write));
-        assert!(tier_meets(Permission::Maintain, Permission::Write));
-        assert!(tier_meets(Permission::Admin, Permission::Maintain));
+        assert!(tier_meets(Permission::Write, Permission::Read));
+        assert!(tier_meets(Permission::Admin, Permission::Write));
         assert!(!tier_meets(Permission::Write, Permission::Admin));
         // Aligns with the existing ResolvedRole ordering used by permission::meets.
         assert!(ResolvedRole::Admin > ResolvedRole::Maintain);
