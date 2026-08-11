@@ -93,10 +93,20 @@ fn parse_testcase<R: std::io::BufRead>(
         }
     };
 
-    let time: f64 = attr(start, "time")
-        .and_then(|t| t.parse().ok())
-        .unwrap_or(0.0);
-    let duration_ms = (time * 1000.0).round() as i64;
+    // A self-closing `<testcase .../>` has no children: any status marker is a
+    // sibling element, so it must not be drained. It's a clean pass captured
+    // here before the child loop reads any following event.
+    if self_closing {
+        let duration_ms = (parse_time(start) * 1000.0).round() as i64;
+        return Ok(Some(JunitExecution {
+            name: key,
+            status: ExecutionStatus::Passed,
+            duration_ms,
+            stack: None,
+        }));
+    }
+
+    let duration_ms = (parse_time(start) * 1000.0).round() as i64;
 
     // Children `<failure>`, `<error>`, `<skipped>` determine the status; a
     // passing testcase has none. Child text (the exception trace) becomes the
@@ -149,6 +159,13 @@ fn attr(start: &quick_xml::events::BytesStart<'_>, key: &str) -> Option<String> 
         .flatten()
         .find(|a| a.key.as_ref() == key.as_bytes())
         .and_then(|a| String::from_utf8(a.value.as_ref().to_vec()).ok())
+}
+
+/// The `time` attribute in seconds, tolerant of a leading dot (`.012`).
+fn parse_time(start: &quick_xml::events::BytesStart<'_>) -> f64 {
+    attr(start, "time")
+        .and_then(|t| t.parse().ok())
+        .unwrap_or(0.0)
 }
 
 /// Reads the text content of the just-opened element (e.g. the `<failure>`
@@ -278,5 +295,46 @@ mod tests {
             br#"<testsuite name="s"><testcase classname="c" name="n" time=".012"/></testsuite>"#;
         let batch = parse(xml).unwrap();
         assert_eq!(batch.executions[0].duration_ms, 12);
+    }
+
+    /// Realistic `vitest --reporter=junit` output (Buildkite-style collectors,
+    /// SlashLead M2-2 note): a `<testsuites>` root wrapping nested
+    /// `<testsuite>` elements, each with `<testcase>` children. Our parser is
+    /// root-agnostic (it finds every `<testcase>` in document order), so this
+    /// nests cleanly and every testcase maps to the correct status.
+    #[test]
+    fn vitest_junit_report_parses_cleanly() {
+        let xml = br#"<?xml version="1.0" encoding="UTF-8" ?>
+            <testsuites name="test" tests="3" failures="1" errors="0" skipped="1" time="1.23">
+              <testsuite name="src/foo.test.ts" tests="3" errors="0" failures="1" skipped="1" time="1.20">
+                <testcase classname="src/foo.test.ts" name="adds numbers" time="0.051">
+                  <failure message="AssertionError: expected 2 to be 3">
+    at src/foo.test.ts:7:22
+                  </failure>
+                </testcase>
+                <testcase classname="src/foo.test.ts" name="subtracts" time="0.030"/>
+                <testcase classname="src/foo.test.ts" name="skipped one" time="0.0"><skipped/></testcase>
+              </testsuite>
+            </testsuites>"#;
+        let batch = parse(xml).unwrap();
+        assert_eq!(batch.executions.len(), 3);
+
+        // Order preserved (document order), statuses mapped per child.
+        assert_eq!(batch.executions[0].name, "adds numbers");
+        assert_eq!(batch.executions[0].status, ExecutionStatus::Failed);
+        assert_eq!(batch.executions[0].duration_ms, 51);
+        assert!(
+            batch.executions[0]
+                .stack
+                .as_deref()
+                .unwrap()
+                .contains("src/foo.test.ts:7:22")
+        );
+
+        assert_eq!(batch.executions[1].name, "subtracts");
+        assert_eq!(batch.executions[1].status, ExecutionStatus::Passed);
+
+        assert_eq!(batch.executions[2].name, "skipped one");
+        assert_eq!(batch.executions[2].status, ExecutionStatus::Skipped);
     }
 }
