@@ -17,6 +17,7 @@ pub struct ServerConfig {
     pub github_private_key_path: PathBuf,
     pub webhook_secret: String,
     pub database_url: String,
+    pub auth_secret: String,
 }
 
 impl ServerConfig {
@@ -34,6 +35,7 @@ impl ServerConfig {
     fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Result<Self, ConfigError> {
         let webhook_secret = require(&lookup, "SLASH_WEBHOOK_SECRET")?;
         let database_url = require(&lookup, "SLASH_DATABASE_URL")?;
+        let auth_secret = require(&lookup, "SLASH_AUTH_SECRET")?;
         let github_app_id_raw = require(&lookup, "SLASH_GITHUB_APP_ID")?;
         let github_app_id = github_app_id_raw
             .parse()
@@ -46,6 +48,7 @@ impl ServerConfig {
             github_private_key_path,
             webhook_secret,
             database_url,
+            auth_secret,
         })
     }
 }
@@ -100,10 +103,12 @@ mod tests {
             ("SLASH_DATABASE_URL", "postgres://x"),
             ("SLASH_GITHUB_APP_ID", "42"),
             ("SLASH_GITHUB_PRIVATE_KEY_PATH", "/key.pem"),
+            ("SLASH_AUTH_SECRET", "authsecret"),
         ]);
         let config = ServerConfig::from_lookup(lookup(&env)).unwrap();
         assert_eq!(config.github_app_id, 42);
         assert_eq!(config.webhook_secret, "shh");
+        assert_eq!(config.auth_secret, "authsecret");
     }
 
     #[test]
@@ -111,6 +116,7 @@ mod tests {
         let env = env_of(&[
             ("SLASH_WEBHOOK_SECRET", "shh"),
             ("SLASH_DATABASE_URL", "postgres://x"),
+            ("SLASH_AUTH_SECRET", "authsecret"),
             ("SLASH_GITHUB_APP_ID", "not-a-number"),
             ("SLASH_GITHUB_PRIVATE_KEY_PATH", "/key.pem"),
         ]);

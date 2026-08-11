@@ -117,6 +117,8 @@ mod tests {
             pool,
             metrics: Arc::new(Metrics::new().unwrap()),
             webhook_secret: Arc::from(SECRET),
+            auth_secret: crate::auth::AuthSecret(Arc::from(SECRET)),
+            web_dir: Arc::from("."),
         })
     }
 
