@@ -30,6 +30,9 @@ pub struct Metrics {
     /// Spec §7.4: dispatches that ended in `dispatch_failed`, by class.
     pub dispatch_failures_total: IntCounterVec,
     pub command_catalog_loads_total: IntCounterVec,
+    /// Test Engine ingestion upload-health (design §6 M2 / spec §7.4): every
+    /// accepted/rejected upload, by collector kind and outcome.
+    pub test_engine_uploads_total: IntCounterVec,
 }
 
 impl Metrics {
@@ -100,6 +103,13 @@ impl Metrics {
             registry
         )?;
 
+        let test_engine_uploads_total = register_int_counter_vec_with_registry!(
+            "slash_test_engine_uploads_total",
+            "Test Engine ingestion uploads by collector kind and outcome.",
+            &["kind", "outcome"],
+            registry
+        )?;
+
         Ok(Self {
             registry,
             webhook_deliveries_total,
@@ -111,6 +121,7 @@ impl Metrics {
             correlation_total,
             dispatch_failures_total,
             command_catalog_loads_total,
+            test_engine_uploads_total,
         })
     }
 

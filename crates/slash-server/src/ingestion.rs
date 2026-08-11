@@ -17,6 +17,7 @@ use uuid::Uuid;
 use crate::AppState;
 use crate::collectors::{self, NormalizedExecution};
 use crate::junit;
+use crate::metrics::Metrics;
 use crate::test_engine::{
     ExecutionStatus, find_suite_for_token, insert_executions, quarantined_tests, upsert_run,
     upsert_test,
@@ -94,6 +95,7 @@ pub async fn handle_upload(
     body: Bytes,
 ) -> StatusCode {
     let Some(raw_token) = bearer_token(&headers) else {
+        record_upload(&state.metrics, "generic", "bad_token");
         return StatusCode::UNAUTHORIZED;
     };
 
@@ -104,18 +106,30 @@ pub async fn handle_upload(
         // A token-lookup failure is indistinguishable from a bad token from
         // the client's perspective; both must fail closed (never an allow on
         // an auth error).
-        Ok(None) => return StatusCode::UNAUTHORIZED,
+        Ok(None) => {
+            record_upload(&state.metrics, "generic", "bad_unknown_token");
+            return StatusCode::UNAUTHORIZED;
+        }
         Err(error) => {
             tracing::error!(%error, "test-engine token lookup failed");
+            record_upload(&state.metrics, "generic", "token_lookup_error");
             return StatusCode::INTERNAL_SERVER_ERROR;
         }
     };
 
     if is_junit_xml(&headers) {
-        return handle_junit_body(&state.pool, &identity, &body).await;
+        return handle_junit_body(&state.pool, &identity, &body, &state.metrics).await;
     }
 
-    handle_json_body(&state.pool, &identity, &body).await
+    handle_json_body(&state.pool, &identity, &body, &state.metrics).await
+}
+
+/// Records an ingestion outcome on the upload-health metric (M2-5).
+fn record_upload(metrics: &Metrics, kind: &str, outcome: &str) {
+    metrics
+        .test_engine_uploads_total
+        .with_label_values(&[kind, outcome])
+        .inc();
 }
 
 /// The raw-JSON ingestion path (existing M1 behavior).
@@ -123,11 +137,13 @@ async fn handle_json_body(
     pool: &PgPool,
     identity: &crate::test_engine::SuiteTokenIdentity,
     body: &[u8],
+    metrics: &Metrics,
 ) -> StatusCode {
     let payload: UploadPayload = match serde_json::from_slice(body) {
         Ok(payload) => payload,
         Err(error) => {
             tracing::debug!(%error, "test-engine JSON upload body rejected");
+            record_upload(metrics, "json", "bad_body");
             return StatusCode::BAD_REQUEST;
         }
     };
@@ -138,7 +154,10 @@ async fn handle_json_body(
     for exec in &payload.executions {
         let status = match parse_execution_status(&exec.status) {
             Some(status) => status,
-            None => return StatusCode::BAD_REQUEST,
+            None => {
+                record_upload(metrics, "json", "bad_status");
+                return StatusCode::BAD_REQUEST;
+            }
         };
         parsed.push(NormalizedExecution {
             name: exec.name.clone(),
@@ -152,9 +171,13 @@ async fn handle_json_body(
 
     let result = write_batch(pool, identity, &payload.run, &parsed).await;
     match result {
-        Ok(()) => StatusCode::OK,
+        Ok(()) => {
+            record_upload(metrics, "json", "ok");
+            StatusCode::OK
+        }
         Err(error) => {
             tracing::error!(%error, suite = %identity.suite_key, "test-engine JSON upload write failed");
+            record_upload(metrics, "json", "storage_error");
             StatusCode::INTERNAL_SERVER_ERROR
         }
     }
@@ -166,11 +189,13 @@ async fn handle_junit_body(
     pool: &PgPool,
     identity: &crate::test_engine::SuiteTokenIdentity,
     body: &[u8],
+    metrics: &Metrics,
 ) -> StatusCode {
     let batch = match junit::parse(body) {
         Ok(batch) => batch,
         Err(error) => {
             tracing::debug!(%error, suite = %identity.suite_key, "test-engine JUnit body rejected");
+            record_upload(metrics, "junit", "bad_body");
             return StatusCode::BAD_REQUEST;
         }
     };
@@ -199,9 +224,13 @@ async fn handle_junit_body(
 
     let result = write_batch(pool, identity, &run, &parsed).await;
     match result {
-        Ok(()) => StatusCode::OK,
+        Ok(()) => {
+            record_upload(metrics, "junit", "ok");
+            StatusCode::OK
+        }
         Err(error) => {
             tracing::error!(%error, suite = %identity.suite_key, "test-engine JUnit upload write failed");
+            record_upload(metrics, "junit", "storage_error");
             StatusCode::INTERNAL_SERVER_ERROR
         }
     }
@@ -217,21 +246,29 @@ pub async fn handle_cargo_upload(
 ) -> StatusCode {
     let suite = match authorize(&state.pool, &headers).await {
         Ok(Some(suite)) => suite,
-        Ok(None) => return StatusCode::UNAUTHORIZED,
+        Ok(None) => {
+            record_upload(&state.metrics, "cargo", "bad_unknown_token");
+            return StatusCode::UNAUTHORIZED;
+        }
         Err(error) => {
             tracing::error!(%error, "test-engine token lookup failed");
+            record_upload(&state.metrics, "cargo", "token_lookup_error");
             return StatusCode::INTERNAL_SERVER_ERROR;
         }
     };
 
     let input = match std::str::from_utf8(&body) {
         Ok(s) => s,
-        Err(_) => return StatusCode::BAD_REQUEST,
+        Err(_) => {
+            record_upload(&state.metrics, "cargo", "bad_body");
+            return StatusCode::BAD_REQUEST;
+        }
     };
     let batch = match collectors::parse_cargo_libtest(input) {
         Ok(b) => b,
         Err(error) => {
             tracing::debug!(%error, suite = %suite.suite_key, "cargo upload body rejected");
+            record_upload(&state.metrics, "cargo", "bad_body");
             return StatusCode::BAD_REQUEST;
         }
     };
@@ -243,7 +280,15 @@ pub async fn handle_cargo_upload(
             .unwrap_or_else(|| format!("cargo/{}", Uuid::new_v4())),
         invocation_id: None,
     };
-    finish_upload(&state.pool, &suite, &run, &batch.executions, "cargo").await
+    finish_upload(
+        &state.pool,
+        &suite,
+        &run,
+        &batch.executions,
+        "cargo",
+        &state.metrics,
+    )
+    .await
 }
 
 /// `POST /v1/test-engine/upload/vitest` — Buildkite vitest reporter ingestion
@@ -255,21 +300,29 @@ pub async fn handle_vitest_upload(
 ) -> StatusCode {
     let suite = match authorize(&state.pool, &headers).await {
         Ok(Some(suite)) => suite,
-        Ok(None) => return StatusCode::UNAUTHORIZED,
+        Ok(None) => {
+            record_upload(&state.metrics, "vitest", "bad_unknown_token");
+            return StatusCode::UNAUTHORIZED;
+        }
         Err(error) => {
             tracing::error!(%error, "test-engine token lookup failed");
+            record_upload(&state.metrics, "vitest", "token_lookup_error");
             return StatusCode::INTERNAL_SERVER_ERROR;
         }
     };
 
     let input = match std::str::from_utf8(&body) {
         Ok(s) => s,
-        Err(_) => return StatusCode::BAD_REQUEST,
+        Err(_) => {
+            record_upload(&state.metrics, "vitest", "bad_body");
+            return StatusCode::BAD_REQUEST;
+        }
     };
     let batch = match collectors::parse_vitest_batch(input) {
         Ok(b) => b,
         Err(error) => {
             tracing::debug!(%error, suite = %suite.suite_key, "vitest upload body rejected");
+            record_upload(&state.metrics, "vitest", "bad_body");
             return StatusCode::BAD_REQUEST;
         }
     };
@@ -281,7 +334,15 @@ pub async fn handle_vitest_upload(
             .unwrap_or_else(|| format!("vitest/{}", Uuid::new_v4())),
         invocation_id: None,
     };
-    finish_upload(&state.pool, &suite, &run, &batch.executions, "vitest").await
+    finish_upload(
+        &state.pool,
+        &suite,
+        &run,
+        &batch.executions,
+        "vitest",
+        &state.metrics,
+    )
+    .await
 }
 
 /// Extracts + resolves the Bearer collection token to a suite identity.
@@ -302,11 +363,16 @@ async fn finish_upload(
     run: &RunPayload,
     executions: &[NormalizedExecution],
     kind: &str,
+    metrics: &Metrics,
 ) -> StatusCode {
     match write_batch(pool, identity, run, executions).await {
-        Ok(()) => StatusCode::OK,
+        Ok(()) => {
+            record_upload(metrics, kind, "ok");
+            StatusCode::OK
+        }
         Err(error) => {
             tracing::error!(%error, suite = %identity.suite_key, "test-engine {kind} upload write failed");
+            record_upload(metrics, kind, "storage_error");
             StatusCode::INTERNAL_SERVER_ERROR
         }
     }
