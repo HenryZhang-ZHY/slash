@@ -441,3 +441,311 @@ fn slugify(name: &str) -> String {
 fn api_error(status: StatusCode, msg: &str) -> Response {
     (status, Json(json!({ "error": msg }))).into_response()
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
+mod tests {
+    use super::*;
+    use crate::db;
+    use axum::extract::State;
+    use axum::http::StatusCode;
+
+    /// DB-backed tests skip cleanly when `SLASH_TEST_DATABASE_URL` is unset
+    /// (matches the repo-wide plan M4 convention).
+    async fn test_pool() -> Option<PgPool> {
+        let url = crate::test_support::test_database_url()?;
+        let pool = db::connect(&url).await.unwrap();
+        db::migrate(&pool).await.unwrap();
+        sqlx::query("TRUNCATE team_members, teams, organizations, users CASCADE")
+            .execute(&pool)
+            .await
+            .unwrap();
+        Some(pool)
+    }
+
+    fn app_state(pool: PgPool) -> crate::AppState {
+        crate::AppState {
+            pool,
+            metrics: std::sync::Arc::new(crate::metrics::Metrics::new().unwrap()),
+            webhook_secret: std::sync::Arc::from("test-webhook-secret"),
+            auth_secret: crate::auth::AuthSecret(std::sync::Arc::from("test-auth-secret")),
+            web_dir: std::sync::Arc::from(""),
+        }
+    }
+
+    fn response_status(res: &Response) -> StatusCode {
+        res.status()
+    }
+
+    #[serial_test::serial(db)]
+
+    #[tokio::test]
+    async fn register_creates_the_user_and_returns_the_auth_payload() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        let state = app_state(pool.clone());
+        let body = Json(RegisterRequest {
+            email: "  Alice@Example.com ".into(),
+            password: "supersecure1".into(),
+            display_name: "Alice".into(),
+        });
+        let resp = register(State(state), body).await;
+        assert_eq!(response_status(&resp), StatusCode::OK);
+
+        // The user row exists with the normalized (lowercased/trimmed) email.
+        let (id, email, hashed): (uuid::Uuid, String, String) = sqlx::query_as(
+            "SELECT id, email, password_hash FROM users WHERE email = 'alice@example.com'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(email, "alice@example.com");
+        // password is stored as an Argon2 PHC hash ("$argon2id$...").
+        assert!(hashed.starts_with("$argon2id$"));
+        assert!(crate::auth::verify_password("supersecure1", &hashed));
+        let _ = id;
+    }
+
+    #[serial_test::serial(db)]
+
+    #[tokio::test]
+    async fn register_duplicate_email_is_conflict() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        let state = app_state(pool.clone());
+        let _ = register(
+            State(state.clone()),
+            Json(RegisterRequest {
+                email: "bob@example.com".into(),
+                password: "supersecure1".into(),
+                display_name: "Bob".into(),
+            }),
+        )
+        .await;
+        let resp = register(
+            State(state),
+            Json(RegisterRequest {
+                email: "bob@example.com".into(),
+                password: "supersecure1".into(),
+                display_name: "Bob2".into(),
+            }),
+        )
+        .await;
+        assert_eq!(response_status(&resp), StatusCode::CONFLICT);
+    }
+
+    #[serial_test::serial(db)]
+
+    #[tokio::test]
+    async fn register_rejects_short_password() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        let state = app_state(pool.clone());
+        let resp = register(
+            State(state),
+            Json(RegisterRequest {
+                email: "c@example.com".into(),
+                password: "short".into(),
+                display_name: "C".into(),
+            }),
+        )
+        .await;
+        assert_eq!(response_status(&resp), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[serial_test::serial(db)]
+
+    #[tokio::test]
+    async fn login_happy_path_verifies_password_and_returns_user() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        let state = app_state(pool.clone());
+        let _ = register(
+            State(state.clone()),
+            Json(RegisterRequest {
+                email: "dana@example.com".into(),
+                password: "supersecure1".into(),
+                display_name: "Dana".into(),
+            }),
+        )
+        .await;
+
+        let resp = login(
+            State(state),
+            Json(LoginRequest {
+                email: "dana@example.com".into(),
+                password: "supersecure1".into(),
+            }),
+        )
+        .await;
+        assert_eq!(response_status(&resp), StatusCode::OK);
+
+        // Cookie set on login.
+        assert!(
+            resp.headers()
+                .get(axum::http::header::SET_COOKIE)
+                .and_then(|v| v.to_str().ok())
+                .is_some_and(|v| v.starts_with("slash_session=") && v.contains("HttpOnly"))
+        );
+    }
+
+    #[serial_test::serial(db)]
+
+    #[tokio::test]
+    async fn login_wrong_password_is_unauthorized() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        let state = app_state(pool.clone());
+        let _ = register(
+            State(state.clone()),
+            Json(RegisterRequest {
+                email: "e@example.com".into(),
+                password: "supersecure1".into(),
+                display_name: "E".into(),
+            }),
+        )
+        .await;
+        let resp = login(
+            State(state),
+            Json(LoginRequest {
+                email: "e@example.com".into(),
+                password: "wrong-password".into(),
+            }),
+        )
+        .await;
+        assert_eq!(response_status(&resp), StatusCode::UNAUTHORIZED);
+    }
+
+    #[serial_test::serial(db)]
+
+    #[tokio::test]
+    async fn login_unknown_email_is_unauthorized() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        let state = app_state(pool.clone());
+        let resp = login(
+            State(state),
+            Json(LoginRequest {
+                email: "nobody@example.com".into(),
+                password: "whatever1".into(),
+            }),
+        )
+        .await;
+        assert_eq!(response_status(&resp), StatusCode::UNAUTHORIZED);
+    }
+
+    #[serial_test::serial(db)]
+
+    #[tokio::test]
+    async fn create_team_onboards_org_team_and_maintainer_membership() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        let state = app_state(pool.clone());
+        let _ = register(
+            State(state.clone()),
+            Json(RegisterRequest {
+                email: "frank@example.com".into(),
+                password: "supersecure1".into(),
+                display_name: "Frank".into(),
+            }),
+        )
+        .await;
+        let (uid,): (uuid::Uuid,) =
+            sqlx::query_as("SELECT id FROM users WHERE email = 'frank@example.com'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+
+        let resp = create_team(State(state.clone()), UserId(uid), Json(CreateTeamRequest {
+            name: "Acme".into(),
+            slug: None,
+        }))
+        .await;
+        assert_eq!(response_status(&resp), StatusCode::OK);
+
+        // An org was created, a team in it, and Frank is its maintainer.
+        let row: (uuid::Uuid, String) = sqlx::query_as(
+            "SELECT t.id, tm.role FROM teams t
+             JOIN team_members tm ON tm.team_id = t.id
+             WHERE tm.user_id = $1",
+        )
+        .bind(uid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.1, "maintainer");
+
+        // /me now lists the team.
+        let me_resp = me(State(state.clone()), UserId(uid)).await;
+        assert_eq!(response_status(&me_resp), StatusCode::OK);
+        let _ = row;
+    }
+
+    #[serial_test::serial(db)]
+
+    #[tokio::test]
+    async fn create_team_slug_conflict_is_conflict() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        let state = app_state(pool.clone());
+        let _ = register(
+            State(state.clone()),
+            Json(RegisterRequest {
+                email: "gina@example.com".into(),
+                password: "supersecure1".into(),
+                display_name: "Gina".into(),
+            }),
+        )
+        .await;
+        let uid: uuid::Uuid =
+            sqlx::query_scalar::<_, uuid::Uuid>("SELECT id FROM users WHERE email = 'gina@example.com'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+
+        // First create succeeds and onboards an org; reusing the same user
+        // keeps the org stable so the second same-slug insert conflicts on
+        // `UNIQUE (organization_id, slug)`.
+        let first = create_team(
+            State(state.clone()),
+            UserId(uid),
+            Json(CreateTeamRequest {
+                name: "Acme".into(),
+                slug: Some("acme".into()),
+            }),
+        )
+        .await;
+        assert_eq!(response_status(&first), StatusCode::OK);
+
+        let second = create_team(
+            State(state.clone()),
+            UserId(uid),
+            Json(CreateTeamRequest {
+                name: "Acme Security".into(),
+                slug: Some("acme".into()),
+            }),
+        )
+        .await;
+        assert_eq!(response_status(&second), StatusCode::CONFLICT);
+    }
+
+    #[serial_test::serial(db)]
+
+    #[tokio::test]
+    async fn me_for_unknown_user_is_unauthorized() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        let state = app_state(pool.clone());
+        let resp = me(State(state), UserId(uuid::Uuid::new_v4())).await;
+        assert_eq!(response_status(&resp), StatusCode::UNAUTHORIZED);
+    }
+}
