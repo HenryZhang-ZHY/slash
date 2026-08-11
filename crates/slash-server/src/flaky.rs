@@ -19,11 +19,6 @@ use crate::test_engine::{
 
 /// Rolling window for flaky detection (design §5: 7 days).
 pub const FLAKY_WINDOW: Duration = Duration::from_secs(7 * 24 * 60 * 60);
-
-/// Minimum executions in the window before a test can be judged flaky (design
-/// §8 Q4: a denominator against small-sample false positives).
-pub const FLAKY_MIN_EXECUTIONS: usize = 3;
-
 /// Runs one detection pass over all tests via a bounded cursor sweep
 /// (M2-6): pages of `RECONCILE_PAGE_SIZE` keyset-ordered by `id`, so the
 /// reconcile never holds the whole `tests` table in memory and remains
@@ -88,84 +83,51 @@ pub async fn reconcile(pool: &PgPool) -> Result<usize, sqlx::Error> {
     Ok(transitions)
 }
 
-/// Returns true when the execution sequence within the window qualifies as
-/// flaky: at least `FLAKY_MIN_EXECUTIONS` executions and at least one
-/// fail-then-pass recovery (a `failed`/`errored` followed by a later `passed`).
-fn is_flaky(executions: &[ExecutionStatus]) -> bool {
-    if executions.len() < FLAKY_MIN_EXECUTIONS {
-        return false;
-    }
-    has_fail_then_pass(executions)
-}
-
-fn has_fail_then_pass(executions: &[ExecutionStatus]) -> bool {
-    let mut saw_failure = false;
-    for status in executions {
-        match status {
-            ExecutionStatus::Failed | ExecutionStatus::Errored => saw_failure = true,
-            ExecutionStatus::Passed if saw_failure => return true,
-            ExecutionStatus::Passed | ExecutionStatus::Skipped => {}
-        }
-    }
-    false
-}
-
-fn recent_contains_failure(executions: &[ExecutionStatus]) -> bool {
+/// Returns the observed execution status as core's pure status view. This is
+/// the only seam between the storage-layer status enum and `slash_core`'s
+/// IO-free decision module (docs/design/1.0-test-engine.md §5, P3/R9).
+fn to_observed(executions: &[ExecutionStatus]) -> Vec<slash_core::ObservedStatus> {
     executions
         .iter()
-        .any(|s| matches!(s, ExecutionStatus::Failed | ExecutionStatus::Errored))
+        .map(|s| match s {
+            ExecutionStatus::Passed => slash_core::ObservedStatus::Passed,
+            ExecutionStatus::Failed => slash_core::ObservedStatus::Failed,
+            ExecutionStatus::Skipped => slash_core::ObservedStatus::Skipped,
+            ExecutionStatus::Errored => slash_core::ObservedStatus::Errored,
+        })
+        .collect()
 }
 
-// --- pure correctness tests, no database needed ---
+/// Delegates the pure flaky decision to `slash_core::test_flaky` (P3/R9).
+fn is_flaky(executions: &[ExecutionStatus]) -> bool {
+    slash_core::is_flaky(&to_observed(executions))
+}
+
+/// Delegates the un-quarantine gate to core.
+fn recent_contains_failure(executions: &[ExecutionStatus]) -> bool {
+    slash_core::recent_contains_failure(&to_observed(executions))
+}
+
+// --- delegation tests: server status -> core decision (no DB needed) ---
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
     use crate::test_engine::ExecutionStatus::*;
 
-    fn seq(statuses: &[ExecutionStatus]) -> Vec<ExecutionStatus> {
-        statuses.to_vec()
+    #[test]
+    fn flaky_decision_is_delegated_to_core() {
+        // A denominator-satisfying fail-then-pass is flaky via core.
+        assert!(is_flaky(&[Passed, Failed, Passed]));
+        // Below the denominator is not.
+        assert!(!is_flaky(&[Failed, Passed]));
+        // All-pass is not.
+        assert!(!is_flaky(&[Passed, Passed, Passed]));
     }
 
     #[test]
-    fn below_min_executions_is_not_flaky() {
-        // 2 executions, one fail then pass — but below the denominator.
-        assert!(!is_flaky(&seq(&[Failed, Passed])));
-        assert!(!is_flaky(&seq(&[Passed])));
-        assert!(!is_flaky(&seq(&[])));
-    }
-
-    #[test]
-    fn fail_then_pass_within_window_is_flaky() {
-        assert!(is_flaky(&seq(&[Passed, Failed, Passed])));
-        assert!(is_flaky(&seq(&[Failed, Errored, Passed])));
-    }
-
-    #[test]
-    fn all_pass_is_not_flaky() {
-        assert!(!is_flaky(&seq(&[Passed, Passed, Passed, Passed])));
-    }
-
-    #[test]
-    fn failure_with_no_recovery_is_not_flaky() {
-        // A deployed-broken intermittent failure that never recovered is not
-        // flaky — it's a genuine failure (design §8 Q4 rationale).
-        assert!(!is_flaky(&seq(&[Passed, Failed, Failed])));
-        assert!(!is_flaky(&seq(&[Failed, Failed, Failed])));
-    }
-
-    #[test]
-    fn skipped_do_not_break_recovery_detection() {
-        assert!(is_flaky(&seq(&[Passed, Failed, Skipped, Passed])));
-    }
-
-    #[test]
-    fn muted_recovery_requires_no_failure_in_window() {
-        assert!(!recent_contains_failure(&seq(&[Passed, Passed])));
-        assert!(recent_contains_failure(&seq(&[Passed, Failed])));
-    }
-
-    #[test]
-    fn min_executions_constant_is_stable() {
-        assert_eq!(FLAKY_MIN_EXECUTIONS, 3);
+    fn unquarantine_gate_is_delegated_to_core() {
+        assert!(!recent_contains_failure(&[Passed, Passed]));
+        assert!(recent_contains_failure(&[Passed, Failed]));
     }
 }
