@@ -32,14 +32,16 @@ pub enum GrantEffect {
 }
 
 /// A single grant row, as produced by the server's DB query for one
-/// org+actor (user direct grants + the actor's team grants).
+/// org+actor (user direct grants + the actor's team grants). `repository`
+/// and `command` are owned strings so the DB loader can build them without
+/// leaking borrowed references.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GrantRow {
     pub scope: GrantScope,
     /// `owner/repo` when the grant is repository- or command-scoped.
-    pub repository: Option<&'static str>,
+    pub repository: Option<String>,
     /// command name when `scope == Command`.
-    pub command: Option<&'static str>,
+    pub command: Option<String>,
     pub tier: Permission,
     pub effect: GrantEffect,
 }
@@ -83,8 +85,8 @@ pub fn decide(grants: &[GrantRow], repo: &str, command: &str, required: Permissi
 fn matches_scope(g: &GrantRow, repo: &str, command: &str) -> bool {
     match g.scope {
         GrantScope::Org => true,
-        GrantScope::Repository => g.repository == Some(repo),
-        GrantScope::Command => g.command == Some(command),
+        GrantScope::Repository => g.repository.as_deref() == Some(repo),
+        GrantScope::Command => g.command.as_deref() == Some(command),
     }
 }
 
@@ -120,15 +122,15 @@ mod tests {
 
     fn cmdgrants(
         scope: GrantScope,
-        repo: Option<&'static str>,
-        cmd: Option<&'static str>,
+        repo: Option<&str>,
+        cmd: Option<&str>,
         tier: Permission,
         effect: GrantEffect,
     ) -> GrantRow {
         GrantRow {
             scope,
-            repository: repo,
-            command: cmd,
+            repository: repo.map(str::to_string),
+            command: cmd.map(str::to_string),
             tier,
             effect,
         }
