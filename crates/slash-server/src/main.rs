@@ -3,10 +3,13 @@ mod config;
 mod correlation;
 mod db;
 mod deliveries;
+mod flaky;
+mod ingestion;
 mod invocations;
 mod metrics;
 mod pipeline;
 mod sweeper;
+mod test_engine;
 #[cfg(test)]
 mod test_support;
 mod webhook;
@@ -105,6 +108,7 @@ async fn main() {
 
     let app = Router::new()
         .route("/webhook", post(webhook::handle_webhook))
+        .route("/v1/test-engine/upload", post(ingestion::handle_upload))
         .route("/healthz", get(healthz))
         .route("/metrics", get(metrics_handler))
         .layer(CatchPanicLayer::new())

@@ -17,6 +17,7 @@ base64 = "0.23.1"
 chrono = "0.4.45"
 octocrab = "0.54.1"
 prometheus = "0.14.0"
+sha2 = "0.11.0"
 serde.workspace = true
 serde_json.workspace = true
 slash-command.workspace = true
@@ -38,5 +39,4 @@ workspace = true
 hmac = "0.13.0"
 reqwest = { version = "0.13.4", features = ["json"] }
 serial_test = "3.5.0"
-sha2 = "0.11.0"
 wiremock = "0.6.5"
