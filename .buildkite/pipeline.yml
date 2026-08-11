@@ -34,6 +34,12 @@ steps:
 
   - label: ":test_tube: test"
     key: test
+    # Fetched by the agent into the job's own environment under this exact
+    # key name (Buildkite Secrets, not a pipeline env var) — see the
+    # BUILDKITE_ANALYTICS_TOKEN remap in docker-compose.yml's `test` service,
+    # since buildkite-test-collector only reads that fixed name.
+    secrets:
+      - TEST_SUITE_SLASH_BUILDKITE_ANALYTICS_TOKEN
     # `--format json --report-time` are unstable libtest options; RUSTC_
     # BOOTSTRAP=1 unlocks them on the stable toolchain this image tracks
     # without needing a nightly install. Output is piped through the

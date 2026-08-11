@@ -29,10 +29,15 @@ services:
       # already sets BUILDKITE_* for every job. buildkite-test-collector
       # reads these to detect the CI provider and attach branch/commit/build
       # metadata to uploaded results.
-      # BUILDKITE_ANALYTICS_TOKEN must be set as a pipeline environment
-      # variable/secret in the Buildkite UI (this repo doesn't manage
-      # pipeline settings as code — see .buildkite/pipeline.yml).
-      - BUILDKITE_ANALYTICS_TOKEN
+      #
+      # BUILDKITE_ANALYTICS_TOKEN itself is renamed on the way in: the
+      # pipeline's `test` step (pipeline.yml) declares a Buildkite Secret
+      # under the key TEST_SUITE_SLASH_BUILDKITE_ANALYTICS_TOKEN, which the
+      # agent exports into the job's environment under that same name — the
+      # `${...}` substitution below is resolved by Compose from that host
+      # env var at `docker-compose run` time and handed to the container as
+      # the name buildkite-test-collector actually reads.
+      - BUILDKITE_ANALYTICS_TOKEN=${TEST_SUITE_SLASH_BUILDKITE_ANALYTICS_TOKEN}
       - BUILDKITE
       - BUILDKITE_BUILD_ID
       - BUILDKITE_BUILD_NUMBER
