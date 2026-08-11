@@ -67,3 +67,17 @@ steps:
     # still builds; not pushed anywhere — wire up a registry + credentials
     # plugin (e.g. ecr, docker-login) here once you have one.
     command: docker build -t slash-server:build-$BUILDKITE_BUILD_NUMBER .
+
+  - label: ":node: web (frontend) build + lint"
+    key: web-build
+    # Frontend SPA checks (web/): typecheck via `tsc -b`, then a production
+    # Vite build and oxlint. Independent of the Rust steps; runs in a Node
+    # image (see .buildkite/docker-compose.yml `web` service) so a backend
+    # green never implies frontend health.
+    command: npm ci && npm run build && npm run lint
+    plugins:
+      - docker-compose#v5.13.0:
+          config: .buildkite/docker-compose.yml
+          run: web
+          mount-checkout: true
+          workdir: /workspace
