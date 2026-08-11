@@ -892,3 +892,62 @@ mod tests {
         Some(parse_test_state(&state))
     }
 }
+
+/// Pure, dependency-free unit tests for the test-engine parsing helpers —
+/// the fast safety net @Quality's P1 asks for (no DB, no wiremock).
+#[cfg(test)]
+mod pure_tests {
+    use super::*;
+
+    #[test]
+    fn parse_test_state_maps_each_label_and_defaults_unknown_to_enabled() {
+        assert_eq!(parse_test_state("enabled"), TestState::Enabled);
+        assert_eq!(parse_test_state("muted"), TestState::Muted);
+        assert_eq!(parse_test_state("skipped"), TestState::Skipped);
+        // Unknown / casing drift must fail safe to the default disposition.
+        assert_eq!(parse_test_state(""), TestState::Enabled);
+        assert_eq!(parse_test_state("ENABLED"), TestState::Enabled);
+    }
+
+    #[test]
+    fn parse_execution_status_maps_every_known_status_and_ignores_unknown() {
+        assert_eq!(parse_execution_status("passed"), ExecutionStatus::Passed);
+        assert_eq!(parse_execution_status("failed"), ExecutionStatus::Failed);
+        assert_eq!(parse_execution_status("skipped"), ExecutionStatus::Skipped);
+        assert_eq!(parse_execution_status("errored"), ExecutionStatus::Errored);
+        assert_eq!(parse_execution_status("flaky?"), ExecutionStatus::Errored);
+    }
+
+    #[test]
+    fn test_state_as_str_round_trips() {
+        for state in [TestState::Enabled, TestState::Muted, TestState::Skipped] {
+            assert_eq!(parse_test_state(state.as_str()), state);
+        }
+    }
+
+    #[test]
+    fn set_test_state_placeholder_numbers_are_offset_for_id_and_to() {
+        // Guarded CAS for a single `from` state: $1 id, $2 new-state, then the
+        // predecessor states at $3+.
+        assert_eq!(placeholders(3, 1), "$3");
+        assert_eq!(placeholders(3, 2), "$3, $4");
+    }
+
+    #[test]
+    fn hash_token_is_deterministic_and_32_bytes() {
+        let a = hash_token("suite-token");
+        let b = hash_token("suite-token");
+        let c = hash_token("different");
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+        assert_eq!(a.len(), 32);
+    }
+
+    #[test]
+    fn crypto_random_token_is_unique_and_parseable_uuid() {
+        let a = crypto_random_token();
+        let b = crypto_random_token();
+        assert_ne!(a, b);
+        assert!(uuid::Uuid::parse_str(&a).is_ok());
+    }
+}
