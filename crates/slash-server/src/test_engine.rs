@@ -267,10 +267,7 @@ pub async fn all_tests(conn: &PgPool) -> Result<Vec<(Uuid, TestState)>, sqlx::Er
 /// `skipped`). Backs the M1 disposal hook (design §5): a slash-commanded test
 /// workflow queries this before running to skip/soft-fail already-quarantined
 /// tests — the bktec client "skip/mute flaky" behavior, server-side.
-pub async fn quarantined_tests(
-    conn: &PgPool,
-    suite_id: Uuid,
-) -> Result<Vec<String>, sqlx::Error> {
+pub async fn quarantined_tests(conn: &PgPool, suite_id: Uuid) -> Result<Vec<String>, sqlx::Error> {
     let rows: Vec<(String,)> = sqlx::query_as(
         "SELECT name FROM tests \
          WHERE suite_id = $1 AND state IN ('muted', 'skipped') \
@@ -656,7 +653,13 @@ mod tests {
 
         // Ingest a flaky test (fail then passes, >=3 executions) and a healthy
         // one, then run the reconcile — the closed loop: ingest -> flaky-mark.
-        seed_runs(&pool, suite_id, "tests::flaky_one", &[Failed, Passed, Passed]).await;
+        seed_runs(
+            &pool,
+            suite_id,
+            "tests::flaky_one",
+            &[Failed, Passed, Passed],
+        )
+        .await;
         seed_runs(&pool, suite_id, "tests::healthy", &[Passed, Passed, Passed]).await;
         crate::flaky::reconcile(&pool).await.unwrap();
 
