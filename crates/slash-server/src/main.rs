@@ -109,6 +109,7 @@ async fn main() {
     let app = Router::new()
         .route("/webhook", post(webhook::handle_webhook))
         .route("/v1/test-engine/upload", post(ingestion::handle_upload))
+        .route("/v1/test-engine/quarantined", get(ingestion::handle_quarantined))
         .route("/healthz", get(healthz))
         .route("/metrics", get(metrics_handler))
         .layer(CatchPanicLayer::new())
