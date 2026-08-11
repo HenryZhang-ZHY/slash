@@ -92,6 +92,58 @@ fn parse_effect(s: &str) -> Result<GrantEffect, sqlx::Error> {
     }
 }
 
+/// Pre-load the actor's grants for `repo` as `ResolvedGrant`s — the async
+/// half of the R2 `TrustGate` flow; the sync `GrantsTrustGate::check` then
+/// decides. Fail-closed: any error here (or an empty grant set) must be
+/// treated as deny by the caller.
+pub async fn preload_grants(
+    pool: &PgPool,
+    github_user_id: i64,
+    installation_id: i64,
+    repo_owner: &str,
+    repo_name: &str,
+) -> Result<Vec<slash_core::pipeline::ResolvedGrant>, sqlx::Error> {
+    use slash_core::pipeline::ResolvedGrant;
+
+    // Resolve actor -> slash user, then repo -> org, then load grants.
+    let actor_row = sqlx::query_scalar::<_, uuid::Uuid>(
+        "SELECT id FROM users WHERE github_user_id = $1 AND status = 'active'",
+    )
+    .bind(github_user_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some(actor_user_id) = actor_row else {
+        return Ok(vec![]);
+    };
+    let org_row = sqlx::query_scalar::<_, uuid::Uuid>(
+        "SELECT id FROM organizations WHERE installation_id = $1",
+    )
+    .bind(installation_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some(org_id) = org_row else {
+        return Ok(vec![]);
+    };
+
+    let loaded = load_for_repo(pool, org_id, actor_user_id).await?;
+    let repo = format!("{repo_owner}/{repo_name}");
+    Ok(loaded
+        .rows
+        .into_iter()
+        .filter(|r| match r.scope {
+            GrantScope::Org => true,
+            GrantScope::Repository => r.repository.as_deref() == Some(repo.as_str()),
+            GrantScope::Command => true, // command matched by GrantsTrustGate::check
+        })
+        .map(|r| ResolvedGrant {
+            scope: r.scope,
+            effect: r.effect,
+            permission: r.tier,
+            command: r.command,
+        })
+        .collect())
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
@@ -229,6 +281,9 @@ mod tests {
 /// a non-onboarded actor, an unresolvable org, a DB error, or no grant that
 /// reaches the required tier all deny (strict deny-by-default; no GitHub
 /// collaborator fallback).
+/// Superseded by the R2 `TrustGate` live path (`preload_grants` + `GrantsTrustGate`)
+/// but retained as the documented fail-closed contract reference.
+#[allow(dead_code)]
 pub async fn authorize_command_grants(
     pool: &PgPool,
     github_user_id: i64,
@@ -275,6 +330,7 @@ pub async fn authorize_command_grants(
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod authz_tests {
     use super::*;
+    use slash_core::TrustGate;
     use crate::db;
 
     async fn pool() -> PgPool {
@@ -327,5 +383,27 @@ mod authz_tests {
         assert!(!authorize_command_grants(&p, 999, 9, "acme", "widgets", "deploy", slash_config::Permission::Write).await.unwrap());
         // unknown installation -> no org -> deny
         assert!(!authorize_command_grants(&p, 111, 12345, "acme", "widgets", "deploy", slash_config::Permission::Write).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn trustgate_live_path_allows_and_denies() {
+        let p = pool().await;
+        let (org, uid) = seed(&p, 111, 9).await;
+        sqlx::query(
+            "INSERT INTO grants (id, organization_id, subject_type, subject_id, scope, repository, command, permission, effect)
+             VALUES ($1,$2,'user',$3,'org',NULL,NULL,'write','allow')",
+        )
+        .bind(uuid::Uuid::new_v4()).bind(org).bind(uid)
+        .execute(&p).await.unwrap();
+
+        let actor = slash_core::pipeline::Actor { login: "alice".into(), github_user_id: 111 };
+        let gate = crate::grants_trust_gate::GrantsTrustGate;
+        let grants = preload_grants(&p, 111, 9, "acme", "widgets").await.unwrap();
+        assert!(gate.check(&grants, &actor, "deploy", slash_config::Permission::Write).is_granted());
+        assert!(!gate.check(&grants, &actor, "release", slash_config::Permission::Admin).is_granted());
+        let no_grants = preload_grants(&p, 999, 9, "acme", "widgets").await.unwrap();
+        assert!(!gate.check(&no_grants, &actor, "deploy", slash_config::Permission::Write).is_granted());
+        let no_grants2 = preload_grants(&p, 111, 12345, "acme", "widgets").await.unwrap();
+        assert!(!gate.check(&no_grants2, &actor, "deploy", slash_config::Permission::Write).is_granted());
     }
 }

@@ -53,6 +53,17 @@ mod tests {
             scope,
             effect,
             permission,
+            command: None,
+        }
+    }
+
+    // For command-scoped grant rows, assign a command name.
+    fn rgc(cmd: &str, effect: GrantEffect, permission: Permission) -> ResolvedGrant {
+        ResolvedGrant {
+            scope: GrantScope::Command,
+            effect,
+            permission,
+            command: Some(cmd.to_string()),
         }
     }
 
@@ -79,28 +90,22 @@ mod tests {
         let gate = GrantsTrustGate;
         let grants = [
             rg(GrantScope::Org, GrantEffect::Allow, Permission::Admin),
-            rg(GrantScope::Command, GrantEffect::Deny, Permission::Write),
+            rgc("deploy", GrantEffect::Deny, Permission::Write),
         ];
         assert!(!gate.check(&grants, &actor(), "deploy", Permission::Write).is_granted());
     }
 
     #[test]
-    fn command_scoped_deny_is_applied_for_the_given_command() {
-        // Note: `ResolvedGrant` does not carry the target command name, so
-        // under the current R2 signature a command-scoped grant applies to
-        // whatever `command` is passed to `check`. (Flagged to @Quality:
-        // adding `command`/`repository` to `ResolvedGrant` would let a
-        // command-scoped grant target a *specific* command faithfully.)
+    fn command_scoped_deny_only_blocks_that_command() {
+        // `ResolvedGrant` now carries the target command, so a command-scoped
+        // deny applies to its specific command and not others.
         let gate = GrantsTrustGate;
         let grants = [
             rg(GrantScope::Org, GrantEffect::Allow, Permission::Admin),
-            rg(GrantScope::Command, GrantEffect::Deny, Permission::Write),
+            rgc("deploy", GrantEffect::Deny, Permission::Write),
         ];
-        // With the current interface, both deploys see the command-scoped deny
-        // as applicable — command identity is lost across the ResolvedGrant
-        // boundary, so deny-first wins.
         assert!(!gate.check(&grants, &actor(), "deploy", Permission::Write).is_granted());
-        assert!(!gate.check(&grants, &actor(), "release", Permission::Write).is_granted());
+        assert!(gate.check(&grants, &actor(), "release", Permission::Write).is_granted());
     }
 
     #[test]
