@@ -24,6 +24,29 @@ services:
         condition: service_healthy
     environment:
       - SLASH_TEST_DATABASE_URL=postgres://slash:slash@postgres:5432/slash
+      # Bare keys (no `=value`) pull from the buildkite-agent job's own
+      # environment, same as any other Compose env passthrough — the agent
+      # already sets BUILDKITE_* for every job. buildkite-test-collector
+      # reads these to detect the CI provider and attach branch/commit/build
+      # metadata to uploaded results.
+      # BUILDKITE_ANALYTICS_TOKEN must be set as a pipeline environment
+      # variable/secret in the Buildkite UI (this repo doesn't manage
+      # pipeline settings as code — see .buildkite/pipeline.yml).
+      - BUILDKITE_ANALYTICS_TOKEN
+      - BUILDKITE
+      - BUILDKITE_BUILD_ID
+      - BUILDKITE_BUILD_NUMBER
+      - BUILDKITE_BUILD_URL
+      - BUILDKITE_BRANCH
+      - BUILDKITE_COMMIT
+      - BUILDKITE_MESSAGE
+      - BUILDKITE_JOB_ID
+      - BUILDKITE_LABEL
+      - BUILDKITE_ORGANIZATION_SLUG
+      - BUILDKITE_PIPELINE_ID
+      - BUILDKITE_PIPELINE_SLUG
+      - BUILDKITE_REPO
+      - BUILDKITE_RETRY_COUNT
 
   postgres:
     image: postgres:18

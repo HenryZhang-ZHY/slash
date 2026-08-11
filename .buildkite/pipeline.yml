@@ -34,7 +34,18 @@ steps:
 
   - label: ":test_tube: test"
     key: test
-    command: cargo test --workspace
+    # `--format json --report-time` are unstable libtest options; RUSTC_
+    # BOOTSTRAP=1 unlocks them on the stable toolchain this image tracks
+    # without needing a nightly install. Output is piped through the
+    # buildkite-test-collector binary baked into Dockerfile.ci, which
+    # uploads results to Test Engine and echoes the JSON back to stdout.
+    # `bash -o pipefail` is required so the step still fails when cargo
+    # test fails — otherwise the shell reports the collector's exit code.
+    command: |
+      bash -o pipefail -c '
+        RUSTC_BOOTSTRAP=1 cargo test --workspace -- -Z unstable-options --format json --report-time \
+          | buildkite-test-collector
+      '
     plugins:
       - docker-compose#v5.13.0:
           config: .buildkite/docker-compose.yml
