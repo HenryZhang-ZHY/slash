@@ -46,6 +46,30 @@ pub struct GrantRow {
     pub effect: GrantEffect,
 }
 
+/// Convert pre-loaded `ResolvedGrant`s (from `slash_core::pipeline::TrustGate`)
+/// back into full `GrantRow`s that `decide` can consume, threading the repo
+/// token and command context so scope matching works.
+///
+/// `repo_token` must be the same value passed to `decide` as its `repo`;
+/// repository-scoped grants get it attached so they match. Command-scoped
+/// grants get the actual `command`.
+pub fn resolve_grant_rows(
+    grants: &[crate::pipeline::ResolvedGrant],
+    repo: &str,
+    command: &str,
+) -> Vec<GrantRow> {
+    grants
+        .iter()
+        .map(|g| GrantRow {
+            scope: g.scope,
+            repository: (g.scope == GrantScope::Repository).then(|| repo.to_string()),
+            command: (g.scope == GrantScope::Command).then(|| command.to_string()),
+            tier: g.permission,
+            effect: g.effect,
+        })
+        .collect()
+}
+
 /// Outcome of evaluating the grants for one (repo, command) invoke.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Decision {

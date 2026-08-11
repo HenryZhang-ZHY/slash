@@ -16,7 +16,7 @@ mod test_flaky;
 
 pub use antispam::{TokenBucket, edit_distance, should_suggest_commands};
 pub use checks::{CheckConclusion, map_conclusion};
-pub use grants::{Decision, GrantEffect, GrantRow, GrantScope, decide, tier_meets};
+pub use grants::{Decision, GrantEffect, GrantRow, GrantScope, decide, resolve_grant_rows, tier_meets};
 pub use invocation::InvocationStatus;
 pub use permission::{ResolvedRole, meets};
 pub use pipeline::{

@@ -7,6 +7,7 @@ mod db;
 mod deliveries;
 mod flaky;
 mod grants_loader;
+mod grants_trust_gate;
 mod ingestion;
 mod invocations;
 mod junit;

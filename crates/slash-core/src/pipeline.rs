@@ -192,7 +192,7 @@ mod tests {
     #[test]
     fn terminal_reasons_are_sendable_across_stages() {
         // Every reason can be returned from any stage.
-        let reasons = vec![
+        let reasons = [
             TerminalReason::NotACommand,
             TerminalReason::UnknownAuthor,
             TerminalReason::DeniedByGrants,
