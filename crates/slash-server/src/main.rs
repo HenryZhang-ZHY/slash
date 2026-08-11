@@ -153,6 +153,14 @@ async fn main() {
             "/api/test-engine/suites/{id}/tests",
             get(test_engine_api::list_tests),
         )
+        .route(
+            "/api/test-engine/suites/{id}/tokens",
+            post(test_engine_api::issue_token),
+        )
+        .route(
+            "/api/test-engine/suites/{id}/tokens/revoke",
+            post(test_engine_api::revoke_token),
+        )
         // Serve the React SPA: static files under /assets and the root
         // favicon/icons come from the dist dir; everything else falls back
         // to `index.html` (history-API routing) with a 200 status.
