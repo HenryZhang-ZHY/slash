@@ -24,6 +24,17 @@ COPY migrations migrations
 # runtime image never needs the migrations directory itself.
 RUN cargo build --release --bin slash-server
 
+# --- Frontend build (web/ SPA) --------------------------------------------
+# The control-plane serves the built SPA from web/dist (SLASH_WEB_DIR). The
+# image must carry that build or the server 404s/empties on every web route.
+# Build it in its own Node stage so the Rust builder stays lean.
+FROM node:22-bookworm-slim AS web-builder
+WORKDIR /app/web
+COPY web/package.json web/package-lock.json ./
+RUN npm ci
+COPY web/ .
+RUN npm run build         # -> web/dist
+
 FROM debian:bookworm-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
@@ -31,6 +42,9 @@ RUN apt-get update \
     && useradd --system --no-create-home --uid 10001 slash
 
 COPY --from=builder /app/target/release/slash-server /usr/local/bin/slash-server
+# Ship the built SPA so the server's web_fallback can serve it (default
+# SLASH_WEB_DIR=web/dist). Keep default ownership; the server reads it.
+COPY --from=web-builder /app/web/dist /app/web/dist
 
 # The GitHub App private key (SLASH_GITHUB_PRIVATE_KEY_PATH) is supplied at
 # deploy time as a mounted, read-only, mode-0400 file — see
