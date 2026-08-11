@@ -123,6 +123,9 @@ pub struct ResolvedGrant {
     pub scope: crate::grants::GrantScope,
     pub effect: crate::grants::GrantEffect,
     pub permission: Permission,
+    /// Command name for command-scoped grants.
+    /// `None` means org or repository scope.
+    pub command: Option<String>,
 }
 
 /// Outcome of a `TrustGate` check.
