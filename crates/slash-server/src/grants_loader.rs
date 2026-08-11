@@ -103,7 +103,7 @@ mod tests {
         let url = crate::test_support::test_database_url()?;
         let pool = db::connect(&url).await.unwrap();
         db::migrate(&pool).await.unwrap();
-        sqlx::query("TRUNCATE grants, team_members, teams, organizations, users CASCADE")
+        sqlx::query("TRUNCATE grants, org_members, team_members, teams, organizations, users CASCADE")
             .execute(&pool)
             .await
             .unwrap();
@@ -281,7 +281,7 @@ mod authz_tests {
         let url = crate::test_support::test_database_url().unwrap();
         let p = db::connect(&url).await.unwrap();
         db::migrate(&p).await.unwrap();
-        sqlx::query("TRUNCATE grants, team_members, teams, organizations, users CASCADE")
+        sqlx::query("TRUNCATE grants, org_members, team_members, teams, organizations, users CASCADE")
             .execute(&p)
             .await
             .unwrap();

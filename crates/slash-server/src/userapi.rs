@@ -343,6 +343,19 @@ async fn create_team_tx(
     .await
     .map_err(|_| CreateTeamError::Other)?;
 
+    // De-specialized org lifecycle (M3 #22): the user who creates their org
+    // becomes its **owner** (in addition to their first team's maintainer).
+    // The home org is a fully standard org with explicit ownership.
+    sqlx::query(
+        "INSERT INTO org_members (organization_id, user_id, role) VALUES ($1, $2, 'owner')
+         ON CONFLICT (organization_id, user_id) DO NOTHING",
+    )
+    .bind(org_id)
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|_| CreateTeamError::Other)?;
+
     tx.commit().await.map_err(|_| CreateTeamError::Other)?;
     Ok(org_id)
 }
@@ -473,7 +486,7 @@ mod tests {
         let url = crate::test_support::test_database_url()?;
         let pool = db::connect(&url).await.unwrap();
         db::migrate(&pool).await.unwrap();
-        sqlx::query("TRUNCATE team_members, teams, organizations, users CASCADE")
+        sqlx::query("TRUNCATE org_members, team_members, teams, organizations, users CASCADE")
             .execute(&pool)
             .await
             .unwrap();
@@ -698,6 +711,19 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(row.1, "maintainer");
+
+        // De-specialized org lifecycle (M3 #22): Frank is also the org owner.
+        let org_owner: Option<String> = sqlx::query_scalar(
+            "SELECT om.role FROM org_members om
+             JOIN teams t ON t.organization_id = om.organization_id
+             JOIN team_members tm ON tm.team_id = t.id
+             WHERE tm.user_id = $1 AND om.user_id = $1",
+        )
+        .bind(uid)
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+        assert_eq!(org_owner.as_deref(), Some("owner"));
 
         // /me now lists the team.
         let me_resp = me(State(state.clone()), UserId(uid)).await;
