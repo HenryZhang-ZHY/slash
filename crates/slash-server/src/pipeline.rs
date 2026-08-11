@@ -654,7 +654,7 @@ mod tests {
         let url = crate::test_support::test_database_url()?;
         let pool = db::connect(&url).await.unwrap();
         db::migrate(&pool).await.unwrap();
-        sqlx::query("TRUNCATE invocations, grants, team_members, teams, organizations, users CASCADE")
+        sqlx::query("TRUNCATE invocations, grants, org_members, team_members, teams, organizations, users CASCADE")
             .execute(&pool)
             .await
             .unwrap();
