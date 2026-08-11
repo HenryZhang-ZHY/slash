@@ -20,8 +20,8 @@ pub use grants::{Decision, GrantEffect, GrantRow, GrantScope, decide, tier_meets
 pub use invocation::InvocationStatus;
 pub use permission::{ResolvedRole, meets};
 pub use pipeline::{
-    Actor, PipelineContext, PipelineStage, StageOutput, TerminalReason, TrustGate,
-    TrustOutcome,
+    Actor, PipelineContext, PipelineStage, ResolvedGrant, StageOutput, TerminalReason,
+    TrustGate, TrustOutcome,
 };
 pub use test_flaky::{
     FLAKY_MIN_EXECUTIONS, ObservedStatus, has_fail_then_pass, is_flaky, recent_contains_failure,
