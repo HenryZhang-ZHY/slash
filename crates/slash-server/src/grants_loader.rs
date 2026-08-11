@@ -272,6 +272,7 @@ pub async fn authorize_command_grants(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod authz_tests {
     use super::*;
     use crate::db;
