@@ -92,8 +92,8 @@ pub struct NewExecution<'a> {
 
 /// A resolved test row alongside the run id, so a batch can map execution ->
 /// (test_id, run_id) without a second lookup. Carries only `id` — the
-/// disposition is resolved separately by the flaky reconcile via `all_tests`;
-/// the ingestion path needs nothing but the id.
+/// disposition is resolved separately by the flaky reconcile via the cursor
+/// sweep (`all_tests_page`); the ingestion path needs nothing but the id.
 pub struct TestRef {
     pub id: Uuid,
 }
@@ -253,10 +253,31 @@ pub async fn set_test_state(
 
 /// Returns the ids of all tests currently `enabled` (candidates for flaky
 /// detection) and all currently `muted` (candidates for un-quarantine).
-pub async fn all_tests(conn: &PgPool) -> Result<Vec<(Uuid, TestState)>, sqlx::Error> {
-    let rows: Vec<(Uuid, String)> = sqlx::query_as("SELECT id, state FROM tests")
-        .fetch_all(conn)
-        .await?;
+/// Cursor page size for the flaky-reconcile sweep (M2-6).
+pub const RECONCILE_PAGE_SIZE: i64 = 256;
+
+/// Returns one keyset page of `(id, state)` for the flaky sweep, ordered by
+/// `id`, picking up strictly after `after_id`. A cursor sweep (`after_id`
+/// advancing across pages) replaces the full-table scan of `all_tests` so the
+/// reconcile stays bounded on memory as the `tests` table grows and is
+/// naturally tenancy-neutral to batch (SlashLead review note, design §5).
+///
+/// Pass `None` for the first page; stop when a page is shorter than the page
+/// size (or empty).
+pub async fn all_tests_page(
+    conn: &PgPool,
+    after_id: Option<Uuid>,
+    limit: i64,
+) -> Result<Vec<(Uuid, TestState)>, sqlx::Error> {
+    let rows: Vec<(Uuid, String)> = sqlx::query_as(
+        "SELECT id, state FROM tests \
+         WHERE ($1::uuid IS NULL OR id > $1) \
+         ORDER BY id LIMIT $2",
+    )
+    .bind(after_id)
+    .bind(limit)
+    .fetch_all(conn)
+    .await?;
     Ok(rows
         .into_iter()
         .map(|(id, state)| (id, parse_test_state(&state)))
