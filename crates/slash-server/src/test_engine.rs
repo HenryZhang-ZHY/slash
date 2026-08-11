@@ -300,6 +300,102 @@ pub async fn quarantined_tests(conn: &PgPool, suite_id: Uuid) -> Result<Vec<Stri
     Ok(rows.into_iter().map(|(name,)| name).collect())
 }
 
+/// A suite row for the console read API (§6 M2 / UI).
+#[derive(Debug, Clone)]
+pub struct SuiteSummary {
+    pub id: Uuid,
+    pub suite_key: String,
+    pub owner: String,
+    pub repo: String,
+    pub total_tests: i64,
+    pub muted: i64,
+    pub skipped: i64,
+}
+
+/// Lists suites for a tenancy, each with test counts by disposition — the data
+/// the Test Engine console UI renders.
+pub async fn list_suites(
+    conn: &PgPool,
+    installation_id: i64,
+) -> Result<Vec<SuiteSummary>, sqlx::Error> {
+    let rows: Vec<(Uuid, String, String, String, i64, i64, i64)> = sqlx::query_as(
+        "SELECT ts.id, ts.suite_key, ts.owner, ts.repo,\n\
+                count(t.id)::int8 FILTER (WHERE t.id IS NOT NULL) AS total,\n\
+                count(t.id) FILTER (WHERE t.state = 'muted')::int8 AS muted,\n\
+                count(t.id) FILTER (WHERE t.state = 'skipped')::int8 AS skipped\n\
+         FROM test_suites ts\n\
+         LEFT JOIN tests t ON t.suite_id = ts.id\n\
+         WHERE ts.installation_id = $1\n\
+         GROUP BY ts.id ORDER BY ts.suite_key",
+    )
+    .bind(installation_id)
+    .fetch_all(conn)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(
+            |(id, suite_key, owner, repo, total_tests, muted, skipped)| SuiteSummary {
+                id,
+                suite_key,
+                owner,
+                repo,
+                total_tests,
+                muted,
+                skipped,
+            },
+        )
+        .collect())
+}
+
+/// A test row for the console read API.
+#[derive(Debug, Clone)]
+pub struct TestSummary {
+    pub id: Uuid,
+    pub name: String,
+    pub state: String,
+    pub last_status: Option<String>,
+    pub last_captured: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Row type for `list_tests` (a suite's test + latest execution).
+type TestRow = (
+    Uuid,
+    String,
+    String,
+    Option<String>,
+    Option<chrono::DateTime<chrono::Utc>>,
+);
+
+/// Lists a suite's tests with current disposition and latest execution.
+pub async fn list_tests(
+    conn: &PgPool,
+    suite_id: Uuid,
+) -> Result<Vec<TestSummary>, sqlx::Error> {
+    let rows: Vec<TestRow> = sqlx::query_as(
+            "SELECT t.id, t.name, t.state, e.status, e.captured_at\n\
+             FROM tests t\n\
+             LEFT JOIN LATERAL (\n\
+               SELECT status, captured_at FROM test_executions\n\
+               WHERE test_id = t.id ORDER BY captured_at DESC LIMIT 1\n\
+             ) e ON true\n\
+             WHERE t.suite_id = $1 ORDER BY t.name",
+        )
+        .bind(suite_id)
+        .fetch_all(conn)
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(id, name, state, last_status, last_captured)| TestSummary {
+            id,
+            name,
+            state,
+            last_status,
+            last_captured,
+        })
+        .collect())
+}
+
 /// Returns the observed execution statuses for a test within the last `window`
 /// seconds, oldest first. Smallest surface the flaky detector needs: the
 /// criterion is purely about the presence of a fail-then-pass recovery over a

@@ -73,3 +73,29 @@ export const api = {
       body: JSON.stringify({ name, slug }),
     }),
 }
+
+// --- Test Engine console API (docs/design/1.0-test-engine.md §6) ---
+
+export interface TestSuiteSummary {
+  id: string
+  suite_key: string
+  owner: string
+  repo: string
+  total_tests: number
+  muted: number
+  skipped: number
+}
+
+export interface TestSummary {
+  id: string
+  name: string
+  state: 'enabled' | 'muted' | 'skipped'
+  last_status: string | null
+  last_captured: string | null
+}
+
+export const testEngineApi = {
+  listSuites: () => request<TestSuiteSummary[]>('/api/test-engine/suites'),
+  listTests: (suiteId: string) =>
+    request<TestSummary[]>(`/api/test-engine/suites/${suiteId}/tests`),
+}

@@ -14,6 +14,7 @@ mod metrics;
 mod pipeline;
 mod sweeper;
 mod test_engine;
+mod test_engine_api;
 #[cfg(test)]
 mod test_support;
 mod userapi;
@@ -144,6 +145,14 @@ async fn main() {
         .route("/api/auth/logout", post(userapi::logout))
         .route("/api/auth/me", get(userapi::me))
         .route("/api/teams", post(userapi::create_team))
+        .route(
+            "/api/test-engine/suites",
+            get(test_engine_api::list_suites),
+        )
+        .route(
+            "/api/test-engine/suites/{id}/tests",
+            get(test_engine_api::list_tests),
+        )
         // Serve the React SPA: static files under /assets and the root
         // favicon/icons come from the dist dir; everything else falls back
         // to `index.html` (history-API routing) with a 200 status.
