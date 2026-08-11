@@ -15,23 +15,12 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::AppState;
+use crate::collectors::{self, NormalizedExecution};
 use crate::junit;
 use crate::test_engine::{
     ExecutionStatus, find_suite_for_token, insert_executions, quarantined_tests, upsert_run,
     upsert_test,
 };
-
-/// A source-agnostic execution after normalization (design §6 M2): the one
-/// shape both the raw-JSON path and the JUnit path produce, fed to the same
-/// durable write. `status` is already validated/normalized.
-struct NormalizedExecution {
-    name: String,
-    status: ExecutionStatus,
-    duration_ms: i64,
-    stack: Option<String>,
-    file: Option<String>,
-    line_no: Option<i32>,
-}
 
 /// The normalized raw-JSON payload accepted by the ingestion endpoint.
 #[derive(Debug, Deserialize)]
@@ -213,6 +202,111 @@ async fn handle_junit_body(
         Ok(()) => StatusCode::OK,
         Err(error) => {
             tracing::error!(%error, suite = %identity.suite_key, "test-engine JUnit upload write failed");
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
+    }
+}
+
+/// `POST /v1/test-engine/upload/cargo` — Buildkite rust collector ingestion
+/// (M2-2). Reuses the open-source `cargo test --format json` dialect;
+/// normalized via `collectors::parse_cargo_libtest` and written atomically.
+pub async fn handle_cargo_upload(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> StatusCode {
+    let suite = match authorize(&state.pool, &headers).await {
+        Ok(Some(suite)) => suite,
+        Ok(None) => return StatusCode::UNAUTHORIZED,
+        Err(error) => {
+            tracing::error!(%error, "test-engine token lookup failed");
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
+    };
+
+    let input = match std::str::from_utf8(&body) {
+        Ok(s) => s,
+        Err(_) => return StatusCode::BAD_REQUEST,
+    };
+    let batch = match collectors::parse_cargo_libtest(input) {
+        Ok(b) => b,
+        Err(error) => {
+            tracing::debug!(%error, suite = %suite.suite_key, "cargo upload body rejected");
+            return StatusCode::BAD_REQUEST;
+        }
+    };
+
+    let run = RunPayload {
+        ci_provider: "cargo".to_string(),
+        run_ref: batch
+            .run_ref
+            .unwrap_or_else(|| format!("cargo/{}", Uuid::new_v4())),
+        invocation_id: None,
+    };
+    finish_upload(&state.pool, &suite, &run, &batch.executions, "cargo").await
+}
+
+/// `POST /v1/test-engine/upload/vitest` — Buildkite vitest reporter ingestion
+/// (M2-2). Normalized via `collectors::parse_vitest_batch`.
+pub async fn handle_vitest_upload(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> StatusCode {
+    let suite = match authorize(&state.pool, &headers).await {
+        Ok(Some(suite)) => suite,
+        Ok(None) => return StatusCode::UNAUTHORIZED,
+        Err(error) => {
+            tracing::error!(%error, "test-engine token lookup failed");
+            return StatusCode::INTERNAL_SERVER_ERROR;
+        }
+    };
+
+    let input = match std::str::from_utf8(&body) {
+        Ok(s) => s,
+        Err(_) => return StatusCode::BAD_REQUEST,
+    };
+    let batch = match collectors::parse_vitest_batch(input) {
+        Ok(b) => b,
+        Err(error) => {
+            tracing::debug!(%error, suite = %suite.suite_key, "vitest upload body rejected");
+            return StatusCode::BAD_REQUEST;
+        }
+    };
+
+    let run = RunPayload {
+        ci_provider: "vitest".to_string(),
+        run_ref: batch
+            .run_ref
+            .unwrap_or_else(|| format!("vitest/{}", Uuid::new_v4())),
+        invocation_id: None,
+    };
+    finish_upload(&state.pool, &suite, &run, &batch.executions, "vitest").await
+}
+
+/// Extracts + resolves the Bearer collection token to a suite identity.
+async fn authorize(
+    pool: &PgPool,
+    headers: &HeaderMap,
+) -> Result<Option<crate::test_engine::SuiteTokenIdentity>, sqlx::Error> {
+    let Some(raw_token) = bearer_token(headers) else {
+        return Ok(None);
+    };
+    find_suite_for_token(pool, raw_token).await
+}
+
+/// Writes a normalized collector batch and maps the outcome to a status code.
+async fn finish_upload(
+    pool: &PgPool,
+    identity: &crate::test_engine::SuiteTokenIdentity,
+    run: &RunPayload,
+    executions: &[NormalizedExecution],
+    kind: &str,
+) -> StatusCode {
+    match write_batch(pool, identity, run, executions).await {
+        Ok(()) => StatusCode::OK,
+        Err(error) => {
+            tracing::error!(%error, suite = %identity.suite_key, "test-engine {kind} upload write failed");
             StatusCode::INTERNAL_SERVER_ERROR
         }
     }
