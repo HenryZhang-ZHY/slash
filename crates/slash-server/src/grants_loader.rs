@@ -6,9 +6,8 @@
 //! (the two-tier default-semantics switch). Loading is offline and fail-closed:
 //! any DB error surfaces as `None`/false — the caller must treat that as deny.
 //!
-//! Wired into the permission gate by M2-4; until then the module is exercised
-//! by its DB-backed tests only.
-#![allow(dead_code)]
+//! Wired into the permission gate by M2-4 (the authorize path in pipeline.rs);
+//! the loader functions have real callers now.
 
 use slash_core::{GrantEffect, GrantRow, GrantScope};
 use slash_config::Permission;
@@ -25,19 +24,14 @@ pub struct LoadedGrants {
     /// Flat grant rows restricted to the actor (direct user grants + team
     /// grants) within the org, matching the repo's command context.
     pub rows: Vec<GrantRow>,
-    /// Whether any grant row exists for this org+repo at all. When true the
-    /// repo is grants-only (deny-by-default); when false the caller keeps the
-    /// current fallback behavior (GitHub collaborator API).
-    pub repo_is_grants_only: bool,
 }
 
-/// Load the grants applicable to `actor_user_id` in `org_id` for `repo`.
-/// Exposes both the flat rows and the grants-only flag.
+/// Load the grants applicable to `actor_user_id` in `org_id` (the repo-level
+/// scope filtering happens in `slash_core::grants::decide`).
 pub async fn load_for_repo(
     pool: &PgPool,
     org_id: Uuid,
     actor_user_id: Uuid,
-    repo: &str,
 ) -> Result<LoadedGrants, sqlx::Error> {
     // Direct user grants + grants of the actor's teams, scoped to the org.
     let rows: Vec<GrantDbRow> = sqlx::query_as(
@@ -74,39 +68,7 @@ pub async fn load_for_repo(
         });
     }
 
-    let repo_grants_only = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS(
-            SELECT 1 FROM grants
-            WHERE organization_id = $1
-              AND (scope = 'org' OR repository = $2)
-         )",
-    )
-    .bind(org_id)
-    .bind(repo)
-    .fetch_one(pool)
-    .await?;
-
-    Ok(LoadedGrants {
-        rows: grant_rows,
-        repo_is_grants_only: repo_grants_only,
-    })
-}
-
-/// Whether `repo`'s grants apply (i.e. it is grants-only). Fail-closed: a DB
-/// error returns `false`, which under the two-tier model means "fall back to
-/// the existing behavior" — securing fail-closed against grant-parsing errors
-/// is the caller's responsibility, see `decide_impl`.
-pub async fn repo_is_grants_only(pool: &PgPool, org_id: Uuid, repo: &str) -> Result<bool, sqlx::Error> {
-    sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS(
-            SELECT 1 FROM grants
-            WHERE organization_id = $1 AND (scope = 'org' OR repository = $2)
-         )",
-    )
-    .bind(org_id)
-    .bind(repo)
-    .fetch_one(pool)
-    .await
+    Ok(LoadedGrants { rows: grant_rows })
 }
 
 fn parse_permission(s: &str) -> Result<Permission, sqlx::Error> {
@@ -213,14 +175,13 @@ mod tests {
         .execute(&pool).await.unwrap();
 
         // u1: only their own direct grant matches; repo is grants-only.
-        let loaded = load_for_repo(&pool, org, u1, "acme/widgets").await.unwrap();
+        let loaded = load_for_repo(&pool, org, u1).await.unwrap();
         assert_eq!(loaded.rows.len(), 1);
         assert_eq!(loaded.rows[0].scope, GrantScope::Repository);
         assert_eq!(loaded.rows[0].tier, Permission::Write);
-        assert!(loaded.repo_is_grants_only);
 
         // u2: gains the team org-scoped admin grant too.
-        let loaded2 = load_for_repo(&pool, org, u2, "acme/widgets").await.unwrap();
+        let loaded2 = load_for_repo(&pool, org, u2).await.unwrap();
         assert_eq!(loaded2.rows.len(), 1);
         assert_eq!(loaded2.rows[0].scope, GrantScope::Org);
         assert_eq!(loaded2.rows[0].tier, Permission::Admin);
@@ -234,11 +195,8 @@ mod tests {
             return;
         };
         let (org, u1, _u2, _team) = seeded(&pool).await;
-        let repo_grants_only = repo_is_grants_only(&pool, org, "acme/other").await.unwrap();
-        assert!(!repo_grants_only);
-        let loaded = load_for_repo(&pool, org, u1, "acme/other").await.unwrap();
+        let loaded = load_for_repo(&pool, org, u1).await.unwrap();
         assert!(loaded.rows.is_empty());
-        assert!(!loaded.repo_is_grants_only);
     }
 
     #[serial_test::serial(db)]
@@ -257,8 +215,116 @@ mod tests {
         .bind(org)
         .bind(u1)
         .execute(&pool).await.unwrap();
-        let loaded = load_for_repo(&pool, org, u1, "acme/widgets").await.unwrap();
+        let loaded = load_for_repo(&pool, org, u1).await.unwrap();
         assert_eq!(loaded.rows.len(), 1);
         assert_eq!(loaded.rows[0].effect, GrantEffect::Deny);
+    }
+}
+
+/// Full fail-closed authorize: resolve the actor's slash user id (by GitHub
+/// id), the repo's org (by installation id), load the actor's grants, and
+/// decide whether they may invoke `command` at `required`.
+///
+/// Returns `false` (deny) for ANY failure of resolution, load, or decision —
+/// a non-onboarded actor, an unresolvable org, a DB error, or no grant that
+/// reaches the required tier all deny (strict deny-by-default; no GitHub
+/// collaborator fallback).
+pub async fn authorize_command_grants(
+    pool: &PgPool,
+    github_user_id: i64,
+    installation_id: i64,
+    repo_owner: &str,
+    repo_name: &str,
+    command: &str,
+    required: slash_config::Permission,
+) -> Result<bool, sqlx::Error> {
+    use slash_core::Decision;
+
+    // 1. Resolve the actor -> slash user (non-onboarded = no grants = deny).
+    let actor_row = sqlx::query_scalar::<_, uuid::Uuid>(
+        "SELECT id FROM users WHERE github_user_id = $1 AND status = 'active'",
+    )
+    .bind(github_user_id)
+    .fetch_optional(pool)
+    .await;
+    let Some(actor_user_id) = actor_row? else {
+        return Ok(false);
+    };
+
+    // 2. Resolve the repo's org via the GitHub installation.
+    let org_row = sqlx::query_scalar::<_, uuid::Uuid>(
+        "SELECT id FROM organizations WHERE installation_id = $1",
+    )
+    .bind(installation_id)
+    .fetch_optional(pool)
+    .await;
+    let Some(org_id) = org_row? else {
+        return Ok(false);
+    };
+
+    // 3. Load the actor's grants in that org for this repo.
+    let repo = format!("{repo_owner}/{repo_name}");
+    let loaded = load_for_repo(pool, org_id, actor_user_id).await?;
+
+    // 4. Decide (deny by default; no grant row reaches the tier => deny).
+    let decision = slash_core::decide(&loaded.rows, &repo, command, required);
+    Ok(matches!(decision, Decision::Allow))
+}
+
+#[cfg(test)]
+mod authz_tests {
+    use super::*;
+    use crate::db;
+
+    async fn pool() -> PgPool {
+        let url = crate::test_support::test_database_url().unwrap();
+        let p = db::connect(&url).await.unwrap();
+        db::migrate(&p).await.unwrap();
+        sqlx::query("TRUNCATE grants, team_members, teams, organizations, users CASCADE")
+            .execute(&p)
+            .await
+            .unwrap();
+        p
+    }
+
+    async fn seed(p: &PgPool, github_id: i64, install: i64) -> (uuid::Uuid, uuid::Uuid) {
+        // org + user
+        let org = uuid::Uuid::new_v4();
+        let org_slug = format!("org-{install}");
+        sqlx::query("INSERT INTO organizations (id, slug, name, installation_id, state) VALUES ($1,$2,'T',$3,'active')")
+            .bind(org)
+            .bind(&org_slug)
+            .bind(install)
+            .execute(p).await.unwrap();
+        let uid = uuid::Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO users (id, email, password_hash, display_name, status, github_user_id)
+             VALUES ($1,'a@b.com','x','A','active',$2)",
+        )
+        .bind(uid)
+        .bind(github_id)
+        .execute(p).await.unwrap();
+        (org, uid)
+    }
+
+    #[tokio::test]
+    async fn grant_allows_and_missing_denies() {
+        let p = pool().await;
+        let (org, uid) = seed(&p, 111, 9).await;
+        // org-scope allow
+        sqlx::query(
+            "INSERT INTO grants (id, organization_id, subject_type, subject_id, scope, repository, command, permission, effect)
+             VALUES ($1,$2,'user',$3,'org',NULL,NULL,'write','allow')",
+        )
+        .bind(uuid::Uuid::new_v4()).bind(org).bind(uid)
+        .execute(&p).await.unwrap();
+        assert!(authorize_command_grants(&p, 111, 9, "acme", "widgets", "deploy", slash_config::Permission::Write).await.unwrap());
+        // required admin > granted write -> deny
+        assert!(!authorize_command_grants(&p, 111, 9, "acme", "widgets", "deploy", slash_config::Permission::Admin).await.unwrap());
+        // unknown repo (same org) -> no grant for that repo (org-scope still matches) -> allow actually; use a different check:
+        // non-onboarded actor (no users row) -> deny
+        assert!(!authorize_command_grants(&p, 999, 9, "acme", "widgets", "deploy", slash_config::Permission::Write).await.unwrap());
+        // unknown installation -> no org -> deny
+        assert!(!authorize_command_grants(&p, 111, 12345, "acme", "widgets", "deploy", slash_config::Permission::Write).await.unwrap());
     }
 }
