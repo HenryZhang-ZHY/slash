@@ -8,9 +8,10 @@
 //! configured primary installation (`installation_id` selectable in future when
 //! granting/tenancy models land).
 
+use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
-use axum::Json;
+use serde::Deserialize;
 
 use crate::AppState;
 use crate::test_engine;
@@ -76,6 +77,50 @@ pub async fn list_tests(
     }
 }
 
+/// `POST /api/test-engine/suites/{id}/tokens` — issue a new per-suite
+/// collection token (M2-4 token management). The raw token is returned exactly
+/// once; only its sha256 hash is stored. Session-auth-guarded like the console
+/// read API.
+pub async fn issue_token(
+    State(state): State<AppState>,
+    _auth: UserId,
+    Path(id): Path<uuid::Uuid>,
+) -> Result<(StatusCode, Json<TokenIssued>), StatusCode> {
+    match test_engine::issue_collection_token(&state.pool, id).await {
+        Ok(raw) => Ok((StatusCode::CREATED, Json(TokenIssued { token: raw }))),
+        Err(error) => {
+            tracing::error!(%error, suite = %id, "test-engine token issue failed");
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+/// Body for token revocation (the raw token the caller still holds; it is
+/// hashed and looked up to revoke).
+#[derive(Debug, Deserialize)]
+pub struct RevokeTokenRequest {
+    token: String,
+}
+
+/// `POST /api/test-engine/suites/{id}/tokens/revoke` — revoke a collection
+/// token. 204 on success; 404 if unknown or already revoked. Fail-closed:
+/// revoked tokens no longer authenticate.
+pub async fn revoke_token(
+    State(state): State<AppState>,
+    _auth: UserId,
+    Path(id): Path<uuid::Uuid>,
+    Json(req): Json<RevokeTokenRequest>,
+) -> Result<StatusCode, StatusCode> {
+    match test_engine::revoke_collection_token(&state.pool, id, &req.token).await {
+        Ok(true) => Ok(StatusCode::NO_CONTENT),
+        Ok(false) => Err(StatusCode::NOT_FOUND),
+        Err(error) => {
+            tracing::error!(%error, suite = %id, "test-engine token revoke failed");
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
 #[derive(Debug, serde::Serialize)]
 pub struct SuiteOut {
     id: String,
@@ -94,4 +139,9 @@ pub struct TestOut {
     state: String,
     last_status: Option<String>,
     last_captured: Option<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct TokenIssued {
+    token: String,
 }

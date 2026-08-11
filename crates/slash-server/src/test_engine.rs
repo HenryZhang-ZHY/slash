@@ -368,31 +368,30 @@ type TestRow = (
 );
 
 /// Lists a suite's tests with current disposition and latest execution.
-pub async fn list_tests(
-    conn: &PgPool,
-    suite_id: Uuid,
-) -> Result<Vec<TestSummary>, sqlx::Error> {
+pub async fn list_tests(conn: &PgPool, suite_id: Uuid) -> Result<Vec<TestSummary>, sqlx::Error> {
     let rows: Vec<TestRow> = sqlx::query_as(
-            "SELECT t.id, t.name, t.state, e.status, e.captured_at\n\
+        "SELECT t.id, t.name, t.state, e.status, e.captured_at\n\
              FROM tests t\n\
              LEFT JOIN LATERAL (\n\
                SELECT status, captured_at FROM test_executions\n\
                WHERE test_id = t.id ORDER BY captured_at DESC LIMIT 1\n\
              ) e ON true\n\
              WHERE t.suite_id = $1 ORDER BY t.name",
-        )
-        .bind(suite_id)
-        .fetch_all(conn)
-        .await?;
+    )
+    .bind(suite_id)
+    .fetch_all(conn)
+    .await?;
     Ok(rows
         .into_iter()
-        .map(|(id, name, state, last_status, last_captured)| TestSummary {
-            id,
-            name,
-            state,
-            last_status,
-            last_captured,
-        })
+        .map(
+            |(id, name, state, last_status, last_captured)| TestSummary {
+                id,
+                name,
+                state,
+                last_status,
+                last_captured,
+            },
+        )
         .collect())
 }
 
@@ -481,14 +480,15 @@ pub fn hash_token(token: &str) -> [u8; 32] {
 ///
 /// The mint path is exercised by the integration tests in M1 (suite
 /// provisioning); the actual token-issuance admin surface lands in M2, so it
-/// is `#[cfg]`-gated from the dead-code pass in the non-test build.
-#[cfg_attr(not(test), allow(dead_code))]
+/// Issues a new collection token scoped to a suite, storing only its sha256
+/// hash. Returns the raw token exactly once; the caller is responsible for
+/// handing it to the collector. Backs the M2-4 token-management surface.
 pub async fn issue_collection_token(pool: &PgPool, suite_id: Uuid) -> Result<String, sqlx::Error> {
     let raw = crypto_random_token();
     let hash = hash_token(&raw);
     sqlx::query(
-        "INSERT INTO collection_tokens (id, suite_id, token_hash)
-         VALUES ($1, $2, $3)
+        "INSERT INTO collection_tokens (id, suite_id, token_hash, status)
+         VALUES ($1, $2, $3, 'active')
          ON CONFLICT (token_hash) DO NOTHING",
     )
     .bind(Uuid::new_v4())
@@ -500,7 +500,8 @@ pub async fn issue_collection_token(pool: &PgPool, suite_id: Uuid) -> Result<Str
 }
 
 /// Resolves a presented collection token to its suite identity + tenancy, or
-/// `None` if the token is unknown. Auth for the ingestion endpoint (design §4).
+/// `None` if the token is unknown **or revoked**. Auth for the ingestion
+/// endpoint (design §4) — fail-closed: a revoked token must not authenticate.
 pub async fn find_suite_for_token(
     pool: &PgPool,
     raw_token: &str,
@@ -509,7 +510,7 @@ pub async fn find_suite_for_token(
     let row: Option<(Uuid, String, i64, String, String)> = sqlx::query_as(
         "SELECT ts.id, ts.suite_key, ts.installation_id, ts.owner, ts.repo
          FROM collection_tokens ct\n         JOIN test_suites ts ON ts.id = ct.suite_id
-         WHERE ct.token_hash = $1",
+         WHERE ct.token_hash = $1 AND ct.status = 'active'",
     )
     .bind(&hash[..])
     .fetch_optional(pool)
@@ -525,10 +526,29 @@ pub async fn find_suite_for_token(
     ))
 }
 
-/// Generates a cryptographically random, URL-safe token. Used by
-/// `issue_collection_token` (which is exercised by tests in M1), hence gated
-/// from the dead-code pass in the non-test build.
-#[cfg_attr(not(test), allow(dead_code))]
+/// Revokes a collection token for a suite (marks it `revoked`, stopping
+/// `find_suite_for_token` from accepting it). Returns whether a matching
+/// active token was revoked. `None` result = unknown or already non-active
+/// token. Revocation is idempotent and only touches this suite.
+pub async fn revoke_collection_token(
+    pool: &PgPool,
+    suite_id: Uuid,
+    raw_token: &str,
+) -> Result<bool, sqlx::Error> {
+    let hash = hash_token(raw_token);
+    let result = sqlx::query(
+        "UPDATE collection_tokens SET status = 'revoked', revoked_at = now() \
+         WHERE suite_id = $1 AND token_hash = $2 AND status = 'active'",
+    )
+    .bind(suite_id)
+    .bind(&hash[..])
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() > 0)
+}
+
+/// Generates a cryptographically random, URL-safe token. Backs
+/// `issue_collection_token` (M2-4 token management).
 pub fn crypto_random_token() -> String {
     uuid::Uuid::new_v4().to_string()
 }
@@ -595,6 +615,31 @@ mod tests {
             .await
             .unwrap();
         assert!(unknown.is_none());
+    }
+
+    #[serial_test::serial(db)]
+    #[tokio::test]
+    async fn revoked_token_no_longer_authenticates() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        let (suite_id, raw) = provision_suite(&pool).await;
+
+        // Active token resolves.
+        assert!(find_suite_for_token(&pool, &raw).await.unwrap().is_some());
+
+        // Revoke: applies and the token no longer authenticates (fail-closed).
+        let revoked = revoke_collection_token(&pool, suite_id, &raw)
+            .await
+            .unwrap();
+        assert!(revoked);
+        assert!(find_suite_for_token(&pool, &raw).await.unwrap().is_none());
+
+        // Revoking again is a no-op (already non-active).
+        let again = revoke_collection_token(&pool, suite_id, &raw)
+            .await
+            .unwrap();
+        assert!(!again);
     }
 
     #[serial_test::serial(db)]
