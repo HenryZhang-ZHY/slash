@@ -16,7 +16,8 @@ use uuid::Uuid;
 
 use crate::AppState;
 use crate::test_engine::{
-    ExecutionStatus, find_suite_for_token, insert_executions, upsert_run, upsert_test,
+    ExecutionStatus, find_suite_for_token, insert_executions, quarantined_tests, upsert_run,
+    upsert_test,
 };
 
 /// The normalized raw-JSON payload accepted by the ingestion endpoint.
@@ -185,5 +186,40 @@ fn parse_execution_status(status: &str) -> Option<ExecutionStatus> {
         "skipped" => Some(ExecutionStatus::Skipped),
         "errored" => Some(ExecutionStatus::Errored),
         _ => None,
+    }
+}
+
+/// `GET /v1/test-engine/quarantined` — the M1 disposal hook (design §5,
+/// task M1-4). Authenticated by the same per-suite collection token as the
+/// upload endpoint; returns the names of tests in the suite currently
+/// quarantined (`muted` or `skipped`) so a slash-commanded test workflow can
+/// skip/soft-fail them instead of running them — the bktec "skip/mute flaky"
+/// behavior, server-side.
+///
+/// 200 with a JSON array of quarantined test names; 401 on a missing/unknown
+/// token; 500 on a storage failure.
+pub async fn handle_quarantined(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, axum::Json<serde_json::Value>), StatusCode> {
+    let Some(raw_token) = bearer_token(&headers) else {
+        return Err(StatusCode::UNAUTHORIZED);
+    };
+
+    let identity = match find_suite_for_token(&state.pool, raw_token).await {
+        Ok(Some(identity)) => identity,
+        Ok(None) => return Err(StatusCode::UNAUTHORIZED),
+        Err(error) => {
+            tracing::error!(%error, "test-engine token lookup failed");
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    };
+
+    match quarantined_tests(&state.pool, identity.suite_id).await {
+        Ok(names) => Ok((StatusCode::OK, axum::Json(serde_json::json!(names)))),
+        Err(error) => {
+            tracing::error!(%error, suite = %identity.suite_key, "test-engine quarantined lookup failed");
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
     }
 }
