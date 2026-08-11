@@ -480,3 +480,73 @@ pub async fn handle_quarantined(
         }
     }
 }
+
+/// Pure, dependency-free unit tests for the ingestion parsing helpers — the
+/// fast safety net @Quality's P1 asks for (no DB, no wiremock).
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::expect_used)]
+mod pure_tests {
+    use super::*;
+
+    fn headers_of(pairs: &[(&str, &str)]) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        for (k, v) in pairs {
+            h.insert(
+                axum::http::header::HeaderName::from_bytes(k.as_bytes()).unwrap(),
+                v.parse().unwrap(),
+            );
+        }
+        h
+    }
+
+    #[test]
+    fn bearer_token_accepts_well_formed_bearer() {
+        let h = headers_of(&[("authorization", "Bearer some-token")]);
+        assert_eq!(bearer_token(&h), Some("some-token"));
+    }
+
+    #[test]
+    fn bearer_token_rejects_missing_or_malformed_auth() {
+        assert_eq!(bearer_token(&HeaderMap::new()), None);
+        let malformed = headers_of(&[("authorization", "Basic abc")]);
+        assert_eq!(bearer_token(&malformed), None);
+        let empty = headers_of(&[("authorization", "Bearer   ")]);
+        assert_eq!(bearer_token(&empty), Some(""));
+    }
+
+    #[test]
+    fn is_junit_xml_matches_xml_content_types_only() {
+        let xml = headers_of(&[("content-type", "application/xml")]);
+        let junit = headers_of(&[("content-type", "application/junit+xml")]);
+        let text = headers_of(&[("content-type", "text/xml")]);
+        let json = headers_of(&[("content-type", "application/json")]);
+        let missing = HeaderMap::new();
+
+        assert!(is_junit_xml(&xml));
+        assert!(is_junit_xml(&junit));
+        assert!(is_junit_xml(&text));
+        assert!(!is_junit_xml(&json));
+        assert!(!is_junit_xml(&missing));
+    }
+
+    #[test]
+    fn parse_execution_status_maps_known_and_rejects_unknown() {
+        assert_eq!(
+            parse_execution_status("passed"),
+            Some(ExecutionStatus::Passed)
+        );
+        assert_eq!(
+            parse_execution_status("failed"),
+            Some(ExecutionStatus::Failed)
+        );
+        assert_eq!(
+            parse_execution_status("skipped"),
+            Some(ExecutionStatus::Skipped)
+        );
+        assert_eq!(
+            parse_execution_status("errored"),
+            Some(ExecutionStatus::Errored)
+        );
+        assert_eq!(parse_execution_status("bogus"), None);
+    }
+}
