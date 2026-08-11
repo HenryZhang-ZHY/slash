@@ -1,11 +1,19 @@
 # Permissions
 
+> Status note (post-1.0 grants): command dispatch authorization now runs
+> through slash's offline `grants` model (deny-by-default), not the GitHub
+> collaborator-role lookup described below. The GitHub collaborator resource
+> role is still used only for comment-posting privilege. The historical
+> description below is retained for context.
+
 ## The gate
 
 Every command declares a `permission` in its `.slash/*.yml` file: one of
-`write`, `maintain`, or `admin` (default `write` if omitted). When someone
+`read`, `write`, or `admin` (default `write` if omitted). When someone
 comments a command, Slash resolves their actual repository role and only
-dispatches if that role is **at or above** the command's declared level.
+dispatches if that role is **at or above** the command's declared level; with
+grants configured, authorization is decided by the offline grant for the
+actor on that repo/command (deny-by-default).
 
 Role resolution reads `GET /repos/{owner}/{repo}/collaborators/{username}/permission`
 and looks at the response's `role_name` field specifically — not the

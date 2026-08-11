@@ -73,8 +73,8 @@ pub async fn load_for_repo(
 
 fn parse_permission(s: &str) -> Result<Permission, sqlx::Error> {
     match s {
+        "read" => Ok(Permission::Read),
         "write" => Ok(Permission::Write),
-        "maintain" => Ok(Permission::Maintain),
         "admin" => Ok(Permission::Admin),
         other => Err(sqlx::Error::Protocol(format!(
             "unexpected grant permission tier: {other}"
@@ -209,7 +209,7 @@ mod tests {
         let (org, u1, _u2, _team) = seeded(&pool).await;
         sqlx::query(
             "INSERT INTO grants (id, organization_id, subject_type, subject_id, scope, repository, command, permission, effect)
-             VALUES ($1,$2,'user',$3,'repository','acme/widgets',NULL,'maintain','deny')",
+             VALUES ($1,$2,'user',$3,'repository','acme/widgets',NULL,'write','deny')",
         )
         .bind(Uuid::new_v4())
         .bind(org)

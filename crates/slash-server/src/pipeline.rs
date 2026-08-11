@@ -292,8 +292,8 @@ pub async fn handle_issue_comment(
     if !authorized {
         if can_comment {
             let required = match validated.permission {
+                slash_config::Permission::Read => "read",
                 slash_config::Permission::Write => "write",
-                slash_config::Permission::Maintain => "maintain",
                 slash_config::Permission::Admin => "admin",
             };
             let _ = client

@@ -57,12 +57,11 @@ impl ResolvedRole {
 }
 
 /// Spec §5.2: the comment author's role must be at least the command's
-/// required permission (`write`, `maintain`, or `admin` — `read`/`triage`
-/// are not configurable, spec §4.1).
+/// required permission (`read`, `write`, or `admin`).
 pub fn meets(role: ResolvedRole, required: Permission) -> bool {
     let required_role = match required {
+        Permission::Read => ResolvedRole::Read,
         Permission::Write => ResolvedRole::Write,
-        Permission::Maintain => ResolvedRole::Maintain,
         Permission::Admin => ResolvedRole::Admin,
     };
     role >= required_role
@@ -135,29 +134,38 @@ mod tests {
     }
 
     #[test]
-    fn write_role_meets_a_write_gate_but_not_maintain_or_admin() {
+    fn write_role_meets_a_write_gate_and_not_admin() {
         assert!(meets(ResolvedRole::Write, Permission::Write));
-        assert!(!meets(ResolvedRole::Write, Permission::Maintain));
         assert!(!meets(ResolvedRole::Write, Permission::Admin));
     }
 
     #[test]
-    fn maintain_role_meets_write_and_maintain_gates_but_not_admin() {
+    fn read_role_meets_a_read_gate_but_not_write_or_admin() {
+        assert!(meets(ResolvedRole::Read, Permission::Read));
+        assert!(!meets(ResolvedRole::Read, Permission::Write));
+        assert!(!meets(ResolvedRole::Read, Permission::Admin));
+    }
+
+    #[test]
+    fn maintain_role_meets_read_and_write_gates_but_not_admin() {
+        // GitHub's maintain role sits between write and admin (permission.rs
+        // ResolvedRole ordering); under the read|write|admin tier model it
+        // meets read/write gates but not admin.
+        assert!(meets(ResolvedRole::Maintain, Permission::Read));
         assert!(meets(ResolvedRole::Maintain, Permission::Write));
-        assert!(meets(ResolvedRole::Maintain, Permission::Maintain));
         assert!(!meets(ResolvedRole::Maintain, Permission::Admin));
     }
 
     #[test]
     fn admin_role_meets_every_gate() {
+        assert!(meets(ResolvedRole::Admin, Permission::Read));
         assert!(meets(ResolvedRole::Admin, Permission::Write));
-        assert!(meets(ResolvedRole::Admin, Permission::Maintain));
         assert!(meets(ResolvedRole::Admin, Permission::Admin));
     }
 
     #[test]
-    fn read_and_triage_never_meet_any_configurable_gate() {
-        for role in [ResolvedRole::None, ResolvedRole::Read, ResolvedRole::Triage] {
+    fn triage_and_above_none_never_meet_a_write_gate() {
+        for role in [ResolvedRole::None, ResolvedRole::Triage] {
             assert!(!meets(role, Permission::Write));
         }
     }
