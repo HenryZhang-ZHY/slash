@@ -1,5 +1,6 @@
 mod auth;
 mod catalog;
+mod collectors;
 mod config;
 mod correlation;
 mod db;
@@ -123,6 +124,14 @@ async fn main() {
     let app = Router::new()
         .route("/webhook", post(webhook::handle_webhook))
         .route("/v1/test-engine/upload", post(ingestion::handle_upload))
+        .route(
+            "/v1/test-engine/upload/cargo",
+            post(ingestion::handle_cargo_upload),
+        )
+        .route(
+            "/v1/test-engine/upload/vitest",
+            post(ingestion::handle_vitest_upload),
+        )
         .route(
             "/v1/test-engine/quarantined",
             get(ingestion::handle_quarantined),
