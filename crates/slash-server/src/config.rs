@@ -38,7 +38,8 @@ impl ServerConfig {
     /// Testable core: takes a lookup function instead of touching the real
     /// process environment, so tests don't need `std::env::set_var` (which
     /// is `unsafe` and process-global, and this workspace forbids `unsafe`
-    /// entirely).
+    /// entirely). Test-only: production uses `from_env`.
+    #[cfg(test)]
     fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Result<Self, ConfigError> {
         Self::from_lookup_with_reader(&lookup, |_path| {
             Err(std::io::Error::other("no file reader available"))
@@ -57,7 +58,7 @@ impl ServerConfig {
             .parse()
             .map_err(|_| ConfigError::InvalidInt("SLASH_GITHUB_APP_ID", github_app_id_raw))?;
         let github_private_key_path =
-            PathBuf::from(require(&lookup, "SLASH_GITHUB_PRIVATE_KEY_PATH")?);
+            PathBuf::from(require(lookup, "SLASH_GITHUB_PRIVATE_KEY_PATH")?);
 
         Ok(Self {
             github_app_id,

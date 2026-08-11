@@ -21,6 +21,14 @@ use crate::auth::AuthError;
 /// team is scoped to when the user has none yet.
 const DEFAULT_MEMBER_ROLE: &str = "maintainer";
 
+/// A fixed Argon2id PHC hash used to equalize login timing when no account
+/// matches, so a non-existent email costs the same as a wrong password on a
+/// real account (closes the user-enumeration side channel). The password it
+/// encodes is random and never issued to anyone; it's only the *cost* that
+/// matters, never the content.
+const DUMMY_HASH_FOR_TIMING: &str =
+    "$argon2id$v=19$m=19456,t=2,p=1$AQBxsd/1YH74zla8A5ymdQ$k+VQwhXnpFIX1lsK0a/Aqb1fEWcywY/Lci0Ytn4nCM4";
+
 #[derive(Debug, Deserialize)]
 pub struct RegisterRequest {
     pub email: String,
@@ -161,9 +169,18 @@ pub async fn login(
     .bind(&email)
     .fetch_optional(&state.pool)
     .await;
-    let (id, phc_hash, display_name) = match row {
+
+    // Timing-safe login: when no row matches we still run an Argon2 verify
+    // against a fixed dummy hash, so a non-existent email costs the same as
+    // a valid email with a wrong password. This closes the user-enumeration
+    // side channel (SlashLead review note) without changing the behavior.
+    let (id, phc_hash, display_name): (Uuid, String, String) = match row {
         Ok(Some(r)) => r,
-        _ => return api_error(StatusCode::UNAUTHORIZED, "invalid credentials"),
+        Ok(None) => {
+            let _ = auth::verify_password(&body.password, DUMMY_HASH_FOR_TIMING);
+            return api_error(StatusCode::UNAUTHORIZED, "invalid credentials");
+        }
+        Err(_) => return api_error(StatusCode::UNAUTHORIZED, "invalid credentials"),
     };
     if !auth::verify_password(&body.password, &phc_hash) {
         return api_error(StatusCode::UNAUTHORIZED, "invalid credentials");
@@ -747,5 +764,16 @@ mod tests {
         let state = app_state(pool.clone());
         let resp = me(State(state), UserId(uuid::Uuid::new_v4())).await;
         assert_eq!(response_status(&resp), StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn dummy_timing_hash_is_a_valid_argon2_phc() {
+        // The timing-equalization dummy must be a parseable Argon2id hash so
+        // `verify_password` actually runs Argon2 (matching the cost of a real
+        // account) instead of failing fast and reintroducing the side channel.
+        let parsed = argon2::PasswordHash::new(DUMMY_HASH_FOR_TIMING);
+        assert!(parsed.is_ok(), "dummy hash must be valid PHC");
+        // Any password fails against it, but the *cost* is what matters.
+        assert!(!crate::auth::verify_password("anything", DUMMY_HASH_FOR_TIMING));
     }
 }
