@@ -1,0 +1,443 @@
+//! User onboarding HTTP API (org/user management lane, 1.0 MVP).
+//!
+//! account/password register/login + create-first-team onboarding, served by
+//! the same axum server as the GitHub webhook control plane. Sessions are
+//! stateless HMAC tokens in an HttpOnly cookie (see [`crate::auth`]).
+
+use axum::extract::State;
+use axum::http::StatusCode;
+use axum::http::header::{HeaderValue, SET_COOKIE};
+use axum::response::{IntoResponse, Response};
+use axum::Json;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use sqlx::PgPool;
+use uuid::Uuid;
+
+use crate::auth;
+use crate::auth::AuthError;
+
+/// Named placeholder in the transaction/flow for the onboarding org the first
+/// team is scoped to when the user has none yet.
+const DEFAULT_MEMBER_ROLE: &str = "maintainer";
+
+#[derive(Debug, Deserialize)]
+pub struct RegisterRequest {
+    pub email: String,
+    pub password: String,
+    #[serde(default)]
+    pub display_name: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LoginRequest {
+    pub email: String,
+    pub password: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateTeamRequest {
+    pub name: String,
+    /// Optional org-scoped slug; derives from `name` when absent.
+    #[serde(default)]
+    pub slug: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserView {
+    pub id: Uuid,
+    pub email: String,
+    pub display_name: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TeamView {
+    pub id: Uuid,
+    pub organization_id: Uuid,
+    pub name: String,
+    pub slug: String,
+    /// The viewer's role in this team (`member`/`maintainer`).
+    pub role: String,
+}
+
+/// `{ user, teams }` — the onboarding /auth/me surface the Web App consumes.
+#[derive(Debug, Serialize)]
+pub struct MePayload {
+    pub user: UserView,
+    pub teams: Vec<TeamView>,
+}
+
+/// `{ user }` — the register/login surface.
+#[derive(Debug, Serialize)]
+pub struct AuthPayload {
+    pub user: UserView,
+}
+
+// ---- response helpers -----------------------------------------------------
+
+fn set_token_cookie(resp: &mut axum::response::Response, token: &str) {
+    // Our Set-Cookie values are fixed, ASCII, attacker-non-influenced.
+    #[allow(clippy::expect_used)]
+    let value = HeaderValue::from_str(&auth::set_cookie_value(token))
+        .expect("Set-Cookie value is ASCII");
+    resp.headers_mut().insert(SET_COOKIE, value);
+}
+
+fn clear_token_cookie(resp: &mut axum::response::Response) {
+    #[allow(clippy::expect_used)]
+    let value = HeaderValue::from_str(&auth::clear_cookie_value())
+        .expect("Set-Cookie value is ASCII");
+    resp.headers_mut().insert(SET_COOKIE, value);
+}
+
+fn user_view(id: Uuid, email: &str, display_name: &str) -> UserView {
+    UserView {
+        id,
+        email: email.to_string(),
+        display_name: display_name.to_string(),
+    }
+}
+
+// ---- Handlers --------------------------------------------------------------
+
+pub async fn register(
+    State(state): State<crate::AppState>,
+    Json(body): Json<RegisterRequest>,
+) -> Response {
+    if body.password.len() < 8 {
+        return api_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "password must be at least 8 characters",
+        );
+    }
+    let email = body.email.trim().to_lowercase();
+    if email.is_empty() || !email.contains('@') {
+        return api_error(StatusCode::UNPROCESSABLE_ENTITY, "invalid email");
+    }
+    let password_hash = match auth::hash_password(&body.password) {
+        Ok(h) => h,
+        Err(_) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, "auth setup failed"),
+    };
+    let id = Uuid::new_v4();
+    let insert = sqlx::query(
+        "INSERT INTO users (id, email, password_hash, display_name, status)
+         VALUES ($1, $2, $3, $4, 'active')",
+    )
+    .bind(id)
+    .bind(&email)
+    .bind(&password_hash)
+    .bind(body.display_name.trim());
+    let result = insert.execute(&state.pool).await;
+    match result {
+        Ok(_) => {}
+        Err(e) if is_unique_violation(&e) => {
+            return api_error(StatusCode::CONFLICT, "an account with this email already exists")
+        }
+        Err(_) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, "could not create account"),
+    }
+    // Registration logs the user in.
+    let token = match auth::sign_token(&state.auth_secret, id) {
+        Ok(t) => t,
+        Err(_) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, "could not create session"),
+    };
+    let mut resp = Json(AuthPayload {
+        user: user_view(id, &email, body.display_name.trim()),
+    })
+    .into_response();
+    set_token_cookie(&mut resp, &token);
+    resp
+}
+
+pub async fn login(
+    State(state): State<crate::AppState>,
+    Json(body): Json<LoginRequest>,
+) -> Response {
+    let email = body.email.trim().to_lowercase();
+    let row = sqlx::query_as::<_, (Uuid, String, String)>(
+        "SELECT id, password_hash, display_name FROM users WHERE email = $1 AND status = 'active'",
+    )
+    .bind(&email)
+    .fetch_optional(&state.pool)
+    .await;
+    let (id, phc_hash, display_name) = match row {
+        Ok(Some(r)) => r,
+        _ => return api_error(StatusCode::UNAUTHORIZED, "invalid credentials"),
+    };
+    if !auth::verify_password(&body.password, &phc_hash) {
+        return api_error(StatusCode::UNAUTHORIZED, "invalid credentials");
+    }
+    let token = match auth::sign_token(&state.auth_secret, id) {
+        Ok(t) => t,
+        Err(_) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, "could not create session"),
+    };
+    let mut resp = Json(AuthPayload {
+        user: user_view(id, &email, &display_name),
+    })
+    .into_response();
+    set_token_cookie(&mut resp, &token);
+    resp
+}
+
+pub async fn logout() -> Response {
+    let mut resp = (StatusCode::NO_CONTENT).into_response();
+    clear_token_cookie(&mut resp);
+    resp
+}
+
+pub async fn me(
+    State(state): State<crate::AppState>,
+    auth_user: UserId,
+) -> Response {
+    let id = auth_user.0;
+    let row = sqlx::query_as::<_, (String, String)>(
+        "SELECT email, display_name FROM users WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&state.pool)
+    .await;
+    let (email, display_name) = match row {
+        Ok(Some(r)) => r,
+        _ => return api_error(StatusCode::UNAUTHORIZED, "unknown user"),
+    };
+    let teams = load_teams(&state.pool, id).await.unwrap_or_default();
+    Json(MePayload {
+        user: user_view(id, &email, &display_name),
+        teams,
+    })
+    .into_response()
+}
+
+pub async fn create_team(
+    State(state): State<crate::AppState>,
+    auth_user: UserId,
+    Json(body): Json<CreateTeamRequest>,
+) -> Response {
+    let user_id = auth_user.0;
+    let name = body.name.trim();
+    if name.is_empty() {
+        return api_error(StatusCode::UNPROCESSABLE_ENTITY, "team name required");
+    }
+    let slug = match body.slug {
+        Some(s) if is_valid_slug(&s) => s.to_lowercase(),
+        Some(_) => {
+            return api_error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "slug must be lowercase letters/digits/hyphens",
+            )
+        }
+        None => slugify(name),
+    };
+    if slug.is_empty() {
+        return api_error(StatusCode::UNPROCESSABLE_ENTITY, "could not derive a valid slug");
+    }
+
+    let team_id = Uuid::new_v4();
+    let result = create_team_tx(&state.pool, user_id, team_id, name, &slug).await;
+    match result {
+        Ok(_org_id) => {
+            let teams = load_teams(&state.pool, user_id).await.unwrap_or_default();
+            match teams.iter().find(|t| t.id == team_id) {
+                Some(team) => Json(json!({ "team": team })).into_response(),
+                None => {
+                    api_error(StatusCode::INTERNAL_SERVER_ERROR, "team created but not readable")
+                }
+            }
+        }
+        Err(CreateTeamError::SlugTaken) => {
+            api_error(StatusCode::CONFLICT, "a team with this slug already exists")
+        }
+        Err(CreateTeamError::Other) => {
+            api_error(StatusCode::INTERNAL_SERVER_ERROR, "could not create team")
+        }
+    }
+}
+
+// ---- internal data access ------------------------------------------------------
+
+#[derive(Debug, thiserror::Error)]
+enum CreateTeamError {
+    #[error("slug taken")]
+    SlugTaken,
+    #[error("other")]
+    Other,
+}
+
+/// Create (or reuse) the user's organization and create a team inside it,
+/// adding the user as maintainer. Runs in one transaction.
+async fn create_team_tx(
+    pool: &PgPool,
+    user_id: Uuid,
+    team_id: Uuid,
+    name: &str,
+    slug: &str,
+) -> Result<Uuid, CreateTeamError> {
+    let mut tx = pool.begin().await.map_err(|_| CreateTeamError::Other)?;
+
+    let org_id = first_org_of_user(pool, user_id).await;
+    let org_id = match org_id {
+        Some(o) => o,
+        None => {
+            // Onboarding: create the user's home organization (tenant).
+            let new_org = Uuid::new_v4();
+            let org_slug = format!("org-{}", slug);
+            let inserted = sqlx::query(
+                "INSERT INTO organizations (id, slug, name, state) VALUES ($1, $2, $3, 'active')
+                 ON CONFLICT (slug) DO NOTHING",
+            )
+            .bind(new_org)
+            .bind(&org_slug)
+            .bind(name)
+            .execute(&mut *tx)
+            .await;
+            match inserted {
+                Ok(r) if r.rows_affected() == 1 => new_org,
+                Ok(_) => return Err(CreateTeamError::Other), // slug clash on org
+                Err(_) => return Err(CreateTeamError::Other),
+            }
+        }
+    };
+
+    let inserted = sqlx::query(
+        "INSERT INTO teams (id, organization_id, name, slug, is_default_team, default_member_role)
+         VALUES ($1, $2, $3, $4, false, 'member')
+         ON CONFLICT (organization_id, slug) DO NOTHING",
+    )
+    .bind(team_id)
+    .bind(org_id)
+    .bind(name)
+    .bind(slug)
+    .execute(&mut *tx)
+    .await;
+    match inserted {
+        Ok(r) if r.rows_affected() == 1 => {}
+        Ok(_) => return Err(CreateTeamError::SlugTaken),
+        Err(_) => return Err(CreateTeamError::Other),
+    }
+
+    sqlx::query(
+        "INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, $3)",
+    )
+    .bind(team_id)
+    .bind(user_id)
+    .bind(DEFAULT_MEMBER_ROLE)
+    .execute(&mut *tx)
+    .await
+    .map_err(|_| CreateTeamError::Other)?;
+
+    tx.commit().await.map_err(|_| CreateTeamError::Other)?;
+    Ok(org_id)
+}
+
+async fn first_org_of_user(pool: &PgPool, user_id: Uuid) -> Option<Uuid> {
+    // The user's orgs are those of any team they belong to; take the first.
+    sqlx::query_scalar::<_, Uuid>(
+        "SELECT t.organization_id FROM teams t
+         JOIN team_members tm ON tm.team_id = t.id
+         WHERE tm.user_id = $1
+         ORDER BY t.created_at LIMIT 1",
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+}
+
+async fn load_teams(pool: &PgPool, user_id: Uuid) -> Result<Vec<TeamView>, sqlx::Error> {
+    use sqlx::Row;
+    let rows = sqlx::query(
+        "SELECT t.id, t.organization_id, t.name, t.slug, tm.role
+         FROM teams t JOIN team_members tm ON tm.team_id = t.id
+         WHERE tm.user_id = $1 ORDER BY t.created_at",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .iter()
+        .map(|r| TeamView {
+            id: r.get("id"),
+            organization_id: r.get("organization_id"),
+            name: r.get("name"),
+            slug: r.get("slug"),
+            role: r.get("role"),
+        })
+        .collect())
+}
+
+// ---- auth extractor -----------------------------------------------------------
+
+/// Extracted authenticated user id from the session cookie.
+#[derive(Clone, Copy)]
+pub struct UserId(pub Uuid);
+
+// The axum `FromRequestParts` trait requires an `impl Future` return, which
+// clippy's `manual_async_fn` would otherwise suggest rewriting as `async fn`.
+// That rewrite cannot satisfy the trait signature here, so the lint is
+// suppressed for this impl block.
+#[allow(clippy::manual_async_fn)]
+impl axum::extract::FromRequestParts<crate::AppState> for UserId {
+    type Rejection = Response;
+
+    fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        state: &crate::AppState,
+    ) -> impl std::future::Future<Output = Result<Self, Self::Rejection>> + Send {
+        async move {
+            let cookie = parts
+                .headers
+                .get(axum::http::header::COOKIE)
+                .and_then(|v| v.to_str().ok());
+            let token = auth::session_token_from_header(cookie)
+                .ok_or_else(|| api_error(StatusCode::UNAUTHORIZED, "not signed in"))?;
+            let user_id = match auth::verify_token(&state.auth_secret, &token) {
+                Ok(id) => id,
+                Err(AuthError::ExpiredToken) => {
+                    return Err(api_error(StatusCode::UNAUTHORIZED, "session expired"))
+                }
+                Err(_) => return Err(api_error(StatusCode::UNAUTHORIZED, "invalid session")),
+            };
+            Ok(UserId(user_id))
+        }
+    }
+}
+
+// ---- SQL / misc helpers ---------------------------------------------------------
+
+fn is_unique_violation(err: &sqlx::Error) -> bool {
+    match err {
+        sqlx::Error::Database(db) => db.is_unique_violation(),
+        _ => false,
+    }
+}
+
+fn is_valid_slug(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 63
+        && s.chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+fn slugify(name: &str) -> String {
+    let mut out = String::new();
+    let mut prev_dash = false;
+    for c in name.trim().to_lowercase().chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c);
+            prev_dash = false;
+        } else if !prev_dash && !out.is_empty() {
+            out.push('-');
+            prev_dash = true;
+        }
+    }
+    while out.ends_with('-') {
+        out.pop();
+    }
+    out
+}
+
+fn api_error(status: StatusCode, msg: &str) -> Response {
+    (status, Json(json!({ "error": msg }))).into_response()
+}
