@@ -7,6 +7,7 @@ mod deliveries;
 mod flaky;
 mod ingestion;
 mod invocations;
+mod junit;
 mod metrics;
 mod pipeline;
 mod sweeper;
