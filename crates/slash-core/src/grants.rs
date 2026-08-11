@@ -48,22 +48,23 @@ pub struct GrantRow {
 
 /// Convert pre-loaded `ResolvedGrant`s (from `slash_core::pipeline::TrustGate`)
 /// back into full `GrantRow`s that `decide` can consume, threading the repo
-/// token and command context so scope matching works.
+/// token so repository-scope matching works.
 ///
 /// `repo_token` must be the same value passed to `decide` as its `repo`;
 /// repository-scoped grants get it attached so they match. Command-scoped
-/// grants get the actual `command`.
+/// grants carry their target command on `ResolvedGrant::command`, which is
+/// preserved verbatim.
 pub fn resolve_grant_rows(
     grants: &[crate::pipeline::ResolvedGrant],
     repo: &str,
-    command: &str,
+    _command: &str,
 ) -> Vec<GrantRow> {
     grants
         .iter()
         .map(|g| GrantRow {
             scope: g.scope,
             repository: (g.scope == GrantScope::Repository).then(|| repo.to_string()),
-            command: (g.scope == GrantScope::Command).then(|| command.to_string()),
+            command: g.command.clone(),
             tier: g.permission,
             effect: g.effect,
         })

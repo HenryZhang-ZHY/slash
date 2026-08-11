@@ -17,7 +17,7 @@
 //! introspected).
 
 use serde_json::{Map, Value as Json};
-use slash_core::{ResolvedRole, messages};
+use slash_core::{ResolvedRole, TrustGate, messages};
 use slash_github::octocrab_types::ReactionContent;
 use slash_github::{GithubApp, RepoClient, WebhookEventPayload};
 use sqlx::PgPool;
@@ -268,27 +268,33 @@ pub async fn handle_issue_comment(
         return Ok(());
     };
 
-    // Command authorization now runs through grants (org/user M2-4): strict
-    // deny-by-default. The actor's slash user is resolved by GitHub id, the
-    // repo's org by the GitHub installation; any resolution/load/decision
-    // failure, or a missing grant that reaches the required tier, denies.
-    // This replaces the GitHub-collaborator-role comparison for dispatch.
+    // Command authorization now runs through the R2 TrustGate (org/user M2-4
+    // + #23): async preload of the actor's grants, then the sync grants
+    // decision. Fail-closed: any load/decision error or a missing grant that
+    // reaches the required tier denies. This replaces the GitHub-
+    // collaborator-role comparison for dispatch.
     let github_user_id = payload.comment.user.id.0 as i64;
-    let granted = crate::grants_loader::authorize_command_grants(
+    let grants = crate::grants_loader::preload_grants(
         ctx.pool,
         github_user_id,
         ctx.installation_id as i64,
         &ctx.owner,
         &ctx.repo,
-        &parsed.name,
-        validated.permission,
     )
     .await;
-    let authorized = match granted {
-        Ok(true) => true,
-        // Fail closed: any DB/load/decision error or a false deny.
-        Ok(false) | Err(_) => false,
+    let actor = slash_core::pipeline::Actor {
+        login: payload.comment.user.login.clone(),
+        github_user_id: payload.comment.user.id.0,
     };
+    let outcome = match grants {
+        Ok(grants) => {
+            let gate = crate::grants_trust_gate::GrantsTrustGate;
+            gate.check(&grants, &actor, &parsed.name, validated.permission)
+        }
+        // Fail closed: a preload DB/parse error is a deny (TrustOutcome::Error).
+        Err(e) => slash_core::pipeline::TrustOutcome::Error(e.to_string()),
+    };
+    let authorized = outcome.is_granted();
     if !authorized {
         if can_comment {
             let required = match validated.permission {
