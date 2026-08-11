@@ -5,6 +5,7 @@ mod correlation;
 mod db;
 mod deliveries;
 mod flaky;
+mod grants_loader;
 mod ingestion;
 mod invocations;
 mod junit;
