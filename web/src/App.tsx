@@ -6,6 +6,7 @@ import { api } from '@/lib/api'
 import type { MeResponse } from '@/lib/api'
 import { LoginPage } from '@/pages/LoginPage'
 import { OnboardingPage } from '@/pages/OnboardingPage'
+import { TestEnginePage } from '@/pages/TestEnginePage'
 
 function HomePage() {
   const [me, setMe] = useState<MeResponse | null>(null)
@@ -81,6 +82,7 @@ export default function App() {
         <Route path="/" element={<HomePage />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/onboarding" element={<OnboardingPage />} />
+        <Route path="/tests" element={<TestEnginePage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
