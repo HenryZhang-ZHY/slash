@@ -7,7 +7,7 @@
 //! Suite management and reads are scoped to the account that created the suite.
 
 use axum::Json;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
@@ -128,6 +128,14 @@ pub async fn create_suite(
                 total_tests: 0,
                 muted: 0,
                 skipped: 0,
+                run_count: 0,
+                execution_count: 0,
+                passed_executions: 0,
+                failed_executions: 0,
+                skipped_executions: 0,
+                errored_executions: 0,
+                average_duration_ms: None,
+                last_captured: None,
             },
             token,
         }),
@@ -153,6 +161,14 @@ pub async fn list_suites(
                     total_tests: s.total_tests,
                     muted: s.muted,
                     skipped: s.skipped,
+                    run_count: s.run_count,
+                    execution_count: s.execution_count,
+                    passed_executions: s.passed_executions,
+                    failed_executions: s.failed_executions,
+                    skipped_executions: s.skipped_executions,
+                    errored_executions: s.errored_executions,
+                    average_duration_ms: s.average_duration_ms,
+                    last_captured: s.last_captured.map(|captured| captured.to_rfc3339()),
                 })
                 .collect(),
         )),
@@ -179,8 +195,26 @@ pub async fn list_tests(
                     id: t.id.to_string(),
                     name: t.name,
                     state: t.state,
+                    file: t.file,
+                    line_no: t.line_no,
+                    labels: t.labels,
+                    owner_team_ids: t
+                        .owner_team_ids
+                        .into_iter()
+                        .map(|id| id.to_string())
+                        .collect(),
+                    created_at: t.created_at.to_rfc3339(),
+                    updated_at: t.updated_at.to_rfc3339(),
                     last_status: t.last_status,
                     last_captured: t.last_captured.map(|c| c.to_rfc3339()),
+                    last_run_ref: t.last_run_ref,
+                    last_ci_provider: t.last_ci_provider,
+                    execution_count: t.execution_count,
+                    passed_count: t.passed_count,
+                    failed_count: t.failed_count,
+                    skipped_count: t.skipped_count,
+                    errored_count: t.errored_count,
+                    average_duration_ms: t.average_duration_ms,
                 })
                 .collect(),
         )),
@@ -197,23 +231,79 @@ pub async fn list_test_executions(
     State(state): State<AppState>,
     auth_user: UserId,
     Path(id): Path<uuid::Uuid>,
-) -> Result<Json<Vec<TestExecutionOut>>, StatusCode> {
-    match test_engine::list_test_executions(&state.pool, id, auth_user.0).await {
-        Ok(executions) => Ok(Json(
-            executions
+    Query(page): Query<ExecutionPageRequest>,
+) -> Result<Json<TestExecutionPageOut>, StatusCode> {
+    let limit = page.limit.clamp(1, 200);
+    let offset = page.offset.max(0);
+    match test_engine::list_test_executions(&state.pool, id, auth_user.0, limit, offset).await {
+        Ok(page) => Ok(Json(TestExecutionPageOut {
+            total: page.total,
+            limit,
+            offset,
+            items: page
+                .items
                 .into_iter()
                 .map(|execution| TestExecutionOut {
                     id: execution.id.to_string(),
                     status: execution.status,
                     duration_ms: execution.duration_ms,
+                    stack: execution.stack,
                     captured_at: execution.captured_at.to_rfc3339(),
+                    run_id: execution.run_id.to_string(),
                     run_ref: execution.run_ref,
                     ci_provider: execution.ci_provider,
+                    started_at: execution.started_at.to_rfc3339(),
+                    finished_at: execution.finished_at.map(|finished| finished.to_rfc3339()),
+                    invocation_id: execution.invocation_id.map(|id| id.to_string()),
                 })
                 .collect(),
-        )),
+        })),
         Err(error) => {
             tracing::error!(%error, test = %id, "test-engine execution history listing failed");
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SetTestStateRequest {
+    state: String,
+}
+
+/// `PATCH /api/test-engine/tests/{id}/state` — manually changes a case's
+/// disposal state after verifying the case belongs to the authenticated user.
+pub async fn set_test_state(
+    State(state): State<AppState>,
+    auth_user: UserId,
+    Path(id): Path<uuid::Uuid>,
+    Json(request): Json<SetTestStateRequest>,
+) -> Result<Json<TestStateOut>, StatusCode> {
+    let target = match request.state.as_str() {
+        "enabled" => test_engine::TestState::Enabled,
+        "muted" => test_engine::TestState::Muted,
+        "skipped" => test_engine::TestState::Skipped,
+        _ => return Err(StatusCode::UNPROCESSABLE_ENTITY),
+    };
+    match test_engine::test_owned_by(&state.pool, id, auth_user.0).await {
+        Ok(true) => {}
+        Ok(false) => return Err(StatusCode::NOT_FOUND),
+        Err(error) => {
+            tracing::error!(%error, test = %id, "test-engine test ownership lookup failed");
+            return Err(StatusCode::INTERNAL_SERVER_ERROR);
+        }
+    }
+    let from = [
+        test_engine::TestState::Enabled,
+        test_engine::TestState::Muted,
+        test_engine::TestState::Skipped,
+    ];
+    match test_engine::set_test_state(&state.pool, id, &from, target).await {
+        Ok(true) => Ok(Json(TestStateOut {
+            state: target.as_str(),
+        })),
+        Ok(false) => Err(StatusCode::CONFLICT),
+        Err(error) => {
+            tracing::error!(%error, test = %id, "test-engine test state update failed");
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
@@ -293,6 +383,14 @@ pub struct SuiteOut {
     total_tests: i64,
     muted: i64,
     skipped: i64,
+    run_count: i64,
+    execution_count: i64,
+    passed_executions: i64,
+    failed_executions: i64,
+    skipped_executions: i64,
+    errored_executions: i64,
+    average_duration_ms: Option<f64>,
+    last_captured: Option<String>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -300,8 +398,22 @@ pub struct TestOut {
     id: String,
     name: String,
     state: String,
+    file: Option<String>,
+    line_no: Option<i32>,
+    labels: Vec<String>,
+    owner_team_ids: Vec<String>,
+    created_at: String,
+    updated_at: String,
     last_status: Option<String>,
     last_captured: Option<String>,
+    last_run_ref: Option<String>,
+    last_ci_provider: Option<String>,
+    execution_count: i64,
+    passed_count: i64,
+    failed_count: i64,
+    skipped_count: i64,
+    errored_count: i64,
+    average_duration_ms: Option<f64>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -309,9 +421,39 @@ pub struct TestExecutionOut {
     id: String,
     status: String,
     duration_ms: i64,
+    stack: Option<String>,
     captured_at: String,
+    run_id: String,
     run_ref: String,
     ci_provider: String,
+    started_at: String,
+    finished_at: Option<String>,
+    invocation_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ExecutionPageRequest {
+    #[serde(default = "default_execution_limit")]
+    limit: i64,
+    #[serde(default)]
+    offset: i64,
+}
+
+fn default_execution_limit() -> i64 {
+    100
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct TestExecutionPageOut {
+    total: i64,
+    limit: i64,
+    offset: i64,
+    items: Vec<TestExecutionOut>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct TestStateOut {
+    state: &'static str,
 }
 
 #[derive(Debug, serde::Serialize)]

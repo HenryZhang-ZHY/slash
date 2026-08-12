@@ -72,27 +72,58 @@ describe("testEngineApi", () => {
   it("loads execution history for an individual test case", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
-        JSON.stringify([
-          {
-            id: "execution-1",
-            status: "passed",
-            duration_ms: 24,
-            captured_at: "2026-08-12T02:30:19Z",
-            run_ref: "run-42",
-            ci_provider: "vitest",
-          },
-        ]),
+        JSON.stringify({
+          total: 1,
+          limit: 100,
+          offset: 0,
+          items: [
+            {
+              id: "execution-1",
+              status: "passed",
+              duration_ms: 24,
+              stack: null,
+              captured_at: "2026-08-12T02:30:19Z",
+              run_id: "run-id-42",
+              run_ref: "run-42",
+              ci_provider: "vitest",
+              started_at: "2026-08-12T02:30:00Z",
+              finished_at: "2026-08-12T02:31:00Z",
+              invocation_id: null,
+            },
+          ],
+        }),
         { status: 200, headers: { "Content-Type": "application/json" } },
       ),
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    const executions = await testEngineApi.listExecutions("test-1");
+    const executions = await testEngineApi.listExecutions("test-1", 100, 0);
 
-    expect(executions).toHaveLength(1);
+    expect(executions.total).toBe(1);
+    expect(executions.items).toHaveLength(1);
     expect(fetchMock).toHaveBeenCalledWith(
-      "/api/test-engine/tests/test-1/executions",
+      "/api/test-engine/tests/test-1/executions?limit=100&offset=0",
       { credentials: "same-origin", headers: undefined },
     );
+  });
+
+  it("updates a test case disposition", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ state: "muted" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await testEngineApi.setTestState("test-1", "muted");
+
+    expect(result.state).toBe("muted");
+    expect(fetchMock).toHaveBeenCalledWith("/api/test-engine/tests/test-1/state", {
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      method: "PATCH",
+      body: JSON.stringify({ state: "muted" }),
+    });
   });
 });
