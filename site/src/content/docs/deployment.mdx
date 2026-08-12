@@ -1,4 +1,9 @@
-# Deployment
+---
+title: Deployment
+description: "Deploy and operate the Slash server with Postgres."
+sidebar:
+  order: 5
+---
 
 ## Reference deployment: a single replica
 
@@ -37,13 +42,13 @@ a bad migration never leaves the process half-started.
 
 ### Environment variables
 
-| Variable                        | Required | Notes |
-|----------------------------------|----------|-------|
-| `SLASH_DATABASE_URL`             | yes      | Postgres connection string. |
-| `SLASH_WEBHOOK_SECRET`           | yes      | Must match the webhook secret configured on the GitHub App. The server refuses to start without it — signature verification is never optional. |
-| `SLASH_GITHUB_APP_ID`            | yes      | The GitHub App's numeric ID. |
-| `SLASH_GITHUB_PRIVATE_KEY_PATH`  | yes      | Path to the App's private key **file** (not the key inline) — mount it read-only, mode `0400` if your platform supports setting it. |
-| `RUST_LOG`                       | no       | `tracing_subscriber` env-filter syntax, e.g. `info` or `slash_server=debug`. |
+| Variable | Required | Notes |
+| ---------------------------------- | ---------- | ------- |
+| `SLASH_DATABASE_URL` | yes | Postgres connection string. |
+| `SLASH_WEBHOOK_SECRET` | yes | Must match the webhook secret configured on the GitHub App. The server refuses to start without it — signature verification is never optional. |
+| `SLASH_GITHUB_APP_ID` | yes | The GitHub App's numeric ID. |
+| `SLASH_GITHUB_PRIVATE_KEY_PATH` | yes | Path to the App's private key **file** (not the key inline) — mount it read-only, mode `0400` if your platform supports setting it. |
+| `RUST_LOG` | no | `tracing_subscriber` env-filter syntax, e.g. `info` or `slash_server=debug`. |
 
 There is deliberately no way to pass the private key as an inline
 environment variable — only a file path — and the config struct has no
@@ -82,7 +87,7 @@ database URL (which may embed a password) can leak via a stray log line.
 - `slash_dispatch_failures_total{class}` — dispatches that ended in
   `dispatch_failed`, by failure class.
 
-**Known gap** (see [limitations.md](limitations.md)): there is no
+**Known gap** (see [known limitations](/limitations/)): there is no
 `slash_github_api_calls_total`/rate-limit-remaining metric yet — GitHub API
 call volume and remaining rate-limit budget are not currently observable
 through `/metrics`. Watch application logs for `sweeper: failed to mint
@@ -114,7 +119,7 @@ credentials suspected leaked, or GitHub reports abuse):
 
 1. **Stop the server process.** There is currently no per-installation or
    global kill switch (tracked as a known gap — see
-   [limitations.md](limitations.md)); stopping the process is the only way
+  [known limitations](/limitations/)); stopping the process is the only way
    to immediately halt *all* dispatch activity across every installation.
    In-flight `claimed`/`dispatched` invocations are left durably in Postgres
    and will resolve themselves through the sweeper's normal timeout paths

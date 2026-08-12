@@ -1,4 +1,9 @@
-# Permissions
+---
+title: Permissions
+description: "Understand command authorization and Slash's trust boundaries."
+sidebar:
+  order: 4
+---
 
 > Status note (post-1.0 grants): command dispatch authorization now runs
 > through slash's offline `grants` model (deny-by-default), not the GitHub
@@ -48,7 +53,7 @@ used to make Slash spend unbounded API budget either.
 
 ## What forks change
 
-Fork PRs are not supported in 0.0.1 (see [limitations.md](limitations.md)):
+Fork PRs are not supported in 0.0.1 (see [known limitations](/limitations/)):
 `workflow_dispatch` cannot target a ref on a fork, so there is nothing to
 dispatch even if permission resolution succeeds. Slash detects this and
 comments once per PR rather than silently doing nothing.

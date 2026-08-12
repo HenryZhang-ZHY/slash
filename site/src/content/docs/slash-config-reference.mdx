@@ -1,4 +1,9 @@
-# `.slash/` reference
+---
+title: ".slash/ reference"
+description: "Define commands, arguments, permissions, and target workflows."
+sidebar:
+  order: 2
+---
 
 Each command is one YAML file under `.slash/` (`.yml` or `.yaml`) at your
 repository root, **always read from the default branch** — never from the PR
@@ -8,7 +13,7 @@ invoke a command, or which workflow it runs, to escalate its own permissions
 branch.
 
 Validate your `.slash/` files in your own CI with `slash validate .slash/`
-(the `slash` binary ships from [`slash-cli`](../../crates/slash-cli); install
+(the `slash` binary ships from [`slash-cli`](https://github.com/HenryZhang-ZHY/slash/tree/main/crates/slash-cli); install
 it with `cargo install --path crates/slash-cli` or grab it from a release).
 It runs the exact same checks Slash itself enforces at invocation time, so
 mistakes are caught in your PR instead of the first time someone runs the
@@ -57,7 +62,7 @@ command is invoked.
 
 | Field         | Required | Default | Notes |
 |---------------|----------|---------|-------|
-| `name`        | yes      | —       | `^[a-z][a-z0-9_-]*$`, unique within the command, must not start with `slash_` (reserved — see [workflow-requirements.md](workflow-requirements.md)). |
+| `name`        | yes      | —       | `^[a-z][a-z0-9_-]*$`, unique within the command, must not start with `slash_` (reserved — see [workflow requirements](/workflow-requirements/)). |
 | `description` | no       | none    | Shown in usage errors. |
 | `required`    | no       | `false` | All `required: true` entries must come before any optional entry in the list — that order is also the order positional (non-`--key`) command-line arguments bind to. |
 | `choices`     | no       | none    | A list of allowed values; anything else is a usage error. |
@@ -71,13 +76,13 @@ catches typos immediately instead of them silently doing nothing.
 
 Unless an argument sets `free_text: true`, its value must match:
 
-```
+```text
 ^[A-Za-z0-9._@:/+=,-]{0,256}$
 ```
 
 This exists because argument values flow into `workflow_dispatch` inputs, and
 a workflow that interpolates `${{ inputs.x }}` directly inside a `run:` step
-(instead of via `env:` — see [workflow-requirements.md](workflow-requirements.md))
+(instead of via `env:` — see [workflow requirements](/workflow-requirements/))
 would otherwise be script-injectable by anyone who can pass the permission
 gate. Set `free_text: true` only on arguments whose workflow consumes them
 through `env:`, never through inline `${{ }}` interpolation in `run:`.
@@ -98,7 +103,7 @@ process, so it is bounded before anything is parsed:
 
 Only the **first line** of a comment is parsed:
 
-```
+```text
 /deploy staging --force --timeout=30m --reason="hot fix"
  ^cmd   ^positional  ^bool flag  ^key=value    ^quoted value
 ```
