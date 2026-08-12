@@ -84,23 +84,57 @@ export interface TestSuiteSummary {
   total_tests: number
   muted: number
   skipped: number
+  run_count: number
+  execution_count: number
+  passed_executions: number
+  failed_executions: number
+  skipped_executions: number
+  errored_executions: number
+  average_duration_ms: number | null
+  last_captured: string | null
 }
 
 export interface TestSummary {
   id: string
   name: string
   state: 'enabled' | 'muted' | 'skipped'
+  file: string | null
+  line_no: number | null
+  labels: string[]
+  owner_team_ids: string[]
+  created_at: string
+  updated_at: string
   last_status: string | null
   last_captured: string | null
+  last_run_ref: string | null
+  last_ci_provider: string | null
+  execution_count: number
+  passed_count: number
+  failed_count: number
+  skipped_count: number
+  errored_count: number
+  average_duration_ms: number | null
 }
 
 export interface TestExecution {
   id: string
   status: 'passed' | 'failed' | 'skipped' | 'errored'
   duration_ms: number
+  stack: string | null
   captured_at: string
+  run_id: string
   run_ref: string
   ci_provider: string
+  started_at: string
+  finished_at: string | null
+  invocation_id: string | null
+}
+
+export interface TestExecutionPage {
+  total: number
+  limit: number
+  offset: number
+  items: TestExecution[]
 }
 
 export interface SuiteCreated {
@@ -117,8 +151,15 @@ export const testEngineApi = {
     }),
   listTests: (suiteId: string) =>
     request<TestSummary[]>(`/api/test-engine/suites/${suiteId}/tests`),
-  listExecutions: (testId: string) =>
-    request<TestExecution[]>(`/api/test-engine/tests/${testId}/executions`),
+  listExecutions: (testId: string, limit = 100, offset = 0) =>
+    request<TestExecutionPage>(
+      `/api/test-engine/tests/${testId}/executions?limit=${limit}&offset=${offset}`,
+    ),
+  setTestState: (testId: string, state: TestSummary['state']) =>
+    request<{ state: TestSummary['state'] }>(`/api/test-engine/tests/${testId}/state`, {
+      method: 'PATCH',
+      body: JSON.stringify({ state }),
+    }),
   getToken: (suiteId: string) =>
     request<{ token: string | null }>(`/api/test-engine/suites/${suiteId}/tokens`),
   issueToken: (suiteId: string) =>

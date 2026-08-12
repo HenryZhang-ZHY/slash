@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 
+import { AuthShell } from '@/components/AuthShell'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { api } from '@/lib/api'
@@ -47,54 +47,55 @@ export function OnboardingPage() {
   if (checking) return null
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background p-4">
-      <Card className="w-full max-w-md">
-        <CardHeader>
-          <CardTitle>{done ? '搞定 🎉' : '创建你的团队'}</CardTitle>
-          <CardDescription>
-            {done
-              ? '你的团队已创建。后续可以在这里添加成员、配置仓库权限。'
-              : '团队是访问控制的中心。先给你的团队起个名字。'}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {done ? (
-            <Button onClick={() => navigate('/')}>进入控制台</Button>
-          ) : (
-            <form onSubmit={onSubmit} className="grid gap-3">
-              <div className="grid gap-1.5">
-                <Label htmlFor="name">团队名称</Label>
-                <Input
-                  id="name"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="例如 Acme"
-                  required
-                />
-              </div>
-              <div className="grid gap-1.5">
-                <Label htmlFor="slug">团队标识（slug）</Label>
-                <Input
-                  id="slug"
-                  value={slug}
-                  onChange={(e) => setSlug(slugify(e.target.value))}
-                  placeholder="例如 acme"
-                  pattern="[a-z0-9-]{1,32}"
-                  title="小写字母、数字、连字符，最多 32 位"
-                  required
-                />
-                <p className="text-xs text-muted-foreground">
-                  只含小写字母、数字和连字符。不填则从团队名生成。
-                </p>
-              </div>
-              {error ? <p className="text-sm text-destructive">{error}</p> : null}
-              <Button type="submit" disabled={busy}>
-                {busy ? '请稍候…' : '创建团队'}
-              </Button>
-            </form>
-          )}
-        </CardContent>
-      </Card>
-    </div>
+    <AuthShell
+      title={done ? 'Workspace ready' : 'Create your first team'}
+      description={
+        done
+          ? 'Your organization and team are ready.'
+          : 'Teams define the access boundary for repositories and automation.'
+      }
+    >
+      {done ? (
+        <div className="space-y-5">
+          <div className="border-y py-4 text-sm">
+            <div className="font-medium">{name}</div>
+            <div className="mt-1 text-xs text-muted-foreground">{slugify(slug || name)}</div>
+          </div>
+          <Button className="w-full" onClick={() => navigate('/')}>
+            Enter workspace
+          </Button>
+        </div>
+      ) : (
+        <form onSubmit={onSubmit} className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="name">Team name</Label>
+            <Input
+              id="name"
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              placeholder="Acme Engineering"
+              required
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="slug">Team slug</Label>
+            <Input
+              id="slug"
+              value={slug}
+              onChange={(event) => setSlug(slugify(event.target.value))}
+              placeholder="acme-engineering"
+              pattern="[a-z0-9-]{1,32}"
+              title="Lowercase letters, numbers and hyphens; up to 32 characters"
+              required
+            />
+            <p className="text-xs text-muted-foreground">Lowercase letters, numbers and hyphens.</p>
+          </div>
+          {error ? <p className="border-l-2 border-red-500 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
+          <Button className="w-full" type="submit" disabled={busy}>
+            {busy ? 'Creating…' : 'Create team'}
+          </Button>
+        </form>
+      )}
+    </AuthShell>
   )
 }

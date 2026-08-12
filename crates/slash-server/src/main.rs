@@ -159,6 +159,10 @@ async fn main() {
             get(test_engine_api::list_test_executions),
         )
         .route(
+            "/api/test-engine/tests/{id}/state",
+            axum::routing::patch(test_engine_api::set_test_state),
+        )
+        .route(
             "/api/test-engine/suites/{id}/tokens",
             get(test_engine_api::get_token).post(test_engine_api::issue_token),
         )

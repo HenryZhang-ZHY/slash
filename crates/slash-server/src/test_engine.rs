@@ -329,7 +329,7 @@ pub async fn quarantined_tests(conn: &PgPool, suite_id: Uuid) -> Result<Vec<Stri
 }
 
 /// A suite row for the console read API (§6 M2 / UI).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, sqlx::FromRow)]
 pub struct SuiteSummary {
     pub id: Uuid,
     pub suite_key: String,
@@ -338,6 +338,14 @@ pub struct SuiteSummary {
     pub total_tests: i64,
     pub muted: i64,
     pub skipped: i64,
+    pub run_count: i64,
+    pub execution_count: i64,
+    pub passed_executions: i64,
+    pub failed_executions: i64,
+    pub skipped_executions: i64,
+    pub errored_executions: i64,
+    pub average_duration_ms: Option<f64>,
+    pub last_captured: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// Lists suites for a tenancy, each with test counts by disposition — the data
@@ -347,55 +355,54 @@ pub async fn list_suites(
     installation_id: i64,
     user_id: Uuid,
 ) -> Result<Vec<SuiteSummary>, sqlx::Error> {
-    let rows: Vec<(Uuid, String, String, String, i64, i64, i64)> = sqlx::query_as(
+    sqlx::query_as::<_, SuiteSummary>(
         "SELECT ts.id, ts.suite_key, ts.owner, ts.repo,\n\
-            count(t.id) FILTER (WHERE t.id IS NOT NULL) AS total,\n\
-            count(t.id) FILTER (WHERE t.state = 'muted') AS muted,\n\
-            count(t.id) FILTER (WHERE t.state = 'skipped') AS skipped\n\
+            count(DISTINCT t.id) FILTER (WHERE t.id IS NOT NULL) AS total_tests,\n\
+            count(DISTINCT t.id) FILTER (WHERE t.state = 'muted') AS muted,\n\
+            count(DISTINCT t.id) FILTER (WHERE t.state = 'skipped') AS skipped,\n\
+            count(DISTINCT te.run_id) AS run_count,\n\
+            count(te.id) AS execution_count,\n\
+            count(te.id) FILTER (WHERE te.status = 'passed') AS passed_executions,\n\
+            count(te.id) FILTER (WHERE te.status = 'failed') AS failed_executions,\n\
+            count(te.id) FILTER (WHERE te.status = 'skipped') AS skipped_executions,\n\
+            count(te.id) FILTER (WHERE te.status = 'errored') AS errored_executions,\n\
+            avg(te.duration_ms)::float8 AS average_duration_ms,\n\
+            max(te.captured_at) AS last_captured\n\
          FROM test_suites ts\n\
          LEFT JOIN tests t ON t.suite_id = ts.id\n\
-            WHERE ts.installation_id = $1 AND ts.created_by_user_id = $2\n\
+         LEFT JOIN test_executions te ON te.test_id = t.id\n\
+         WHERE ts.installation_id = $1 AND ts.created_by_user_id = $2\n\
          GROUP BY ts.id ORDER BY ts.suite_key",
     )
     .bind(installation_id)
     .bind(user_id)
     .fetch_all(conn)
-    .await?;
-
-    Ok(rows
-        .into_iter()
-        .map(
-            |(id, suite_key, owner, repo, total_tests, muted, skipped)| SuiteSummary {
-                id,
-                suite_key,
-                owner,
-                repo,
-                total_tests,
-                muted,
-                skipped,
-            },
-        )
-        .collect())
+    .await
 }
 
 /// A test row for the console read API.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, sqlx::FromRow)]
 pub struct TestSummary {
     pub id: Uuid,
     pub name: String,
     pub state: String,
+    pub file: Option<String>,
+    pub line_no: Option<i32>,
+    pub labels: Vec<String>,
+    pub owner_team_ids: Vec<Uuid>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
     pub last_status: Option<String>,
     pub last_captured: Option<chrono::DateTime<chrono::Utc>>,
+    pub last_run_ref: Option<String>,
+    pub last_ci_provider: Option<String>,
+    pub execution_count: i64,
+    pub passed_count: i64,
+    pub failed_count: i64,
+    pub skipped_count: i64,
+    pub errored_count: i64,
+    pub average_duration_ms: Option<f64>,
 }
-
-/// Row type for `list_tests` (a suite's test + latest execution).
-type TestRow = (
-    Uuid,
-    String,
-    String,
-    Option<String>,
-    Option<chrono::DateTime<chrono::Utc>>,
-);
 
 /// Lists a suite's tests with current disposition and latest execution.
 pub async fn list_tests(
@@ -403,88 +410,96 @@ pub async fn list_tests(
     suite_id: Uuid,
     user_id: Uuid,
 ) -> Result<Vec<TestSummary>, sqlx::Error> {
-    let rows: Vec<TestRow> = sqlx::query_as(
-        "SELECT t.id, t.name, t.state, e.status, e.captured_at\n\
+    sqlx::query_as::<_, TestSummary>(
+        "SELECT t.id, t.name, t.state, t.file, t.line_no, t.labels, t.owner_team_ids,\n\
+                t.created_at, t.updated_at, e.status AS last_status,\n\
+                e.captured_at AS last_captured, e.run_ref AS last_run_ref,\n\
+                e.ci_provider AS last_ci_provider, count(te.id) AS execution_count,\n\
+                count(te.id) FILTER (WHERE te.status = 'passed') AS passed_count,\n\
+                count(te.id) FILTER (WHERE te.status = 'failed') AS failed_count,\n\
+                count(te.id) FILTER (WHERE te.status = 'skipped') AS skipped_count,\n\
+                count(te.id) FILTER (WHERE te.status = 'errored') AS errored_count,\n\
+                avg(te.duration_ms)::float8 AS average_duration_ms\n\
              FROM tests t\n\
              JOIN test_suites ts ON ts.id = t.suite_id\n\
              LEFT JOIN LATERAL (\n\
-               SELECT status, captured_at FROM test_executions\n\
-               WHERE test_id = t.id ORDER BY captured_at DESC LIMIT 1\n\
+               SELECT execution.status, execution.captured_at, run.run_ref, run.ci_provider\n\
+               FROM test_executions execution\n\
+               JOIN test_runs run ON run.id = execution.run_id\n\
+               WHERE execution.test_id = t.id\n\
+               ORDER BY execution.captured_at DESC LIMIT 1\n\
              ) e ON true\n\
-             WHERE t.suite_id = $1 AND ts.created_by_user_id = $2 ORDER BY t.name",
+             LEFT JOIN test_executions te ON te.test_id = t.id\n\
+             WHERE t.suite_id = $1 AND ts.created_by_user_id = $2\n\
+             GROUP BY t.id, e.status, e.captured_at, e.run_ref, e.ci_provider\n\
+             ORDER BY t.name",
     )
     .bind(suite_id)
     .bind(user_id)
     .fetch_all(conn)
-    .await?;
-    Ok(rows
-        .into_iter()
-        .map(
-            |(id, name, state, last_status, last_captured)| TestSummary {
-                id,
-                name,
-                state,
-                last_status,
-                last_captured,
-            },
-        )
-        .collect())
+    .await
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, sqlx::FromRow)]
 pub struct TestExecutionSummary {
     pub id: Uuid,
     pub status: String,
     pub duration_ms: i64,
+    pub stack: Option<String>,
     pub captured_at: chrono::DateTime<chrono::Utc>,
+    pub run_id: Uuid,
     pub run_ref: String,
     pub ci_provider: String,
+    pub started_at: chrono::DateTime<chrono::Utc>,
+    pub finished_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub invocation_id: Option<Uuid>,
 }
 
-type TestExecutionRow = (
-    Uuid,
-    String,
-    i64,
-    chrono::DateTime<chrono::Utc>,
-    String,
-    String,
-);
+pub struct TestExecutionPage {
+    pub total: i64,
+    pub items: Vec<TestExecutionSummary>,
+}
 
 /// Lists the latest executions for one test, scoped through its suite owner.
 pub async fn list_test_executions(
     conn: &PgPool,
     test_id: Uuid,
     user_id: Uuid,
-) -> Result<Vec<TestExecutionSummary>, sqlx::Error> {
-    let rows: Vec<TestExecutionRow> = sqlx::query_as(
-        "SELECT te.id, te.status, te.duration_ms, te.captured_at,
-                tr.run_ref, tr.ci_provider
+    limit: i64,
+    offset: i64,
+) -> Result<TestExecutionPage, sqlx::Error> {
+    let total = sqlx::query_scalar(
+        "SELECT count(te.id)
+         FROM test_executions te
+         JOIN tests t ON t.id = te.test_id
+         JOIN test_suites ts ON ts.id = t.suite_id
+         WHERE te.test_id = $1 AND ts.created_by_user_id = $2",
+    )
+    .bind(test_id)
+    .bind(user_id)
+    .fetch_one(conn)
+    .await?;
+
+    let items = sqlx::query_as::<_, TestExecutionSummary>(
+        "SELECT te.id, te.status, te.duration_ms, te.stack, te.captured_at,
+                tr.id AS run_id, tr.run_ref, tr.ci_provider, tr.started_at,
+                tr.finished_at, tr.invocation_id
          FROM test_executions te
          JOIN tests t ON t.id = te.test_id
          JOIN test_suites ts ON ts.id = t.suite_id
          JOIN test_runs tr ON tr.id = te.run_id
          WHERE te.test_id = $1 AND ts.created_by_user_id = $2
          ORDER BY te.captured_at DESC
-         LIMIT 20",
+         LIMIT $3 OFFSET $4",
     )
     .bind(test_id)
     .bind(user_id)
+    .bind(limit)
+    .bind(offset)
     .fetch_all(conn)
     .await?;
 
-    Ok(rows
-        .into_iter()
-        .map(
-            |(id, status, duration_ms, captured_at, run_ref, ci_provider)| TestExecutionSummary {
-                id,
-                status,
-                duration_ms,
-                captured_at,
-                run_ref,
-                ci_provider,
-            },
-        )
-        .collect())
+    Ok(TestExecutionPage { total, items })
 }
 
 /// Returns the observed execution statuses for a test within the last `window`
@@ -676,6 +691,24 @@ pub async fn suite_owned_by(
          )",
     )
     .bind(suite_id)
+    .bind(user_id)
+    .fetch_one(pool)
+    .await
+}
+
+pub async fn test_owned_by(
+    pool: &PgPool,
+    test_id: Uuid,
+    user_id: Uuid,
+) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT EXISTS (
+            SELECT 1 FROM tests t
+            JOIN test_suites ts ON ts.id = t.suite_id
+            WHERE t.id = $1 AND ts.created_by_user_id = $2
+         )",
+    )
+    .bind(test_id)
     .bind(user_id)
     .fetch_one(pool)
     .await
