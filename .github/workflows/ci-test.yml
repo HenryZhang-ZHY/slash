@@ -51,8 +51,18 @@ jobs:
           test_status=${PIPESTATUS[0]}
           set -e
 
+          jq -c '
+            select(.type == "test" and (.event == "ok" or .event == "failed" or .event == "ignored"))
+            | .status = (
+                if .event == "failed" then "failed"
+                elif .event == "ignored" then "ignored"
+                else "passed"
+                end
+              )
+          ' cargo-test.jsonl > cargo-test-results.jsonl
+
           echo "status=${test_status}" >> "$GITHUB_OUTPUT"
-          if grep -q '"type"[[:space:]]*:[[:space:]]*"test"' cargo-test.jsonl; then
+          if [ -s cargo-test-results.jsonl ]; then
             echo "has_results=true" >> "$GITHUB_OUTPUT"
           else
             echo "has_results=false" >> "$GITHUB_OUTPUT"
@@ -73,7 +83,7 @@ jobs:
             -X POST \
             -H "Authorization: Bearer ${SUITE_TOKEN}" \
             -H "Content-Type: application/x-ndjson" \
-            --data-binary @cargo-test.jsonl \
+            --data-binary @cargo-test-results.jsonl \
             "$UPLOAD_URL"
 
       - name: Preserve cargo test result
