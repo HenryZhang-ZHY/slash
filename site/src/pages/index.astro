@@ -21,7 +21,7 @@ const docsHref = (slug: string) => withBasePath(`/${slug}/`);
         {config.description}
       </p>
 
-      <div class="mt-10 grid grid-cols-1 gap-3 sm:grid-cols-3">
+      <div class="mt-10 grid grid-cols-1 gap-3 sm:grid-cols-2">
         <a
           href={docsHref("getting-started")}
           class="block rounded-lg border border-border p-4 transition-colors hover:border-border-strong no-underline"
@@ -42,6 +42,13 @@ const docsHref = (slug: string) => withBasePath(`/${slug}/`);
         >
           <div class="font-medium text-foreground">Deploy Slash</div>
           <div class="mt-0.5 text-sm text-muted-foreground">Run the server and Postgres</div>
+        </a>
+        <a
+          href={docsHref("api")}
+          class="block rounded-lg border border-border p-4 transition-colors hover:border-border-strong no-underline"
+        >
+          <div class="font-medium text-foreground">API reference</div>
+          <div class="mt-0.5 text-sm text-muted-foreground">Integrate with every server endpoint</div>
         </a>
       </div>
     </main>

@@ -1,0 +1,261 @@
+---
+title: Test Engine management
+description: "Manage suites, tests, execution history, states, and collection tokens."
+sidebar:
+  order: 2
+---
+
+All management endpoints require a valid `slash_session` cookie. Suite and
+test data is scoped to the account that owns the suite. Resources owned by a
+different account are reported as `404 Not Found` rather than revealing their
+existence.
+
+IDs in paths are UUIDs. Test Engine JSON fields use `snake_case`.
+
+## GET `/api/test-engine/suites`
+
+Lists the authenticated account's suites and aggregate execution counts.
+
+```sh
+curl -b cookies.txt \
+  https://slash.example.com/api/test-engine/suites
+```
+
+Success: `200 OK` with an array.
+
+```json
+[
+  {
+    "id": "0e1ef24a-927f-4094-bdaf-477e17c123b8",
+    "suite_key": "ci-test",
+    "owner": "acme",
+    "repo": "checkout",
+    "total_tests": 42,
+    "muted": 2,
+    "skipped": 1,
+    "run_count": 18,
+    "execution_count": 756,
+    "passed_executions": 718,
+    "failed_executions": 30,
+    "skipped_executions": 6,
+    "errored_executions": 2,
+    "average_duration_ms": 83.4,
+    "last_captured": "2026-08-12T04:00:00+00:00"
+  }
+]
+```
+
+`average_duration_ms` and `last_captured` are `null` until execution data is
+available. Storage failures return `500`.
+
+## POST `/api/test-engine/suites`
+
+Creates a suite, or reuses the matching suite when it is already owned by the
+current account. It also issues a collection token for ingestion.
+
+```sh
+curl -b cookies.txt \
+  -H "Content-Type: application/json" \
+  -d '{"owner":"acme","repo":"checkout","suite_key":"ci-test"}' \
+  https://slash.example.com/api/test-engine/suites
+```
+
+All three fields are required, trimmed, and limited to 255 bytes.
+
+Success: `201 Created`.
+
+```json
+{
+  "suite": {
+    "id": "0e1ef24a-927f-4094-bdaf-477e17c123b8",
+    "suite_key": "ci-test",
+    "owner": "acme",
+    "repo": "checkout",
+    "total_tests": 0,
+    "muted": 0,
+    "skipped": 0,
+    "run_count": 0,
+    "execution_count": 0,
+    "passed_executions": 0,
+    "failed_executions": 0,
+    "skipped_executions": 0,
+    "errored_executions": 0,
+    "average_duration_ms": null,
+    "last_captured": null
+  },
+  "token": "collection-token-value"
+}
+```
+
+The token is a secret. Store it in the CI system that uploads results.
+
+| Status | Meaning |
+| --- | --- |
+| `201` | Suite available and token issued |
+| `401` | No valid session |
+| `409` | A different account owns the matching suite |
+| `422` | A required field is empty or too long |
+| `500` | Suite or token persistence failed |
+
+## GET `/api/test-engine/suites/{id}/tests`
+
+Lists all tests in an owned suite, including their current disposal state,
+latest run metadata, and aggregate execution counts.
+
+```sh
+curl -b cookies.txt \
+  https://slash.example.com/api/test-engine/suites/0e1ef24a-927f-4094-bdaf-477e17c123b8/tests
+```
+
+Success: `200 OK` with an array.
+
+```json
+[
+  {
+    "id": "df5a68b4-bf9f-4745-a320-a7cd39b59249",
+    "name": "checkout::completes_order",
+    "state": "enabled",
+    "file": "tests/checkout.rs",
+    "line_no": 42,
+    "labels": [],
+    "owner_team_ids": [],
+    "created_at": "2026-08-12T03:00:00+00:00",
+    "updated_at": "2026-08-12T04:00:00+00:00",
+    "last_status": "passed",
+    "last_captured": "2026-08-12T04:00:00+00:00",
+    "last_run_ref": "build/1842",
+    "last_ci_provider": "buildkite",
+    "execution_count": 18,
+    "passed_count": 17,
+    "failed_count": 1,
+    "skipped_count": 0,
+    "errored_count": 0,
+    "average_duration_ms": 91.2
+  }
+]
+```
+
+Optional source, latest-run, and average fields may be `null`. An unknown or
+unowned suite returns `404`; storage failures return `500`.
+
+## GET `/api/test-engine/tests/{id}/executions`
+
+Returns one page of recent execution history for a test owned by the current
+account.
+
+| Query parameter | Default | Behavior |
+| --- | --- | --- |
+| `limit` | `100` | Clamped to `1..200` |
+| `offset` | `0` | Negative values become `0` |
+
+```sh
+curl -b cookies.txt \
+  "https://slash.example.com/api/test-engine/tests/df5a68b4-bf9f-4745-a320-a7cd39b59249/executions?limit=25&offset=0"
+```
+
+Success: `200 OK`.
+
+```json
+{
+  "total": 18,
+  "limit": 25,
+  "offset": 0,
+  "items": [
+    {
+      "id": "f8789438-fb99-45f6-a374-1335593264d1",
+      "status": "passed",
+      "duration_ms": 87,
+      "stack": null,
+      "captured_at": "2026-08-12T04:00:00+00:00",
+      "run_id": "68e4a959-c699-4e32-9164-a4500ecfe26d",
+      "run_ref": "build/1842",
+      "ci_provider": "buildkite",
+      "started_at": "2026-08-12T03:59:00+00:00",
+      "finished_at": "2026-08-12T04:01:00+00:00",
+      "invocation_id": null
+    }
+  ]
+}
+```
+
+Storage failures return `500`. A test outside the account's owned suites is
+not included in results.
+
+## PATCH `/api/test-engine/tests/{id}/state`
+
+Changes a test's disposal state.
+
+```sh
+curl -b cookies.txt -X PATCH \
+  -H "Content-Type: application/json" \
+  -d '{"state":"muted"}' \
+  https://slash.example.com/api/test-engine/tests/df5a68b4-bf9f-4745-a320-a7cd39b59249/state
+```
+
+Allowed values are `enabled`, `muted`, and `skipped`.
+
+Success: `200 OK`.
+
+```json
+{
+  "state": "muted"
+}
+```
+
+| Status | Meaning |
+| --- | --- |
+| `200` | State changed |
+| `404` | Test is unknown or not owned by the account |
+| `409` | The state update lost a concurrent change |
+| `422` | The requested state is unsupported |
+| `500` | Ownership lookup or update failed |
+
+## GET `/api/test-engine/suites/{id}/tokens`
+
+Returns the latest active, recoverable collection token for an owned suite.
+Legacy hash-only tokens cannot be recovered and appear as `null`.
+
+```json
+{
+  "token": "collection-token-value"
+}
+```
+
+Success is `200`. Unknown or unowned suites return `404`; storage or token
+decryption failures return `500`.
+
+## POST `/api/test-engine/suites/{id}/tokens`
+
+Issues a new recoverable collection token for an owned suite. The request has
+no body.
+
+```sh
+curl -b cookies.txt -X POST \
+  https://slash.example.com/api/test-engine/suites/0e1ef24a-927f-4094-bdaf-477e17c123b8/tokens
+```
+
+Success: `201 Created`.
+
+```json
+{
+  "token": "new-collection-token-value"
+}
+```
+
+Unknown or unowned suites return `404`; issuance failures return `500`.
+
+## POST `/api/test-engine/suites/{id}/tokens/revoke`
+
+Revokes one collection token. Send the exact raw token still held by the
+caller; Slash hashes it before lookup.
+
+```sh
+curl -b cookies.txt \
+  -H "Content-Type: application/json" \
+  -d '{"token":"collection-token-value"}' \
+  https://slash.example.com/api/test-engine/suites/0e1ef24a-927f-4094-bdaf-477e17c123b8/tokens/revoke
+```
+
+Success is `204 No Content`. An unknown, already revoked, or unowned token
+returns `404`; storage failures return `500`. Revoked tokens immediately stop
+authenticating ingestion requests.

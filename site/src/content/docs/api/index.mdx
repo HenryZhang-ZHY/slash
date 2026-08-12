@@ -1,0 +1,83 @@
+---
+title: API reference
+description: "HTTP endpoints exposed by slash-server."
+sidebar:
+  order: 7
+---
+
+Slash serves its HTTP API and web console from the same origin. Replace
+`https://slash.example.com` in the examples with the origin of your Slash
+deployment.
+
+All request bodies share a **5 MiB limit**. UUID path parameters use the
+standard hyphenated UUID representation. Timestamps in JSON responses are
+RFC 3339 strings.
+
+## Authentication methods
+
+| Surface | Authentication |
+| --- | --- |
+| Account, team, and Test Engine management | `slash_session` cookie issued by register or login |
+| Test result ingestion and quarantine lookup | `Authorization: Bearer <collection-token>` |
+| GitHub webhook | `X-Hub-Signature-256` HMAC signature |
+| Health and metrics | None |
+
+## Endpoint inventory
+
+The tables below list every route registered by `slash-server`.
+
+### [Authentication and teams](/api/authentication/)
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/auth/register` | Create an account and session |
+| `POST` | `/api/auth/login` | Create a session |
+| `POST` | `/api/auth/logout` | Clear the current session |
+| `GET` | `/api/auth/me` | Read the current user and teams |
+| `POST` | `/api/teams` | Create a team |
+
+### [Test Engine management](/api/test-engine/)
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/test-engine/suites` | List owned suites |
+| `POST` | `/api/test-engine/suites` | Create or reuse a suite |
+| `GET` | `/api/test-engine/suites/{id}/tests` | List tests in a suite |
+| `GET` | `/api/test-engine/tests/{id}/executions` | List execution history |
+| `PATCH` | `/api/test-engine/tests/{id}/state` | Change a test's disposal state |
+| `GET` | `/api/test-engine/suites/{id}/tokens` | Read the latest active token |
+| `POST` | `/api/test-engine/suites/{id}/tokens` | Issue a collection token |
+| `POST` | `/api/test-engine/suites/{id}/tokens/revoke` | Revoke a collection token |
+
+### [Test result ingestion](/api/ingestion/)
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/v1/test-engine/upload` | Upload normalized JSON or JUnit XML |
+| `POST` | `/v1/test-engine/upload/cargo` | Upload Cargo libtest JSON events |
+| `POST` | `/v1/test-engine/upload/vitest` | Upload Vitest results |
+| `GET` | `/v1/test-engine/quarantined` | List muted or skipped test names |
+
+### [Webhook and operations](/api/platform/)
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/webhook` | Receive signed GitHub webhook deliveries |
+| `GET` | `/healthz` | Liveness probe |
+| `GET` | `/metrics` | Prometheus metrics |
+
+## Error conventions
+
+Account and team endpoints return JSON errors in this shape:
+
+```json
+{
+  "error": "invalid email"
+}
+```
+
+The create-suite endpoint uses `{ "message": "..." }` for validation and
+ownership conflicts. Other Test Engine management and ingestion failures may
+return an empty body with the HTTP status documented for the operation.
+
+Unknown `/api/*` routes return `404` with `{ "error": "not found" }`.
