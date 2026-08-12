@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
+import { Check, Copy, Eye, EyeOff, KeyRound, Plus } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { testEngineApi, type TestSuiteSummary, type TestSummary } from '@/lib/api'
 
 const STATE_BADGE: Record<TestSummary['state'], string> = {
@@ -13,6 +16,11 @@ function SuiteCard({ suite }: { suite: TestSuiteSummary }) {
   const [tests, setTests] = useState<TestSummary[] | null>(null)
   const [open, setOpen] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [token, setToken] = useState<string | null>(null)
+  const [tokenLoaded, setTokenLoaded] = useState(false)
+  const [tokenVisible, setTokenVisible] = useState(false)
+  const [copied, setCopied] = useState(false)
+  const [issuingToken, setIssuingToken] = useState(false)
 
   const loadTests = useCallback(() => {
     setError(null)
@@ -23,10 +31,42 @@ function SuiteCard({ suite }: { suite: TestSuiteSummary }) {
       .catch((e) => setError(e instanceof Error ? e.message : '加载失败'))
   }, [suite.id])
 
+  const loadToken = useCallback(() => {
+    setTokenLoaded(false)
+    testEngineApi
+      .getToken(suite.id)
+      .then((result) => setToken(result.token))
+      .catch((e) => setError(e instanceof Error ? e.message : 'Token 加载失败'))
+      .finally(() => setTokenLoaded(true))
+  }, [suite.id])
+
   const toggle = () => {
     const next = !open
     setOpen(next)
     if (next && tests === null) loadTests()
+    if (next && !tokenLoaded) loadToken()
+  }
+
+  const issueToken = async () => {
+    setIssuingToken(true)
+    setError(null)
+    try {
+      const result = await testEngineApi.issueToken(suite.id)
+      setToken(result.token)
+      setTokenLoaded(true)
+      setTokenVisible(false)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Token 生成失败')
+    } finally {
+      setIssuingToken(false)
+    }
+  }
+
+  const copyToken = async () => {
+    if (!token) return
+    await navigator.clipboard.writeText(token)
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 1500)
   }
 
   return (
@@ -51,11 +91,51 @@ function SuiteCard({ suite }: { suite: TestSuiteSummary }) {
 
       {open && (
         <div className="border-t px-4 py-3">
+          <div className="mb-4">
+            <Label htmlFor={`suite-token-${suite.id}`}>Collection token</Label>
+            <div className="mt-1.5 flex items-center gap-2">
+              <Input
+                id={`suite-token-${suite.id}`}
+                className="font-mono"
+                type={tokenVisible ? 'text' : 'password'}
+                value={token ?? ''}
+                placeholder={tokenLoaded ? '尚无可显示 token' : '加载中…'}
+                readOnly
+              />
+              <Button
+                type="button"
+                size="icon"
+                variant="outline"
+                onClick={() => setTokenVisible((visible) => !visible)}
+                disabled={!token}
+                title={tokenVisible ? '隐藏 token' : '显示 token'}
+                aria-label={tokenVisible ? '隐藏 token' : '显示 token'}
+              >
+                {tokenVisible ? <EyeOff /> : <Eye />}
+              </Button>
+              <Button
+                type="button"
+                size="icon"
+                variant="outline"
+                onClick={copyToken}
+                disabled={!token}
+                title="复制 token"
+                aria-label="复制 token"
+              >
+                {copied ? <Check /> : <Copy />}
+              </Button>
+              <Button size="sm" variant="outline" onClick={issueToken} disabled={issuingToken}>
+                <KeyRound />
+                {issuingToken ? '生成中…' : '生成新 token'}
+              </Button>
+            </div>
+          </div>
           {error ? (
-            <div className="flex items-center gap-3 text-sm text-red-600">
+            <div className="mb-3 flex items-center gap-3 text-sm text-red-600">
               {error} <Button size="sm" variant="outline" onClick={loadTests}>重试</Button>
             </div>
-          ) : tests === null ? (
+          ) : null}
+          {tests === null ? (
             <div className="text-sm text-muted-foreground">加载中…</div>
           ) : (
             <div className="overflow-hidden rounded-md border">
@@ -103,6 +183,11 @@ function SuiteCard({ suite }: { suite: TestSuiteSummary }) {
 export function TestEnginePage() {
   const [suites, setSuites] = useState<TestSuiteSummary[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [owner, setOwner] = useState('')
+  const [repo, setRepo] = useState('')
+  const [suiteKey, setSuiteKey] = useState('ci-test')
+  const [creating, setCreating] = useState(false)
+  const [createError, setCreateError] = useState<string | null>(null)
 
   const load = useCallback(() => {
     setError(null)
@@ -121,6 +206,23 @@ export function TestEnginePage() {
 
   useEffect(load, [load])
 
+  const createSuite = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    setCreating(true)
+    setCreateError(null)
+    try {
+      const result = await testEngineApi.createSuite(owner, repo, suiteKey)
+      setSuites((current) => [
+        result.suite,
+        ...(current ?? []).filter((suite) => suite.id !== result.suite.id),
+      ])
+    } catch (e) {
+      setCreateError(e instanceof Error ? e.message : 'Suite 创建失败')
+    } finally {
+      setCreating(false)
+    }
+  }
+
   return (
     <div className="mx-auto max-w-3xl p-6">
       <div className="flex items-center justify-between">
@@ -130,10 +232,49 @@ export function TestEnginePage() {
         </Button>
       </div>
       <p className="mt-1 text-sm text-muted-foreground">
-        人工测试用：查看已采集的 suite/tests 与 flaky 隔离状态。采集入口：
+        管理采集 suite、collection token 与 flaky 隔离状态。采集入口：
         <code className="mx-1 rounded bg-muted px-1 py-0.5 text-xs">POST /v1/test-engine/upload</code>
         、<code className="mx-1 rounded bg-muted px-1 py-0.5 text-xs">/cargo</code>、<code className="mx-1 rounded bg-muted px-1 py-0.5 text-xs">/vitest</code>
       </p>
+
+      <form onSubmit={createSuite} className="mt-6 border-y py-4">
+        <div className="grid gap-3 sm:grid-cols-[1fr_1fr_1fr_auto] sm:items-end">
+          <div className="space-y-1.5">
+            <Label htmlFor="suite-owner">GitHub owner</Label>
+            <Input
+              id="suite-owner"
+              value={owner}
+              onChange={(event) => setOwner(event.target.value)}
+              placeholder="HenryZhang-ZHY"
+              required
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="suite-repo">Repository</Label>
+            <Input
+              id="suite-repo"
+              value={repo}
+              onChange={(event) => setRepo(event.target.value)}
+              placeholder="slash"
+              required
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="suite-key">Suite key</Label>
+            <Input
+              id="suite-key"
+              value={suiteKey}
+              onChange={(event) => setSuiteKey(event.target.value)}
+              required
+            />
+          </div>
+          <Button type="submit" disabled={creating}>
+            <Plus />
+            {creating ? '创建中…' : '创建 suite'}
+          </Button>
+        </div>
+        {createError && <p className="mt-2 text-sm text-red-600">{createError}</p>}
+      </form>
 
       <div className="mt-6 space-y-3">
         {error ? (
@@ -144,10 +285,10 @@ export function TestEnginePage() {
           <div className="text-sm text-muted-foreground">加载中…</div>
         ) : suites.length === 0 ? (
           <div className="rounded-lg border px-4 py-6 text-sm text-muted-foreground">
-            还没有任何 suite。向 <code className="rounded bg-muted px-1">/v1/test-engine/upload</code> 上传一组测试结果后，这里会列出它们。
+            还没有任何 suite。先在上方创建 suite，再把一次性 token 配置到 CI。
           </div>
         ) : (
-          suites.map((s) => <SuiteCard key={s.id} suite={s} />)
+          suites.map((suite) => <SuiteCard key={suite.id} suite={suite} />)
         )}
       </div>
     </div>

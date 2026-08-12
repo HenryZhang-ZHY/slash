@@ -148,7 +148,7 @@ async fn main() {
         .route("/api/teams", post(userapi::create_team))
         .route(
             "/api/test-engine/suites",
-            get(test_engine_api::list_suites),
+            get(test_engine_api::list_suites).post(test_engine_api::create_suite),
         )
         .route(
             "/api/test-engine/suites/{id}/tests",
@@ -156,7 +156,7 @@ async fn main() {
         )
         .route(
             "/api/test-engine/suites/{id}/tokens",
-            post(test_engine_api::issue_token),
+            get(test_engine_api::get_token).post(test_engine_api::issue_token),
         )
         .route(
             "/api/test-engine/suites/{id}/tokens/revoke",

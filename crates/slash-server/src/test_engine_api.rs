@@ -3,14 +3,13 @@
 //! console page (`/tests` in `web/`): list suites + tests with their current
 //! disposition so a human can eyeball what's been ingested / quarantined.
 //!
-//! Auth: the same HttpOnly session (`UserId` extractor) as the org/user API, so
-//! the console page rides the existing login. Scope at MVP = all suites for the
-//! configured primary installation (`installation_id` selectable in future when
-//! granting/tenancy models land).
+//! Auth: the same HttpOnly session (`UserId` extractor) as the org/user API.
+//! Suite management and reads are scoped to the account that created the suite.
 
 use axum::Json;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 
 use crate::AppState;
@@ -22,13 +21,127 @@ use crate::userapi::UserId;
 /// instance is installed on.
 const CONSOLE_INSTALLATION_ID: i64 = 1;
 
+#[derive(Debug, Deserialize)]
+pub struct CreateSuiteRequest {
+    owner: String,
+    repo: String,
+    suite_key: String,
+}
+
+struct NormalizedCreateSuite {
+    owner: String,
+    repo: String,
+    suite_key: String,
+}
+
+fn normalize_create_suite(request: CreateSuiteRequest) -> Option<NormalizedCreateSuite> {
+    let normalized = NormalizedCreateSuite {
+        owner: request.owner.trim().to_string(),
+        repo: request.repo.trim().to_string(),
+        suite_key: request.suite_key.trim().to_string(),
+    };
+    let fields = [&normalized.owner, &normalized.repo, &normalized.suite_key];
+    fields
+        .iter()
+        .all(|field| !field.is_empty() && field.len() <= 255)
+        .then_some(normalized)
+}
+
+/// `POST /api/test-engine/suites` — create (or reuse) a suite and issue its
+/// first collection token so a new repository can bootstrap ingestion.
+pub async fn create_suite(
+    State(state): State<AppState>,
+    auth_user: UserId,
+    Json(request): Json<CreateSuiteRequest>,
+) -> Response {
+    let Some(suite) = normalize_create_suite(request) else {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ErrorOut {
+                message: "owner, repo, and suite_key are required",
+            }),
+        )
+            .into_response();
+    };
+
+    let mut tx = match state.pool.begin().await {
+        Ok(tx) => tx,
+        Err(error) => {
+            tracing::error!(%error, "test-engine suite transaction failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    let suite_id = match test_engine::upsert_owned_suite(
+        &mut tx,
+        &test_engine::NewSuite {
+            installation_id: CONSOLE_INSTALLATION_ID,
+            owner: &suite.owner,
+            repo: &suite.repo,
+            suite_key: &suite.suite_key,
+        },
+        auth_user.0,
+    )
+    .await
+    {
+        Ok(Some(id)) => id,
+        Ok(None) => {
+            return (
+                StatusCode::CONFLICT,
+                Json(ErrorOut {
+                    message: "suite is owned by another account",
+                }),
+            )
+                .into_response();
+        }
+        Err(error) => {
+            tracing::error!(%error, "test-engine suite creation failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    if let Err(error) = tx.commit().await {
+        tracing::error!(%error, "test-engine suite commit failed");
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
+    let token = match test_engine::issue_recoverable_collection_token(
+        &state.pool,
+        suite_id,
+        &state.auth_secret,
+    )
+    .await
+    {
+        Ok(token) => token,
+        Err(error) => {
+            tracing::error!(%error, suite = %suite_id, "test-engine initial token issue failed");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    (
+        StatusCode::CREATED,
+        Json(SuiteCreated {
+            suite: SuiteOut {
+                id: suite_id.to_string(),
+                suite_key: suite.suite_key,
+                owner: suite.owner,
+                repo: suite.repo,
+                total_tests: 0,
+                muted: 0,
+                skipped: 0,
+            },
+            token,
+        }),
+    )
+        .into_response()
+}
+
 /// `GET /api/test-engine/suites` — suites for the console, each with test
 /// counts by disposition.
 pub async fn list_suites(
     State(state): State<AppState>,
-    _auth: UserId,
+    auth_user: UserId,
 ) -> Result<Json<Vec<SuiteOut>>, StatusCode> {
-    match test_engine::list_suites(&state.pool, CONSOLE_INSTALLATION_ID).await {
+    match test_engine::list_suites(&state.pool, CONSOLE_INSTALLATION_ID, auth_user.0).await {
         Ok(suites) => Ok(Json(
             suites
                 .into_iter()
@@ -54,10 +167,11 @@ pub async fn list_suites(
 /// and latest execution status.
 pub async fn list_tests(
     State(state): State<AppState>,
-    _auth: UserId,
+    auth_user: UserId,
     Path(id): Path<uuid::Uuid>,
 ) -> Result<Json<Vec<TestOut>>, StatusCode> {
-    match test_engine::list_tests(&state.pool, id).await {
+    require_suite_owner(&state, id, auth_user.0).await?;
+    match test_engine::list_tests(&state.pool, id, auth_user.0).await {
         Ok(tests) => Ok(Json(
             tests
                 .into_iter()
@@ -78,18 +192,38 @@ pub async fn list_tests(
 }
 
 /// `POST /api/test-engine/suites/{id}/tokens` — issue a new per-suite
-/// collection token (M2-4 token management). The raw token is returned exactly
-/// once; only its sha256 hash is stored. Session-auth-guarded like the console
-/// read API.
+/// collection token (M2-4 token management). Its hash authenticates ingestion;
+/// its encrypted value remains available to the owning account.
 pub async fn issue_token(
     State(state): State<AppState>,
-    _auth: UserId,
+    auth_user: UserId,
     Path(id): Path<uuid::Uuid>,
 ) -> Result<(StatusCode, Json<TokenIssued>), StatusCode> {
-    match test_engine::issue_collection_token(&state.pool, id).await {
+    require_suite_owner(&state, id, auth_user.0).await?;
+    match test_engine::issue_recoverable_collection_token(&state.pool, id, &state.auth_secret).await
+    {
         Ok(raw) => Ok((StatusCode::CREATED, Json(TokenIssued { token: raw }))),
         Err(error) => {
             tracing::error!(%error, suite = %id, "test-engine token issue failed");
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+/// `GET /api/test-engine/suites/{id}/tokens` — return the latest active token
+/// to its owning account. Legacy hash-only tokens return `null` until rotated.
+pub async fn get_token(
+    State(state): State<AppState>,
+    auth_user: UserId,
+    Path(id): Path<uuid::Uuid>,
+) -> Result<Json<CurrentToken>, StatusCode> {
+    require_suite_owner(&state, id, auth_user.0).await?;
+    match test_engine::latest_collection_token(&state.pool, id, auth_user.0, &state.auth_secret)
+        .await
+    {
+        Ok(token) => Ok(Json(CurrentToken { token })),
+        Err(error) => {
+            tracing::error!(%error, suite = %id, "test-engine token read failed");
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
@@ -107,10 +241,11 @@ pub struct RevokeTokenRequest {
 /// revoked tokens no longer authenticate.
 pub async fn revoke_token(
     State(state): State<AppState>,
-    _auth: UserId,
+    auth_user: UserId,
     Path(id): Path<uuid::Uuid>,
     Json(req): Json<RevokeTokenRequest>,
 ) -> Result<StatusCode, StatusCode> {
+    require_suite_owner(&state, id, auth_user.0).await?;
     match test_engine::revoke_collection_token(&state.pool, id, &req.token).await {
         Ok(true) => Ok(StatusCode::NO_CONTENT),
         Ok(false) => Err(StatusCode::NOT_FOUND),
@@ -144,4 +279,78 @@ pub struct TestOut {
 #[derive(Debug, serde::Serialize)]
 pub struct TokenIssued {
     token: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct CurrentToken {
+    token: Option<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct SuiteCreated {
+    suite: SuiteOut,
+    token: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct ErrorOut {
+    message: &'static str,
+}
+
+async fn require_suite_owner(
+    state: &AppState,
+    suite_id: uuid::Uuid,
+    user_id: uuid::Uuid,
+) -> Result<(), StatusCode> {
+    match test_engine::suite_owned_by(&state.pool, suite_id, user_id).await {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(StatusCode::NOT_FOUND),
+        Err(error) => {
+            tracing::error!(%error, suite = %suite_id, "test-engine suite ownership lookup failed");
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn create_suite_fields_are_trimmed() {
+        let request = CreateSuiteRequest {
+            owner: " HenryZhang-ZHY ".to_string(),
+            repo: " slash ".to_string(),
+            suite_key: " ci-test ".to_string(),
+        };
+
+        let normalized = normalize_create_suite(request).expect("request should be valid");
+
+        assert_eq!(normalized.owner, "HenryZhang-ZHY");
+        assert_eq!(normalized.repo, "slash");
+        assert_eq!(normalized.suite_key, "ci-test");
+    }
+
+    #[test]
+    fn create_suite_rejects_blank_fields() {
+        for request in [
+            CreateSuiteRequest {
+                owner: "".to_string(),
+                repo: "slash".to_string(),
+                suite_key: "ci-test".to_string(),
+            },
+            CreateSuiteRequest {
+                owner: "HenryZhang-ZHY".to_string(),
+                repo: "  ".to_string(),
+                suite_key: "ci-test".to_string(),
+            },
+            CreateSuiteRequest {
+                owner: "HenryZhang-ZHY".to_string(),
+                repo: "slash".to_string(),
+                suite_key: "\t".to_string(),
+            },
+        ] {
+            assert!(normalize_create_suite(request).is_none());
+        }
+    }
 }

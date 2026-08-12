@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Navigate, Route, BrowserRouter, Routes } from 'react-router-dom'
+import { FlaskConical } from 'lucide-react'
+import { Navigate, Route, BrowserRouter, Routes, useNavigate } from 'react-router-dom'
 
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
@@ -9,6 +10,7 @@ import { OnboardingPage } from '@/pages/OnboardingPage'
 import { TestEnginePage } from '@/pages/TestEnginePage'
 
 function HomePage() {
+  const navigate = useNavigate()
   const [me, setMe] = useState<MeResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -47,9 +49,13 @@ function HomePage() {
 
   return (
     <div className="mx-auto max-w-2xl p-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-xl font-semibold">Slash 控制台</h1>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <Button variant="outline" onClick={() => navigate('/tests')}>
+            <FlaskConical />
+            Test Engine
+          </Button>
           <span className="text-sm text-muted-foreground">{me.user.email}</span>
           <Button variant="ghost" onClick={logout}>
             退出

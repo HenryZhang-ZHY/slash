@@ -94,8 +94,24 @@ export interface TestSummary {
   last_captured: string | null
 }
 
+export interface SuiteCreated {
+  suite: TestSuiteSummary
+  token: string
+}
+
 export const testEngineApi = {
   listSuites: () => request<TestSuiteSummary[]>('/api/test-engine/suites'),
+  createSuite: (owner: string, repo: string, suiteKey: string) =>
+    request<SuiteCreated>('/api/test-engine/suites', {
+      method: 'POST',
+      body: JSON.stringify({ owner, repo, suite_key: suiteKey }),
+    }),
   listTests: (suiteId: string) =>
     request<TestSummary[]>(`/api/test-engine/suites/${suiteId}/tests`),
+  getToken: (suiteId: string) =>
+    request<{ token: string | null }>(`/api/test-engine/suites/${suiteId}/tokens`),
+  issueToken: (suiteId: string) =>
+    request<{ token: string }>(`/api/test-engine/suites/${suiteId}/tokens`, {
+      method: 'POST',
+    }),
 }

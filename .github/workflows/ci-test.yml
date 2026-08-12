@@ -1,0 +1,88 @@
+name: CI Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      slash_run_id: { required: false }
+      slash_pr_number: { required: false }
+      slash_head_sha: { required: false }
+      slash_actor: { required: false }
+      slash_actor_id: { required: false }
+
+permissions:
+  contents: read
+
+jobs:
+  rust-tests:
+    name: Rust workspace tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: slash
+          POSTGRES_PASSWORD: slash
+          POSTGRES_DB: slash
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U slash"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      SLASH_TEST_DATABASE_URL: postgres://slash:slash@localhost:5432/slash
+    steps:
+      - name: Check out the tested revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.slash_head_sha || github.sha }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.88.0
+
+      - name: Run tests
+        id: tests
+        shell: bash
+        run: |
+          set +e
+          RUSTC_BOOTSTRAP=1 cargo test --workspace -- -Z unstable-options --format json --report-time \
+            | tee cargo-test.jsonl
+          test_status=${PIPESTATUS[0]}
+          set -e
+
+          echo "status=${test_status}" >> "$GITHUB_OUTPUT"
+          if grep -q '"type":"test"' cargo-test.jsonl; then
+            echo "has_results=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_results=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::cargo test produced no collectable test events"
+          fi
+
+      - name: Upload results to Slash
+        if: ${{ steps.tests.outputs.has_results == 'true' }}
+        env:
+          UPLOAD_URL: ${{ vars.TEST_ENGINE_CARGO_UPLOAD_URL }}
+          SUITE_TOKEN: ${{ secrets.TEST_ENGINE_SUITE_TOKEN }}
+        run: |
+          if [ -z "$UPLOAD_URL" ] || [ -z "$SUITE_TOKEN" ]; then
+            echo "::error::Slash Test Engine repository variable or suite token is missing"
+            exit 1
+          fi
+          curl --fail-with-body --retry 3 --retry-all-errors \
+            -X POST \
+            -H "Authorization: Bearer ${SUITE_TOKEN}" \
+            -H "Content-Type: application/x-ndjson" \
+            --data-binary @cargo-test.jsonl \
+            "$UPLOAD_URL"
+
+      - name: Preserve cargo test result
+        if: ${{ always() }}
+        env:
+          TEST_STATUS: ${{ steps.tests.outputs.status }}
+        run: |
+          if [ -z "$TEST_STATUS" ]; then
+            echo "::error::cargo test did not report an exit status"
+            exit 1
+          fi
+          exit "$TEST_STATUS"

@@ -136,6 +136,34 @@ pub async fn upsert_suite(
     Ok(id)
 }
 
+/// Creates or claims an unowned suite for a console user. A suite already
+/// owned by another user is not returned and cannot be taken over.
+pub async fn upsert_owned_suite(
+    tx: &mut Transaction<'_, Postgres>,
+    suite: &NewSuite<'_>,
+    user_id: Uuid,
+) -> Result<Option<Uuid>, sqlx::Error> {
+    let row: Option<(Uuid,)> = sqlx::query_as(
+        "INSERT INTO test_suites
+            (id, installation_id, owner, repo, suite_key, created_by_user_id)
+         VALUES ($1, $2, $3, $4, $5, $6)
+         ON CONFLICT (installation_id, owner, repo, suite_key) DO UPDATE
+            SET created_by_user_id = COALESCE(test_suites.created_by_user_id, EXCLUDED.created_by_user_id)
+            WHERE test_suites.created_by_user_id IS NULL
+               OR test_suites.created_by_user_id = EXCLUDED.created_by_user_id
+         RETURNING id",
+    )
+    .bind(Uuid::new_v4())
+    .bind(suite.installation_id)
+    .bind(suite.owner)
+    .bind(suite.repo)
+    .bind(suite.suite_key)
+    .bind(user_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    Ok(row.map(|(id,)| id))
+}
+
 /// Resolves (creating if absent) a test within a suite, returning its id.
 ///
 /// **First-writer-wins on metadata.** Test identity is `(suite_id, name)`;
@@ -317,6 +345,7 @@ pub struct SuiteSummary {
 pub async fn list_suites(
     conn: &PgPool,
     installation_id: i64,
+    user_id: Uuid,
 ) -> Result<Vec<SuiteSummary>, sqlx::Error> {
     let rows: Vec<(Uuid, String, String, String, i64, i64, i64)> = sqlx::query_as(
         "SELECT ts.id, ts.suite_key, ts.owner, ts.repo,\n\
@@ -325,10 +354,11 @@ pub async fn list_suites(
                 count(t.id) FILTER (WHERE t.state = 'skipped')::int8 AS skipped\n\
          FROM test_suites ts\n\
          LEFT JOIN tests t ON t.suite_id = ts.id\n\
-         WHERE ts.installation_id = $1\n\
+            WHERE ts.installation_id = $1 AND ts.created_by_user_id = $2\n\
          GROUP BY ts.id ORDER BY ts.suite_key",
     )
     .bind(installation_id)
+    .bind(user_id)
     .fetch_all(conn)
     .await?;
 
@@ -368,17 +398,23 @@ type TestRow = (
 );
 
 /// Lists a suite's tests with current disposition and latest execution.
-pub async fn list_tests(conn: &PgPool, suite_id: Uuid) -> Result<Vec<TestSummary>, sqlx::Error> {
+pub async fn list_tests(
+    conn: &PgPool,
+    suite_id: Uuid,
+    user_id: Uuid,
+) -> Result<Vec<TestSummary>, sqlx::Error> {
     let rows: Vec<TestRow> = sqlx::query_as(
         "SELECT t.id, t.name, t.state, e.status, e.captured_at\n\
              FROM tests t\n\
+             JOIN test_suites ts ON ts.id = t.suite_id\n\
              LEFT JOIN LATERAL (\n\
                SELECT status, captured_at FROM test_executions\n\
                WHERE test_id = t.id ORDER BY captured_at DESC LIMIT 1\n\
              ) e ON true\n\
-             WHERE t.suite_id = $1 ORDER BY t.name",
+             WHERE t.suite_id = $1 AND ts.created_by_user_id = $2 ORDER BY t.name",
     )
     .bind(suite_id)
+    .bind(user_id)
     .fetch_all(conn)
     .await?;
     Ok(rows
@@ -451,6 +487,80 @@ fn parse_execution_status(status: &str) -> ExecutionStatus {
 
 // --- collection tokens (design §4) ---
 
+#[derive(Debug, Clone)]
+pub struct EncryptedCollectionToken {
+    pub ciphertext: Vec<u8>,
+    pub nonce: Vec<u8>,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum TokenCryptoError {
+    #[error("collection token encryption failed")]
+    Encryption,
+    #[error("collection token decryption failed")]
+    Decryption,
+}
+
+fn collection_token_cipher(
+    secret: &crate::auth::AuthSecret,
+) -> Result<aes_gcm::Aes256Gcm, TokenCryptoError> {
+    use aes_gcm::KeyInit;
+    use sha2::{Digest, Sha256};
+
+    let mut hasher = Sha256::new();
+    hasher.update(b"slash:collection-token:v1\0");
+    hasher.update(secret.0.as_bytes());
+    let key: [u8; 32] = hasher.finalize().into();
+    aes_gcm::Aes256Gcm::new_from_slice(&key).map_err(|_| TokenCryptoError::Encryption)
+}
+
+pub fn encrypt_collection_token(
+    raw_token: &str,
+    secret: &crate::auth::AuthSecret,
+) -> Result<EncryptedCollectionToken, TokenCryptoError> {
+    use aes_gcm::aead::{Aead, AeadCore, OsRng};
+
+    let cipher = collection_token_cipher(secret)?;
+    let nonce = aes_gcm::Aes256Gcm::generate_nonce(&mut OsRng);
+    let ciphertext = cipher
+        .encrypt(&nonce, raw_token.as_bytes())
+        .map_err(|_| TokenCryptoError::Encryption)?;
+    Ok(EncryptedCollectionToken {
+        ciphertext,
+        nonce: nonce.to_vec(),
+    })
+}
+
+pub fn decrypt_collection_token(
+    encrypted: &EncryptedCollectionToken,
+    secret: &crate::auth::AuthSecret,
+) -> Result<String, TokenCryptoError> {
+    use aes_gcm::aead::Aead;
+
+    if encrypted.nonce.len() != 12 {
+        return Err(TokenCryptoError::Decryption);
+    }
+    let cipher = collection_token_cipher(secret).map_err(|_| TokenCryptoError::Decryption)?;
+    let nonce_bytes: [u8; 12] = encrypted
+        .nonce
+        .as_slice()
+        .try_into()
+        .map_err(|_| TokenCryptoError::Decryption)?;
+    let nonce = aes_gcm::Nonce::from(nonce_bytes);
+    let plaintext = cipher
+        .decrypt(&nonce, encrypted.ciphertext.as_ref())
+        .map_err(|_| TokenCryptoError::Decryption)?;
+    String::from_utf8(plaintext).map_err(|_| TokenCryptoError::Decryption)
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum RecoverableTokenError {
+    #[error(transparent)]
+    Database(#[from] sqlx::Error),
+    #[error(transparent)]
+    Crypto(#[from] TokenCryptoError),
+}
+
 /// Tenancy resolved from a collection token's suite.
 #[derive(Debug, Clone)]
 pub struct SuiteTokenIdentity {
@@ -474,29 +584,76 @@ pub fn hash_token(token: &str) -> [u8; 32] {
     hasher.finalize().into()
 }
 
-/// Issues a new collection token scoped to a suite, storing only its sha256
-/// hash. Returns the raw token exactly once; the caller is responsible for
-/// handing it to the collector.
-///
-/// The mint path is exercised by the integration tests in M1 (suite
-/// provisioning); the actual token-issuance admin surface lands in M2, so it
-/// Issues a new collection token scoped to a suite, storing only its sha256
-/// hash. Returns the raw token exactly once; the caller is responsible for
-/// handing it to the collector. Backs the M2-4 token-management surface.
-pub async fn issue_collection_token(pool: &PgPool, suite_id: Uuid) -> Result<String, sqlx::Error> {
+/// Issues a token whose hash authenticates ingestion and whose AES-GCM
+/// ciphertext can be recovered by the owning user in the console.
+pub async fn issue_recoverable_collection_token(
+    pool: &PgPool,
+    suite_id: Uuid,
+    secret: &crate::auth::AuthSecret,
+) -> Result<String, RecoverableTokenError> {
     let raw = crypto_random_token();
     let hash = hash_token(&raw);
+    let encrypted = encrypt_collection_token(&raw, secret)?;
     sqlx::query(
-        "INSERT INTO collection_tokens (id, suite_id, token_hash, status)
-         VALUES ($1, $2, $3, 'active')
-         ON CONFLICT (token_hash) DO NOTHING",
+        "INSERT INTO collection_tokens
+            (id, suite_id, token_hash, status, token_ciphertext, token_nonce)
+         VALUES ($1, $2, $3, 'active', $4, $5)",
     )
     .bind(Uuid::new_v4())
     .bind(suite_id)
     .bind(&hash[..])
+    .bind(encrypted.ciphertext)
+    .bind(encrypted.nonce)
     .execute(pool)
     .await?;
     Ok(raw)
+}
+
+pub async fn suite_owned_by(
+    pool: &PgPool,
+    suite_id: Uuid,
+    user_id: Uuid,
+) -> Result<bool, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT EXISTS (
+            SELECT 1 FROM test_suites WHERE id = $1 AND created_by_user_id = $2
+         )",
+    )
+    .bind(suite_id)
+    .bind(user_id)
+    .fetch_one(pool)
+    .await
+}
+
+pub async fn latest_collection_token(
+    pool: &PgPool,
+    suite_id: Uuid,
+    user_id: Uuid,
+    secret: &crate::auth::AuthSecret,
+) -> Result<Option<String>, RecoverableTokenError> {
+    let encrypted: Option<(Vec<u8>, Vec<u8>)> = sqlx::query_as(
+        "SELECT ct.token_ciphertext, ct.token_nonce
+         FROM collection_tokens ct
+         JOIN test_suites ts ON ts.id = ct.suite_id
+         WHERE ct.suite_id = $1
+           AND ts.created_by_user_id = $2
+           AND ct.status = 'active'
+           AND ct.token_ciphertext IS NOT NULL
+           AND ct.token_nonce IS NOT NULL
+         ORDER BY ct.created_at DESC
+         LIMIT 1",
+    )
+    .bind(suite_id)
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+
+    encrypted
+        .map(|(ciphertext, nonce)| {
+            decrypt_collection_token(&EncryptedCollectionToken { ciphertext, nonce }, secret)
+        })
+        .transpose()
+        .map_err(RecoverableTokenError::from)
 }
 
 /// Resolves a presented collection token to its suite identity + tenancy, or
@@ -557,8 +714,31 @@ pub fn crypto_random_token() -> String {
 #[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::expect_used)]
 mod tests {
     use super::*;
+    use crate::auth::AuthSecret;
     use crate::db;
     use crate::test_engine::ExecutionStatus::{Failed, Passed};
+    use std::sync::Arc;
+
+    #[test]
+    fn collection_token_encryption_round_trips() {
+        let secret = AuthSecret(Arc::from("correct-auth-secret"));
+        let encrypted = encrypt_collection_token("collector-token", &secret).unwrap();
+
+        assert_ne!(encrypted.ciphertext, b"collector-token");
+        assert_eq!(
+            decrypt_collection_token(&encrypted, &secret).unwrap(),
+            "collector-token"
+        );
+    }
+
+    #[test]
+    fn collection_token_decryption_rejects_wrong_secret() {
+        let secret = AuthSecret(Arc::from("correct-auth-secret"));
+        let wrong_secret = AuthSecret(Arc::from("wrong-auth-secret"));
+        let encrypted = encrypt_collection_token("collector-token", &secret).unwrap();
+
+        assert!(decrypt_collection_token(&encrypted, &wrong_secret).is_err());
+    }
 
     /// `None` when `SLASH_TEST_DATABASE_URL` is unset — callers skip cleanly
     /// (plan M4).
@@ -591,7 +771,10 @@ mod tests {
         .unwrap();
         tx.commit().await.unwrap();
 
-        let raw = issue_collection_token(pool, suite_id).await.unwrap();
+        let secret = AuthSecret(Arc::from("test-auth-secret"));
+        let raw = issue_recoverable_collection_token(pool, suite_id, &secret)
+            .await
+            .unwrap();
         (suite_id, raw)
     }
 
