@@ -349,9 +349,9 @@ pub async fn list_suites(
 ) -> Result<Vec<SuiteSummary>, sqlx::Error> {
     let rows: Vec<(Uuid, String, String, String, i64, i64, i64)> = sqlx::query_as(
         "SELECT ts.id, ts.suite_key, ts.owner, ts.repo,\n\
-                count(t.id)::int8 FILTER (WHERE t.id IS NOT NULL) AS total,\n\
-                count(t.id) FILTER (WHERE t.state = 'muted')::int8 AS muted,\n\
-                count(t.id) FILTER (WHERE t.state = 'skipped')::int8 AS skipped\n\
+            count(t.id) FILTER (WHERE t.id IS NOT NULL) AS total,\n\
+            count(t.id) FILTER (WHERE t.state = 'muted') AS muted,\n\
+            count(t.id) FILTER (WHERE t.state = 'skipped') AS skipped\n\
          FROM test_suites ts\n\
          LEFT JOIN tests t ON t.suite_id = ts.id\n\
             WHERE ts.installation_id = $1 AND ts.created_by_user_id = $2\n\
@@ -776,6 +776,45 @@ mod tests {
             .await
             .unwrap();
         (suite_id, raw)
+    }
+
+    #[serial_test::serial(db)]
+    #[tokio::test]
+    async fn lists_only_suites_owned_by_the_user() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        let user_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO users (id, email, password_hash, display_name, status)
+             VALUES ($1, $2, 'unused', 'Owner', 'active')",
+        )
+        .bind(user_id)
+        .bind(format!("{user_id}@example.test"))
+        .execute(&pool)
+        .await
+        .unwrap();
+        let mut tx = pool.begin().await.unwrap();
+        let suite_id = upsert_owned_suite(
+            &mut tx,
+            &NewSuite {
+                installation_id: 1,
+                owner: "acme",
+                repo: "widgets",
+                suite_key: "web",
+            },
+            user_id,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        let suites = list_suites(&pool, 1, user_id).await.unwrap();
+
+        assert_eq!(suites.len(), 1);
+        assert_eq!(suites[0].id, suite_id);
+        assert_eq!(suites[0].total_tests, 0);
     }
 
     #[serial_test::serial(db)]
