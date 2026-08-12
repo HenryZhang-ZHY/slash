@@ -52,7 +52,7 @@ jobs:
           set -e
 
           echo "status=${test_status}" >> "$GITHUB_OUTPUT"
-          if grep -q '"type":"test"' cargo-test.jsonl; then
+          if grep -q '"type"[[:space:]]*:[[:space:]]*"test"' cargo-test.jsonl; then
             echo "has_results=true" >> "$GITHUB_OUTPUT"
           else
             echo "has_results=false" >> "$GITHUB_OUTPUT"
