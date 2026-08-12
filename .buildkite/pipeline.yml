@@ -30,10 +30,11 @@ steps:
           mount-checkout: true
           workdir: /workspace
 
-  - wait
-
   - label: ":test_tube: test"
     key: test
+    depends_on:
+      - fmt
+      - clippy
     # Fetched by the agent into the job's own environment under this exact
     # key name (Buildkite Secrets, not a pipeline env var) — see the
     # BUILDKITE_ANALYTICS_TOKEN remap in docker-compose.yml's `test` service,
@@ -61,6 +62,9 @@ steps:
 
   - label: ":docker: docker build"
     key: docker-build
+    depends_on:
+      - fmt
+      - clippy
     # Deliberately runs alongside `test` (no `wait` before it) rather than
     # after — it doesn't depend on test's Postgres/DB state or outcome, and
     # fmt/clippy have already gated both. Validates the deployment image
@@ -79,5 +83,19 @@ steps:
       - docker-compose#v5.13.0:
           config: .buildkite/docker-compose.yml
           run: web
+          mount-checkout: true
+          workdir: /workspace
+
+  - label: ":vitest: web tests"
+    key: web-test
+    # The official Buildkite Vitest reporter uploads once Vitest has completed
+    # the run, so test execution and collection stay in one dedicated step.
+    secrets:
+      - TEST_SUITE_SLASH_BUILDKITE_ANALYTICS_TOKEN
+    command: npm ci && npm test
+    plugins:
+      - docker-compose#v5.13.0:
+          config: .buildkite/docker-compose.yml
+          run: web-test
           mount-checkout: true
           workdir: /workspace

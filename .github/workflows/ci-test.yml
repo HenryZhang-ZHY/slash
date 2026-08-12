@@ -86,3 +86,92 @@ jobs:
             exit 1
           fi
           exit "$TEST_STATUS"
+
+  web-tests:
+    name: Web tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the tested revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.slash_head_sha || github.sha }}
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Run tests
+        id: tests
+        working-directory: web
+        shell: bash
+        run: |
+          set +e
+          npm test -- --reporter=default --reporter=json --outputFile=vitest-results.json
+          test_status=$?
+          set -e
+
+          echo "status=${test_status}" >> "$GITHUB_OUTPUT"
+          if [ -s vitest-results.json ] && [ "$(jq '[.testResults[].assertionResults[]] | length' vitest-results.json)" -gt 0 ]; then
+            echo "has_results=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_results=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Vitest produced no collectable test events"
+          fi
+
+      - name: Normalize Vitest results
+        if: ${{ steps.tests.outputs.has_results == 'true' }}
+        working-directory: web
+        run: |
+          jq '{
+            tests: [
+              .testResults[] as $file
+              | $file.assertionResults[]
+              | {
+                  name: ((.ancestorTitles + [.title]) | join(" > ")),
+                  status: (
+                    if .status == "failed" then "failed"
+                    elif (.status == "pending" or .status == "skipped" or .status == "todo") then "skipped"
+                    else "passed"
+                    end
+                  ),
+                  duration: (.duration // 0),
+                  location: ({file: $file.name} + (if .location.line then {line: .location.line} else {} end))
+                }
+            ]
+          }' vitest-results.json > slash-vitest-results.json
+
+      - name: Upload results to Slash
+        if: ${{ steps.tests.outputs.has_results == 'true' }}
+        working-directory: web
+        env:
+          UPLOAD_URL: ${{ vars.TEST_ENGINE_VITEST_UPLOAD_URL }}
+          SUITE_TOKEN: ${{ secrets.TEST_ENGINE_SUITE_TOKEN }}
+        run: |
+          if [ -z "$UPLOAD_URL" ] || [ -z "$SUITE_TOKEN" ]; then
+            echo "::error::Slash Test Engine repository variable or suite token is missing"
+            exit 1
+          fi
+          curl --fail-with-body --retry 3 --retry-all-errors \
+            -X POST \
+            -H "Authorization: Bearer ${SUITE_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data-binary @slash-vitest-results.json \
+            "$UPLOAD_URL"
+
+      - name: Preserve Vitest result
+        if: ${{ always() }}
+        env:
+          TEST_STATUS: ${{ steps.tests.outputs.status }}
+        run: |
+          if [ -z "$TEST_STATUS" ]; then
+            echo "::error::Vitest did not report an exit status"
+            exit 1
+          fi
+          exit "$TEST_STATUS"
