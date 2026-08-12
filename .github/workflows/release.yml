@@ -98,21 +98,11 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Tag released commit
-        shell: bash
-        env:
-          TAG: ${{ steps.metadata.outputs.tag }}
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git tag --annotate "$TAG" "$GITHUB_SHA" --message "Release $TAG"
-          git push origin "refs/tags/$TAG"
-
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.metadata.outputs.tag }}
+          target_commitish: ${{ github.sha }}
           name: ${{ steps.metadata.outputs.tag }}
           generate_release_notes: true
           # Build-metadata/prerelease versions (e.g. v0.2.0-rc.1) are marked
