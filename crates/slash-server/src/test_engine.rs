@@ -431,6 +431,62 @@ pub async fn list_tests(
         .collect())
 }
 
+#[derive(Debug, Clone)]
+pub struct TestExecutionSummary {
+    pub id: Uuid,
+    pub status: String,
+    pub duration_ms: i64,
+    pub captured_at: chrono::DateTime<chrono::Utc>,
+    pub run_ref: String,
+    pub ci_provider: String,
+}
+
+type TestExecutionRow = (
+    Uuid,
+    String,
+    i64,
+    chrono::DateTime<chrono::Utc>,
+    String,
+    String,
+);
+
+/// Lists the latest executions for one test, scoped through its suite owner.
+pub async fn list_test_executions(
+    conn: &PgPool,
+    test_id: Uuid,
+    user_id: Uuid,
+) -> Result<Vec<TestExecutionSummary>, sqlx::Error> {
+    let rows: Vec<TestExecutionRow> = sqlx::query_as(
+        "SELECT te.id, te.status, te.duration_ms, te.captured_at,
+                tr.run_ref, tr.ci_provider
+         FROM test_executions te
+         JOIN tests t ON t.id = te.test_id
+         JOIN test_suites ts ON ts.id = t.suite_id
+         JOIN test_runs tr ON tr.id = te.run_id
+         WHERE te.test_id = $1 AND ts.created_by_user_id = $2
+         ORDER BY te.captured_at DESC
+         LIMIT 20",
+    )
+    .bind(test_id)
+    .bind(user_id)
+    .fetch_all(conn)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(
+            |(id, status, duration_ms, captured_at, run_ref, ci_provider)| TestExecutionSummary {
+                id,
+                status,
+                duration_ms,
+                captured_at,
+                run_ref,
+                ci_provider,
+            },
+        )
+        .collect())
+}
+
 /// Returns the observed execution statuses for a test within the last `window`
 /// seconds, oldest first. Smallest surface the flaky detector needs: the
 /// criterion is purely about the presence of a fail-then-pass recovery over a

@@ -1,15 +1,116 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Check, Copy, Eye, EyeOff, KeyRound, Plus } from 'lucide-react'
+import {
+  Check,
+  ChevronDown,
+  ChevronRight,
+  Copy,
+  Eye,
+  EyeOff,
+  KeyRound,
+  Plus,
+  RefreshCw,
+} from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { testEngineApi, type TestSuiteSummary, type TestSummary } from '@/lib/api'
+import {
+  testEngineApi,
+  type TestExecution,
+  type TestSuiteSummary,
+  type TestSummary,
+} from '@/lib/api'
 
 const STATE_BADGE: Record<TestSummary['state'], string> = {
   enabled: 'bg-emerald-100 text-emerald-700',
   muted: 'bg-amber-100 text-amber-700',
   skipped: 'bg-slate-200 text-slate-600',
+}
+
+const EXECUTION_BADGE: Record<TestExecution['status'], string> = {
+  passed: 'bg-emerald-100 text-emerald-700',
+  failed: 'bg-red-100 text-red-700',
+  skipped: 'bg-slate-200 text-slate-600',
+  errored: 'bg-red-100 text-red-700',
+}
+
+function formatDuration(durationMs: number) {
+  return durationMs < 1000 ? `${Math.round(durationMs)} ms` : `${(durationMs / 1000).toFixed(2)} s`
+}
+
+function TestCaseRow({ test }: { test: TestSummary }) {
+  const [open, setOpen] = useState(false)
+  const [executions, setExecutions] = useState<TestExecution[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const toggle = async () => {
+    const next = !open
+    setOpen(next)
+    if (!next || executions !== null) return
+    setError(null)
+    try {
+      setExecutions(await testEngineApi.listExecutions(test.id))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '执行历史加载失败')
+    }
+  }
+
+  return (
+    <>
+      <tr className="border-t">
+        <td className="px-3 py-2 font-mono text-xs">
+          <button type="button" onClick={toggle} className="flex items-start gap-1.5 text-left">
+            {open ? <ChevronDown className="mt-0.5 size-3.5" /> : <ChevronRight className="mt-0.5 size-3.5" />}
+            <span>{test.name}</span>
+          </button>
+        </td>
+        <td className="px-3 py-2">
+          <span className={`rounded px-1.5 py-0.5 text-xs font-medium ${STATE_BADGE[test.state]}`}>
+            {test.state}
+          </span>
+        </td>
+        <td className="px-3 py-2 text-xs text-muted-foreground">
+          {test.last_status ?? '—'}
+          {test.last_captured ? ` · ${new Date(test.last_captured).toLocaleString()}` : ''}
+        </td>
+      </tr>
+      {open && (
+        <tr className="border-t bg-muted/20">
+          <td colSpan={3} className="px-7 py-3">
+            {error ? (
+              <div className="text-xs text-red-600">{error}</div>
+            ) : executions === null ? (
+              <div className="text-xs text-muted-foreground">加载执行历史…</div>
+            ) : executions.length === 0 ? (
+              <div className="text-xs text-muted-foreground">还没有 execution 记录。</div>
+            ) : (
+              <div className="space-y-1.5">
+                {executions.map((execution) => (
+                  <div
+                    key={execution.id}
+                    className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 text-xs"
+                  >
+                    <div className="min-w-0">
+                      <div className="truncate font-mono">{execution.run_ref}</div>
+                      <div className="text-muted-foreground">
+                        {execution.ci_provider} · {new Date(execution.captured_at).toLocaleString()}
+                      </div>
+                    </div>
+                    <span className={`rounded px-1.5 py-0.5 font-medium ${EXECUTION_BADGE[execution.status]}`}>
+                      {execution.status}
+                    </span>
+                    <span className="w-16 text-right text-muted-foreground">
+                      {formatDuration(execution.duration_ms)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </td>
+        </tr>
+      )}
+    </>
+  )
 }
 
 function SuiteCard({ suite }: { suite: TestSuiteSummary }) {
@@ -135,6 +236,15 @@ function SuiteCard({ suite }: { suite: TestSuiteSummary }) {
               {error} <Button size="sm" variant="outline" onClick={loadTests}>重试</Button>
             </div>
           ) : null}
+          {tests !== null && (
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-xs text-muted-foreground">{tests.length} test cases</span>
+              <Button type="button" size="sm" variant="ghost" onClick={loadTests}>
+                <RefreshCw />
+                刷新 tests
+              </Button>
+            </div>
+          )}
           {tests === null ? (
             <div className="text-sm text-muted-foreground">加载中…</div>
           ) : (
@@ -155,20 +265,7 @@ function SuiteCard({ suite }: { suite: TestSuiteSummary }) {
                       </td>
                     </tr>
                   ) : (
-                    tests.map((t) => (
-                      <tr key={t.id} className="border-t">
-                        <td className="px-3 py-2 font-mono text-xs">{t.name}</td>
-                        <td className="px-3 py-2">
-                          <span className={`rounded px-1.5 py-0.5 text-xs font-medium ${STATE_BADGE[t.state]}`}>
-                            {t.state}
-                          </span>
-                        </td>
-                        <td className="px-3 py-2 text-xs text-muted-foreground">
-                          {t.last_status ?? '—'}
-                          {t.last_captured ? ` · ${new Date(t.last_captured).toLocaleString()}` : ''}
-                        </td>
-                      </tr>
-                    ))
+                    tests.map((test) => <TestCaseRow key={test.id} test={test} />)
                   )}
                 </tbody>
               </table>

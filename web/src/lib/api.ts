@@ -94,6 +94,15 @@ export interface TestSummary {
   last_captured: string | null
 }
 
+export interface TestExecution {
+  id: string
+  status: 'passed' | 'failed' | 'skipped' | 'errored'
+  duration_ms: number
+  captured_at: string
+  run_ref: string
+  ci_provider: string
+}
+
 export interface SuiteCreated {
   suite: TestSuiteSummary
   token: string
@@ -108,6 +117,8 @@ export const testEngineApi = {
     }),
   listTests: (suiteId: string) =>
     request<TestSummary[]>(`/api/test-engine/suites/${suiteId}/tests`),
+  listExecutions: (testId: string) =>
+    request<TestExecution[]>(`/api/test-engine/tests/${testId}/executions`),
   getToken: (suiteId: string) =>
     request<{ token: string | null }>(`/api/test-engine/suites/${suiteId}/tokens`),
   issueToken: (suiteId: string) =>

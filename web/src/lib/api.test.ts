@@ -68,4 +68,31 @@ describe("testEngineApi", () => {
       status: 409,
     });
   });
+
+  it("loads execution history for an individual test case", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify([
+          {
+            id: "execution-1",
+            status: "passed",
+            duration_ms: 24,
+            captured_at: "2026-08-12T02:30:19Z",
+            run_ref: "run-42",
+            ci_provider: "vitest",
+          },
+        ]),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const executions = await testEngineApi.listExecutions("test-1");
+
+    expect(executions).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/test-engine/tests/test-1/executions",
+      { credentials: "same-origin", headers: undefined },
+    );
+  });
 });

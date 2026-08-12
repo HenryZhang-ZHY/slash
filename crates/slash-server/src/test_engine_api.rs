@@ -191,6 +191,34 @@ pub async fn list_tests(
     }
 }
 
+/// `GET /api/test-engine/tests/{id}/executions` — recent per-case execution
+/// history, scoped to suites owned by the authenticated account.
+pub async fn list_test_executions(
+    State(state): State<AppState>,
+    auth_user: UserId,
+    Path(id): Path<uuid::Uuid>,
+) -> Result<Json<Vec<TestExecutionOut>>, StatusCode> {
+    match test_engine::list_test_executions(&state.pool, id, auth_user.0).await {
+        Ok(executions) => Ok(Json(
+            executions
+                .into_iter()
+                .map(|execution| TestExecutionOut {
+                    id: execution.id.to_string(),
+                    status: execution.status,
+                    duration_ms: execution.duration_ms,
+                    captured_at: execution.captured_at.to_rfc3339(),
+                    run_ref: execution.run_ref,
+                    ci_provider: execution.ci_provider,
+                })
+                .collect(),
+        )),
+        Err(error) => {
+            tracing::error!(%error, test = %id, "test-engine execution history listing failed");
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
 /// `POST /api/test-engine/suites/{id}/tokens` — issue a new per-suite
 /// collection token (M2-4 token management). Its hash authenticates ingestion;
 /// its encrypted value remains available to the owning account.
@@ -274,6 +302,16 @@ pub struct TestOut {
     state: String,
     last_status: Option<String>,
     last_captured: Option<String>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct TestExecutionOut {
+    id: String,
+    status: String,
+    duration_ms: i64,
+    captured_at: String,
+    run_ref: String,
+    ci_provider: String,
 }
 
 #[derive(Debug, serde::Serialize)]

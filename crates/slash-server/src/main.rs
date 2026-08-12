@@ -155,6 +155,10 @@ async fn main() {
             get(test_engine_api::list_tests),
         )
         .route(
+            "/api/test-engine/tests/{id}/executions",
+            get(test_engine_api::list_test_executions),
+        )
+        .route(
             "/api/test-engine/suites/{id}/tokens",
             get(test_engine_api::get_token).post(test_engine_api::issue_token),
         )
