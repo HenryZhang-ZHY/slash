@@ -1,4 +1,9 @@
-# Getting started
+---
+title: Getting started
+description: "Deploy Slash, create a GitHub App, and run your first command."
+sidebar:
+  order: 1
+---
 
 Slash is a GitHub App: comment `/deploy staging` on a pull request, and Slash
 triggers a `workflow_dispatch` on your own GitHub Actions and syncs its status
@@ -7,7 +12,7 @@ back to the PR as a check run.
 ## 1. Deploy the server
 
 Slash is a single stateless container plus Postgres — see
-[deployment.md](deployment.md) for the container image, environment
+[deployment](/deployment/) for the container image, environment
 variables, and the reference single-replica deployment. You need a public
 HTTPS URL for the webhook endpoint (`https://<your-host>/webhook`) before
 creating the GitHub App in step 2.
@@ -21,7 +26,7 @@ with:
 - **Webhook secret**: a random value — this becomes `SLASH_WEBHOOK_SECRET`
 - **Permissions**: `checks: write`, `actions: write`, `contents: read`,
   `pull_requests: write`, `issues: write`, `metadata: read` (see
-  [permissions.md](permissions.md) for why each one is needed —
+  [permissions](/permissions/) for why each one is needed —
   `issues: write` in particular is easy to under-scope and silently breaks
   everything)
 - **Subscribe to events**: `issue_comment`, `workflow_run`, `check_run`,
@@ -47,17 +52,17 @@ args:
     free_text: true
 ```
 
-See [slash-config-reference.md](slash-config-reference.md) for the full
+See the [`.slash/` reference](/slash-config-reference/) for the full
 schema, and run `slash validate .slash/` in your own CI to catch mistakes
 before they reach the default branch (see
-[limitations.md](limitations.md) — Slash does not validate `.slash/` on
+[known limitations](/limitations/) — Slash does not validate `.slash/` on
 push itself in 0.0.1).
 
 ## 4. Add the workflow
 
 Add `.github/workflows/echo.yml`, also on the default branch (GitHub only
 resolves `workflow_dispatch` targets registered there — see
-[workflow-requirements.md](workflow-requirements.md)):
+[workflow requirements](/workflow-requirements/)):
 
 ```yaml
 name: echo
@@ -77,14 +82,14 @@ jobs:
         run: echo "$ACTOR says: $MESSAGE"
 ```
 
-A complete, copy-pasteable version of both files lives in
-[`examples/`](../../examples/).
+A complete, copy-pasteable version of both files lives in the
+[`examples/` directory](https://github.com/HenryZhang-ZHY/slash/tree/main/examples).
 
 ## 5. Try it
 
 Open a pull request and comment:
 
-```
+```text
 /echo hello world
 ```
 
@@ -94,11 +99,11 @@ once the workflow run finishes, with a link to that run.
 
 ## Next steps
 
-- [slash-config-reference.md](slash-config-reference.md) — the full
+- [`.slash/` reference](/slash-config-reference/) — the full
   `.slash/*.yml` schema
-- [workflow-requirements.md](workflow-requirements.md) — injected inputs,
+- [Workflow requirements](/workflow-requirements/) — injected inputs,
   the `env:`-not-`${{ }}` rule, required-status-check caveats
-- [permissions.md](permissions.md) — who can invoke what
-- [deployment.md](deployment.md) — running the server, key rotation, incident
+- [Permissions](/permissions/) — who can invoke what
+- [Deployment](/deployment/) — running the server, key rotation, incident
   procedure
-- [limitations.md](limitations.md) — what 0.0.1 deliberately does not do yet
+- [Known limitations](/limitations/) — what 0.0.1 deliberately does not do yet
