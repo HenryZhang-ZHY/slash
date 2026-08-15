@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { ArrowRight, FlaskConical, Users } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 import {
   BrowserRouter,
   Navigate,
@@ -19,6 +20,7 @@ import { TestEnginePage } from '@/pages/TestEnginePage'
 function HomePage() {
   const navigate = useNavigate()
   const { me } = useOutletContext<DashboardContext>()
+  const { t } = useTranslation()
   const [suites, setSuites] = useState<TestSuiteSummary[]>([])
 
   useEffect(() => {
@@ -32,21 +34,21 @@ function HomePage() {
     <div className="mx-auto w-full max-w-[1680px] px-4 py-6 md:px-8 md:py-8">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold">Overview</h1>
-          <p className="mt-1 text-sm text-muted-foreground">团队、仓库自动化与测试健康概览。</p>
+          <h1 className="text-2xl font-semibold">{t('app.overview')}</h1>
+          <p className="mt-1 text-sm text-muted-foreground">{t('app.homeSubtitle')}</p>
         </div>
         <Button onClick={() => navigate('/tests')}>
           <FlaskConical />
-          打开 Test Engine
+          {t('app.openTestEngine')}
         </Button>
       </div>
 
       <div className="mt-8 grid border-y sm:grid-cols-2 xl:grid-cols-4">
         {[
-          ['Teams', me.teams.length.toLocaleString()],
-          ['Test suites', suites.length.toLocaleString()],
-          ['Test cases', testCount.toLocaleString()],
-          ['Executions', executionCount.toLocaleString()],
+          [t('app.teamCount'), me.teams.length.toLocaleString()],
+          [t('app.suiteCount'), suites.length.toLocaleString()],
+          [t('app.testCount'), testCount.toLocaleString()],
+          [t('app.executionCount'), executionCount.toLocaleString()],
         ].map(([label, value], index) => (
           <div key={label} className={`px-4 py-5 ${index > 0 ? 'border-t sm:border-t-0 sm:border-l' : ''}`}>
             <div className="text-xs text-muted-foreground">{label}</div>
@@ -59,11 +61,11 @@ function HomePage() {
         <section>
           <div className="mb-3 flex items-center gap-2">
             <Users className="size-4" />
-            <h2 className="text-sm font-semibold">Teams</h2>
+            <h2 className="text-sm font-semibold">{t('app.teams')}</h2>
           </div>
           <div className="border">
             {me.teams.length === 0 ? (
-              <div className="px-4 py-8 text-sm text-muted-foreground">还没有团队。</div>
+              <div className="px-4 py-8 text-sm text-muted-foreground">{t('app.noTeams')}</div>
             ) : (
               me.teams.map((team, index) => (
                 <div key={team.id} className={`flex items-center justify-between px-4 py-3 ${index > 0 ? 'border-t' : ''}`}>
@@ -71,7 +73,7 @@ function HomePage() {
                     <div className="text-sm font-medium">{team.name}</div>
                     <div className="text-xs text-muted-foreground">{team.slug}</div>
                   </div>
-                  <span className="text-xs text-muted-foreground">Active</span>
+                  <span className="text-xs text-muted-foreground">{t('app.active')}</span>
                 </div>
               ))
             )}
@@ -81,7 +83,7 @@ function HomePage() {
         <section>
           <div className="mb-3 flex items-center gap-2">
             <FlaskConical className="size-4" />
-            <h2 className="text-sm font-semibold">Test Engine</h2>
+            <h2 className="text-sm font-semibold">{t('app.testEngineSection')}</h2>
           </div>
           <button
             type="button"
@@ -89,9 +91,13 @@ function HomePage() {
             className="flex w-full items-center justify-between border px-4 py-4 text-left transition-colors hover:bg-muted/40"
           >
             <div>
-              <div className="text-sm font-medium">查看测试健康与执行历史</div>
+              <div className="text-sm font-medium">{t('app.testEngineCta')}</div>
               <div className="mt-1 text-xs text-muted-foreground">
-                {suites.length} suites · {testCount.toLocaleString()} cases · {executionCount.toLocaleString()} executions
+                {t('app.suiteSummary', {
+                  count: suites.length,
+                  cases: testCount.toLocaleString(),
+                  executions: executionCount.toLocaleString(),
+                })}
               </div>
             </div>
             <ArrowRight className="size-4 text-muted-foreground" />

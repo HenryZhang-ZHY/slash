@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
+import { useTranslation } from 'react-i18next'
 
 import {
   testEngineApi,
@@ -9,6 +10,7 @@ import {
 } from '@/lib/api'
 
 export function useTestEngine() {
+  const { t } = useTranslation()
   const [suites, setSuites] = useState<TestSuiteSummary[]>([])
   const [selectedSuiteId, setSelectedSuiteId] = useState<string | null>(null)
   const [tests, setTests] = useState<TestSummary[] | null>(null)
@@ -21,7 +23,7 @@ export function useTestEngine() {
   const [updatingState, setUpdatingState] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const loadSuites = async () => {
+  const loadSuites = useCallback(async () => {
     setLoadingSuites(true)
     setError(null)
     try {
@@ -33,50 +35,56 @@ export function useTestEngine() {
           : (result[0]?.id ?? null),
       )
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'Suite 加载失败')
+      setError(requestError instanceof Error ? requestError.message : t('testengine.suiteLoadFailed'))
     } finally {
       setLoadingSuites(false)
     }
-  }
+  }, [t])
 
-  const loadTests = async (suiteId: string) => {
-    setLoadingTests(true)
-    setError(null)
-    try {
-      const result = await testEngineApi.listTests(suiteId)
-      setTests(result)
-      setSelectedTestId((current) =>
-        current && result.some((test) => test.id === current)
-          ? current
-          : (result.find(
-              (test) => test.last_status === 'failed' || test.last_status === 'errored',
-            )?.id ??
-            result[0]?.id ??
-            null),
-      )
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'Test cases 加载失败')
-    } finally {
-      setLoadingTests(false)
-    }
-  }
+  const loadTests = useCallback(
+    async (suiteId: string) => {
+      setLoadingTests(true)
+      setError(null)
+      try {
+        const result = await testEngineApi.listTests(suiteId)
+        setTests(result)
+        setSelectedTestId((current) =>
+          current && result.some((test) => test.id === current)
+            ? current
+            : (result.find(
+                (test) => test.last_status === 'failed' || test.last_status === 'errored',
+              )?.id ??
+              result[0]?.id ??
+              null),
+        )
+      } catch (requestError) {
+        setError(requestError instanceof Error ? requestError.message : t('testengine.casesLoadFailed'))
+      } finally {
+        setLoadingTests(false)
+      }
+    },
+    [t],
+  )
 
-  const loadExecutions = async (testId: string, offset = 0) => {
-    setLoadingExecutions(true)
-    try {
-      const page = await testEngineApi.listExecutions(testId, 100, offset)
-      setExecutions(page)
-      setExecutionItems((current) => (offset === 0 ? page.items : [...current, ...page.items]))
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'Execution history 加载失败')
-    } finally {
-      setLoadingExecutions(false)
-    }
-  }
+  const loadExecutions = useCallback(
+    async (testId: string, offset = 0) => {
+      setLoadingExecutions(true)
+      try {
+        const page = await testEngineApi.listExecutions(testId, 100, offset)
+        setExecutions(page)
+        setExecutionItems((current) => (offset === 0 ? page.items : [...current, ...page.items]))
+      } catch (requestError) {
+        setError(requestError instanceof Error ? requestError.message : t('testengine.historyLoadFailed'))
+      } finally {
+        setLoadingExecutions(false)
+      }
+    },
+    [t],
+  )
 
   useEffect(() => {
     void loadSuites()
-  }, [])
+  }, [loadSuites])
 
   useEffect(() => {
     if (!selectedSuiteId) {
@@ -86,13 +94,13 @@ export function useTestEngine() {
     setTests(null)
     setSelectedTestId(null)
     void loadTests(selectedSuiteId)
-  }, [selectedSuiteId])
+  }, [selectedSuiteId, loadTests])
 
   useEffect(() => {
     setExecutions(null)
     setExecutionItems([])
     if (selectedTestId) void loadExecutions(selectedTestId)
-  }, [selectedTestId])
+  }, [selectedTestId, loadExecutions])
 
   const createSuite = (suite: TestSuiteSummary) => {
     setSuites((current) => [suite, ...current.filter((item) => item.id !== suite.id)])
@@ -127,7 +135,7 @@ export function useTestEngine() {
         )
       }
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'Disposition 更新失败')
+      setError(requestError instanceof Error ? requestError.message : t('testengine.stateUpdateFailed'))
     } finally {
       setUpdatingState(false)
     }
