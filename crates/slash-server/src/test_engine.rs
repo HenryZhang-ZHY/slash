@@ -723,6 +723,7 @@ pub async fn revoke_collection_token(
 /// Pure, dependency-free unit tests for the test-engine parsing helpers —
 /// the fast safety net @Quality's P1 asks for (no DB, no wiremock).
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::expect_used)]
 mod pure_tests {
     use super::*;
     use crate::auth::AuthSecret;
