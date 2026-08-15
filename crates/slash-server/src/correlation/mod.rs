@@ -11,7 +11,7 @@
 //! conclusion from a freshly re-fetched run. Deliberately deferred and
 //! flagged rather than silently skipped: failed-check-run-update retry.
 //!
-//! Split (R2 #29): each webhook handler lives in its own submodule;
+//! Split (R8 #29): each webhook handler lives in its own submodule;
 //! this module holds the shared helpers, the re-exports, and the test
 //! suite (which exercises every handler).
 
@@ -26,9 +26,6 @@ pub(crate) use workflow_run::{apply_completed_run, handle_workflow_run};
 use octocrab::params::checks::CheckRunConclusion;
 use slash_core::CheckConclusion;
 
-use crate::catalog::CatalogError;
-use crate::pipeline::PipelineContext;
-
 /// Maps a `slash_core::CheckConclusion` to the octocrab check-run conclusion
 /// enum GitHub's API accepts. Shared by the `workflow_run.completed` path
 /// and the sweeper's re-fetch terminal writes.
@@ -41,30 +38,6 @@ pub(crate) fn to_octocrab_conclusion(conclusion: CheckConclusion) -> CheckRunCon
         CheckConclusion::ActionRequired => CheckRunConclusion::ActionRequired,
         CheckConclusion::Neutral => CheckRunConclusion::Neutral,
     }
-}
-
-pub(crate) fn record_catalog_error(
-    ctx: &PipelineContext<'_>,
-    error: &CatalogError,
-    message: &'static str,
-) {
-    let outcome = match error {
-        CatalogError::Invalid { .. } => "invalid",
-        CatalogError::Unavailable { .. } => "unavailable",
-    };
-    ctx.metrics
-        .command_catalog_loads_total
-        .with_label_values(&[outcome, error.stage()])
-        .inc();
-    tracing::warn!(
-        owner = %ctx.owner,
-        repo = %ctx.repo,
-        stage = error.stage(),
-        path = ?error.path(),
-        status = ?error.status_code(),
-        error = %error,
-        "{message}"
-    );
 }
 
 #[cfg(test)]
@@ -88,6 +61,7 @@ mod tests {
     use crate::invocations;
     use crate::invocations::{ClaimOutcome, NewInvocation};
     use crate::metrics::Metrics;
+    use crate::pipeline::PipelineContext;
     use slash_core::InvocationStatus;
     use slash_github::GithubApp;
     use slash_github::WebhookEvent;
