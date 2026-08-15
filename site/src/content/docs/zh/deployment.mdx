@@ -20,10 +20,12 @@ sweeper）都活在数据库里，绝不活在进程内计时器或队列里（�
 ```sh
 docker build -t slash-server .
 docker run -p 8080:8080 \
-  -e SLASH_DATABASE_URL=postgres://slash:slash@your-postgres:5432/slash \
-  -e SLASH_WEBHOOK_SECRET=... \
+  -e SLASH_DATABASE_URL_PATH=/run/secrets/database-url \
+  -e SLASH_WEBHOOK_SECRET_PATH=/run/secrets/webhook-secret \
   -e SLASH_GITHUB_APP_ID=... \
   -e SLASH_GITHUB_PRIVATE_KEY_PATH=/run/secrets/github-app-key.pem \
+  -v /path/to/your-database-url.txt:/run/secrets/database-url:ro \
+  -v /path/to/your-webhook-secret.txt:/run/secrets/webhook-secret:ro \
   -v /path/to/your-app-key.pem:/run/secrets/github-app-key.pem:ro \
   slash-server
 ```
@@ -38,23 +40,24 @@ docker run -p 8080:8080 \
 
 | 变量 | 必填 | 说明 |
 | ---------------------------------- | ---------- | ------- |
-| `SLASH_DATABASE_URL` | 是 | Postgres 连接串。 |
-| `SLASH_WEBHOOK_SECRET` | 是 | 必须匹配 GitHub App 上配置的 webhook secret。没有它服务器拒绝启动 —— 签名校验绝不省略。 |
+| `SLASH_DATABASE_URL_PATH` | 是 | 包含 Postgres 连接串的文件路径，启动时读取并 trim。 |
+| `SLASH_WEBHOOK_SECRET_PATH` | 是 | 包含 webhook secret 的文件路径（须匹配 GitHub App 上配置的 webhook secret）。没有它服务器拒绝启动 —— 签名校验绝不省略。 |
 | `SLASH_GITHUB_APP_ID` | 是 | GitHub App 的数字 ID。 |
 | `SLASH_GITHUB_PRIVATE_KEY_PATH` | 是 | App 私钥的**文件**路径（不是内联密钥）—— 只读挂载，平台支持时 mode `0400`。 |
-| `SLASH_AUTH_SECRET` | 是 | 给用户会话 cookie 签名的 HMAC secret（账户/团队控制台）。见下面的双通道说明。 |
-| `SLASH_AUTH_SECRET_PATH` | 否 | 包含 `SLASH_AUTH_SECRET`（会 trim）的文件路径，优先于内联 env 变量读取。 |
+| `SLASH_AUTH_SECRET_PATH` | 是 | 包含会话签名 HMAC secret（会 trim）的文件路径。和其他 secret 一样仅文件方式。 |
 | `SLASH_WEB_DIR` | 否 | 构建好的 web 控制台 SPA 的根目录。默认 `web/dist`（相对服务器工作目录）。 |
 | `RUST_LOG` | 否 | `tracing_subscriber` env-filter 语法，例如 `info` 或 `slash_server=debug`。 |
+
+每个 secret 都**只走文件**——每种 secret 只有一种配置方式：一个指向启动时读取
+文件的 `*_PATH` 环境变量（与 GitHub App 私钥一致）。旧的 inline 变体
+（`SLASH_DATABASE_URL` / `SLASH_WEBHOOK_SECRET` / `SLASH_AUTH_SECRET`）**不再
+识别**，所以 secret 永远不会通过 `docker inspect` 或 `ps aux` 暴露。若 `*_PATH`
+未设置、或其文件不可读/为空，服务器拒绝启动而不是跳过该 secret。auth secret
+见 `docs/user/onboarding`。
 
 刻意没有把私钥作为内联环境变量传入的方式 —— 只有文件路径 —— 而且 config 结构体
 没有 `Debug`/`Display` 实现，所以 webhook secret 和数据库 URL（可能内嵌密码）都
 不会通过一行 stray 日志泄漏。
-
-`SLASH_AUTH_SECRET` 与私钥遵循同样的哲学：优先用 `SLASH_AUTH_SECRET_PATH`，让
-会话签名 secret 活在被挂载的文件里而不是环境里。文件设置后优先；内联
-`SLASH_AUTH_SECRET` 是兜底。与 webhook secret 一样，服务器无法解析 auth secret
-就拒绝启动，而且这个 secret 绝不会被记录。
 
 ### 端点
 
@@ -92,7 +95,7 @@ to mint token` / API 错误告警作为临时信号。
 轮换任一凭据不需要代码变更，只需更新配置并重启：
 
 - **Webhook secret**：生成新 secret，在 GitHub App 设置里更新，然后更新
-  `SLASH_WEBHOOK_SECRET` 并重启服务器。在 App 设置保存传播之前会有一个短暂窗口，
+  `SLASH_WEBHOOK_SECRET_PATH` 指向的文件并重启服务器。在 App 设置保存传播之前会有一个短暂窗口，
   GitHub 可能用旧 secret 投递 —— 这个窗口里的少量 `401` 是预期且无害的（GitHub
   会重试投递）。
 - **私钥**：在 GitHub App 设置里生成新私钥（不会立刻让旧的失效），把新 `.pem`

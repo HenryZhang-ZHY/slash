@@ -1,7 +1,7 @@
 # Local-dev setup (plan M4/M7): Postgres plus the Slash server itself.
 # Where Docker Desktop is unavailable (e.g. a corporate Windows machine), a
-# free hosted Postgres (Neon, Fly) via SLASH_DATABASE_URL /
-# SLASH_TEST_DATABASE_URL is the supported fallback, and `cargo run -p
+# free hosted Postgres (Neon, Fly) is the supported fallback: write its URL
+# to a file and point SLASH_DATABASE_URL_PATH at it, then `cargo run -p
 # slash-server` against it stands in for the `server` service below.
 #
 # `server` needs a real GitHub App to do anything useful — see
