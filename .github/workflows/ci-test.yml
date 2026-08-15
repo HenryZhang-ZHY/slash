@@ -187,7 +187,7 @@ jobs:
           exit "$TEST_STATUS"
 
   coverage:
-    name: Coverage gate (cargo llvm-cov)
+    name: Coverage report (cargo llvm-cov)
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -219,7 +219,7 @@ jobs:
       - name: Install cargo-llvm-cov
         run: cargo install cargo-llvm-cov --locked
 
-      - name: Run coverage gate
+      - name: Run coverage report
         run: scripts/coverage.sh
 
       - name: Upload coverage report
