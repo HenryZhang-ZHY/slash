@@ -26,7 +26,7 @@ Both set an `HttpOnly` session cookie; the console never sees the password.
 
 After signing in, the console redirects to `/onboarding`, which asks for a
 **team name** and a **team slug** (lowercase letters, numbers and hyphens, up
-to 32 characters). Creating the team calls `POST /api/teams` and, in one
+to 63 characters). Creating the team calls `POST /api/teams` and, in one
 transaction, creates a home organization for you (if you do not have one) and
 makes you the team's maintainer. The team is the access-control boundary for
 repositories and automation — see [Grants](/grants/) for how teams receive
