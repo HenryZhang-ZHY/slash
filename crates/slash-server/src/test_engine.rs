@@ -558,78 +558,12 @@ fn parse_execution_status(status: &str) -> ExecutionStatus {
 
 // --- collection tokens (design §4) ---
 
-#[derive(Debug, Clone)]
-pub struct EncryptedCollectionToken {
-    pub ciphertext: Vec<u8>,
-    pub nonce: Vec<u8>,
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum TokenCryptoError {
-    #[error("collection token encryption failed")]
-    Encryption,
-    #[error("collection token decryption failed")]
-    Decryption,
-}
-
-fn collection_token_cipher(
-    secret: &crate::auth::AuthSecret,
-) -> Result<aes_gcm::Aes256Gcm, TokenCryptoError> {
-    use aes_gcm::KeyInit;
-    use sha2::{Digest, Sha256};
-
-    let mut hasher = Sha256::new();
-    hasher.update(b"slash:collection-token:v1\0");
-    hasher.update(secret.0.as_bytes());
-    let key: [u8; 32] = hasher.finalize().into();
-    aes_gcm::Aes256Gcm::new_from_slice(&key).map_err(|_| TokenCryptoError::Encryption)
-}
-
-pub fn encrypt_collection_token(
-    raw_token: &str,
-    secret: &crate::auth::AuthSecret,
-) -> Result<EncryptedCollectionToken, TokenCryptoError> {
-    use aes_gcm::aead::{Aead, AeadCore, OsRng};
-
-    let cipher = collection_token_cipher(secret)?;
-    let nonce = aes_gcm::Aes256Gcm::generate_nonce(&mut OsRng);
-    let ciphertext = cipher
-        .encrypt(&nonce, raw_token.as_bytes())
-        .map_err(|_| TokenCryptoError::Encryption)?;
-    Ok(EncryptedCollectionToken {
-        ciphertext,
-        nonce: nonce.to_vec(),
-    })
-}
-
-pub fn decrypt_collection_token(
-    encrypted: &EncryptedCollectionToken,
-    secret: &crate::auth::AuthSecret,
-) -> Result<String, TokenCryptoError> {
-    use aes_gcm::aead::Aead;
-
-    if encrypted.nonce.len() != 12 {
-        return Err(TokenCryptoError::Decryption);
-    }
-    let cipher = collection_token_cipher(secret).map_err(|_| TokenCryptoError::Decryption)?;
-    let nonce_bytes: [u8; 12] = encrypted
-        .nonce
-        .as_slice()
-        .try_into()
-        .map_err(|_| TokenCryptoError::Decryption)?;
-    let nonce = aes_gcm::Nonce::from(nonce_bytes);
-    let plaintext = cipher
-        .decrypt(&nonce, encrypted.ciphertext.as_ref())
-        .map_err(|_| TokenCryptoError::Decryption)?;
-    String::from_utf8(plaintext).map_err(|_| TokenCryptoError::Decryption)
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum RecoverableTokenError {
     #[error(transparent)]
     Database(#[from] sqlx::Error),
     #[error(transparent)]
-    Crypto(#[from] TokenCryptoError),
+    Crypto(#[from] slash_core::TokenCryptoError),
 }
 
 /// Tenancy resolved from a collection token's suite.
@@ -646,25 +580,15 @@ pub struct SuiteTokenIdentity {
     pub repo: String,
 }
 
-/// Hashes a raw token with sha256 for storage / lookup. Returns the raw byte
-/// hash.
-pub fn hash_token(token: &str) -> [u8; 32] {
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(token.as_bytes());
-    hasher.finalize().into()
-}
-
-/// Issues a token whose hash authenticates ingestion and whose AES-GCM
-/// ciphertext can be recovered by the owning user in the console.
+/// Revokes a collection token for a suite (marks it `revoked`, stopping
 pub async fn issue_recoverable_collection_token(
     pool: &PgPool,
     suite_id: Uuid,
     secret: &crate::auth::AuthSecret,
 ) -> Result<String, RecoverableTokenError> {
-    let raw = crypto_random_token();
-    let hash = hash_token(&raw);
-    let encrypted = encrypt_collection_token(&raw, secret)?;
+    let raw = slash_core::crypto_random_token();
+    let hash = slash_core::hash_token(&raw);
+    let encrypted = slash_core::encrypt_collection_token(&raw, secret.0.as_bytes())?;
     sqlx::query(
         "INSERT INTO collection_tokens
             (id, suite_id, token_hash, status, token_ciphertext, token_nonce)
@@ -739,7 +663,10 @@ pub async fn latest_collection_token(
 
     encrypted
         .map(|(ciphertext, nonce)| {
-            decrypt_collection_token(&EncryptedCollectionToken { ciphertext, nonce }, secret)
+            slash_core::decrypt_collection_token(
+                &slash_core::EncryptedCollectionToken { ciphertext, nonce },
+                secret.0.as_bytes(),
+            )
         })
         .transpose()
         .map_err(RecoverableTokenError::from)
@@ -752,7 +679,7 @@ pub async fn find_suite_for_token(
     pool: &PgPool,
     raw_token: &str,
 ) -> Result<Option<SuiteTokenIdentity>, sqlx::Error> {
-    let hash = hash_token(raw_token);
+    let hash = slash_core::hash_token(raw_token);
     let row: Option<(Uuid, String, i64, String, String)> = sqlx::query_as(
         "SELECT ts.id, ts.suite_key, ts.installation_id, ts.owner, ts.repo
          FROM collection_tokens ct\n         JOIN test_suites ts ON ts.id = ct.suite_id
@@ -781,7 +708,7 @@ pub async fn revoke_collection_token(
     suite_id: Uuid,
     raw_token: &str,
 ) -> Result<bool, sqlx::Error> {
-    let hash = hash_token(raw_token);
+    let hash = slash_core::hash_token(raw_token);
     let result = sqlx::query(
         "UPDATE collection_tokens SET status = 'revoked', revoked_at = now() \
          WHERE suite_id = $1 AND token_hash = $2 AND status = 'active'",
@@ -791,12 +718,6 @@ pub async fn revoke_collection_token(
     .execute(pool)
     .await?;
     Ok(result.rows_affected() > 0)
-}
-
-/// Generates a cryptographically random, URL-safe token. Backs
-/// `issue_collection_token` (M2-4 token management).
-pub fn crypto_random_token() -> String {
-    uuid::Uuid::new_v4().to_string()
 }
 
 #[cfg(test)]
@@ -811,11 +732,12 @@ mod tests {
     #[test]
     fn collection_token_encryption_round_trips() {
         let secret = AuthSecret(Arc::from("correct-auth-secret"));
-        let encrypted = encrypt_collection_token("collector-token", &secret).unwrap();
+        let encrypted =
+            slash_core::encrypt_collection_token("collector-token", secret.0.as_bytes()).unwrap();
 
         assert_ne!(encrypted.ciphertext, b"collector-token");
         assert_eq!(
-            decrypt_collection_token(&encrypted, &secret).unwrap(),
+            slash_core::decrypt_collection_token(&encrypted, secret.0.as_bytes()).unwrap(),
             "collector-token"
         );
     }
@@ -824,9 +746,12 @@ mod tests {
     fn collection_token_decryption_rejects_wrong_secret() {
         let secret = AuthSecret(Arc::from("correct-auth-secret"));
         let wrong_secret = AuthSecret(Arc::from("wrong-auth-secret"));
-        let encrypted = encrypt_collection_token("collector-token", &secret).unwrap();
+        let encrypted =
+            slash_core::encrypt_collection_token("collector-token", secret.0.as_bytes()).unwrap();
 
-        assert!(decrypt_collection_token(&encrypted, &wrong_secret).is_err());
+        assert!(
+            slash_core::decrypt_collection_token(&encrypted, wrong_secret.0.as_bytes()).is_err()
+        );
     }
 
     /// `None` when `SLASH_TEST_DATABASE_URL` is unset — callers skip cleanly
@@ -1242,23 +1167,5 @@ mod pure_tests {
         // predecessor states at $3+.
         assert_eq!(placeholders(3, 1), "$3");
         assert_eq!(placeholders(3, 2), "$3, $4");
-    }
-
-    #[test]
-    fn hash_token_is_deterministic_and_32_bytes() {
-        let a = hash_token("suite-token");
-        let b = hash_token("suite-token");
-        let c = hash_token("different");
-        assert_eq!(a, b);
-        assert_ne!(a, c);
-        assert_eq!(a.len(), 32);
-    }
-
-    #[test]
-    fn crypto_random_token_is_unique_and_parseable_uuid() {
-        let a = crypto_random_token();
-        let b = crypto_random_token();
-        assert_ne!(a, b);
-        assert!(uuid::Uuid::parse_str(&a).is_ok());
     }
 }
