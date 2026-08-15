@@ -150,28 +150,7 @@ pub async fn list_suites(
     auth_user: UserId,
 ) -> Result<Json<Vec<SuiteOut>>, StatusCode> {
     match test_engine::list_suites(&state.pool, CONSOLE_INSTALLATION_ID, auth_user.0).await {
-        Ok(suites) => Ok(Json(
-            suites
-                .into_iter()
-                .map(|s| SuiteOut {
-                    id: s.id.to_string(),
-                    suite_key: s.suite_key,
-                    owner: s.owner,
-                    repo: s.repo,
-                    total_tests: s.total_tests,
-                    muted: s.muted,
-                    skipped: s.skipped,
-                    run_count: s.run_count,
-                    execution_count: s.execution_count,
-                    passed_executions: s.passed_executions,
-                    failed_executions: s.failed_executions,
-                    skipped_executions: s.skipped_executions,
-                    errored_executions: s.errored_executions,
-                    average_duration_ms: s.average_duration_ms,
-                    last_captured: s.last_captured.map(|captured| captured.to_rfc3339()),
-                })
-                .collect(),
-        )),
+        Ok(suites) => Ok(Json(suites.into_iter().map(SuiteOut::from).collect())),
         Err(error) => {
             tracing::error!(%error, "test-engine suites listing failed");
             Err(StatusCode::INTERNAL_SERVER_ERROR)
@@ -188,36 +167,7 @@ pub async fn list_tests(
 ) -> Result<Json<Vec<TestOut>>, StatusCode> {
     require_suite_owner(&state, id, auth_user.0).await?;
     match test_engine::list_tests(&state.pool, id, auth_user.0).await {
-        Ok(tests) => Ok(Json(
-            tests
-                .into_iter()
-                .map(|t| TestOut {
-                    id: t.id.to_string(),
-                    name: t.name,
-                    state: t.state,
-                    file: t.file,
-                    line_no: t.line_no,
-                    labels: t.labels,
-                    owner_team_ids: t
-                        .owner_team_ids
-                        .into_iter()
-                        .map(|id| id.to_string())
-                        .collect(),
-                    created_at: t.created_at.to_rfc3339(),
-                    updated_at: t.updated_at.to_rfc3339(),
-                    last_status: t.last_status,
-                    last_captured: t.last_captured.map(|c| c.to_rfc3339()),
-                    last_run_ref: t.last_run_ref,
-                    last_ci_provider: t.last_ci_provider,
-                    execution_count: t.execution_count,
-                    passed_count: t.passed_count,
-                    failed_count: t.failed_count,
-                    skipped_count: t.skipped_count,
-                    errored_count: t.errored_count,
-                    average_duration_ms: t.average_duration_ms,
-                })
-                .collect(),
-        )),
+        Ok(tests) => Ok(Json(tests.into_iter().map(TestOut::from).collect())),
         Err(error) => {
             tracing::error!(%error, suite = %id, "test-engine suite tests listing failed");
             Err(StatusCode::INTERNAL_SERVER_ERROR)
@@ -243,19 +193,7 @@ pub async fn list_test_executions(
             items: page
                 .items
                 .into_iter()
-                .map(|execution| TestExecutionOut {
-                    id: execution.id.to_string(),
-                    status: execution.status,
-                    duration_ms: execution.duration_ms,
-                    stack: execution.stack,
-                    captured_at: execution.captured_at.to_rfc3339(),
-                    run_id: execution.run_id.to_string(),
-                    run_ref: execution.run_ref,
-                    ci_provider: execution.ci_provider,
-                    started_at: execution.started_at.to_rfc3339(),
-                    finished_at: execution.finished_at.map(|finished| finished.to_rfc3339()),
-                    invocation_id: execution.invocation_id.map(|id| id.to_string()),
-                })
+                .map(TestExecutionOut::from)
                 .collect(),
         })),
         Err(error) => {
@@ -429,6 +367,76 @@ pub struct TestExecutionOut {
     started_at: String,
     finished_at: Option<String>,
     invocation_id: Option<String>,
+}
+
+impl From<test_engine::SuiteSummary> for SuiteOut {
+    fn from(s: test_engine::SuiteSummary) -> Self {
+        Self {
+            id: s.id.to_string(),
+            suite_key: s.suite_key,
+            owner: s.owner,
+            repo: s.repo,
+            total_tests: s.total_tests,
+            muted: s.muted,
+            skipped: s.skipped,
+            run_count: s.run_count,
+            execution_count: s.execution_count,
+            passed_executions: s.passed_executions,
+            failed_executions: s.failed_executions,
+            skipped_executions: s.skipped_executions,
+            errored_executions: s.errored_executions,
+            average_duration_ms: s.average_duration_ms,
+            last_captured: s.last_captured.map(|captured| captured.to_rfc3339()),
+        }
+    }
+}
+
+impl From<test_engine::TestSummary> for TestOut {
+    fn from(t: test_engine::TestSummary) -> Self {
+        Self {
+            id: t.id.to_string(),
+            name: t.name,
+            state: t.state,
+            file: t.file,
+            line_no: t.line_no,
+            labels: t.labels,
+            owner_team_ids: t
+                .owner_team_ids
+                .into_iter()
+                .map(|id| id.to_string())
+                .collect(),
+            created_at: t.created_at.to_rfc3339(),
+            updated_at: t.updated_at.to_rfc3339(),
+            last_status: t.last_status,
+            last_captured: t.last_captured.map(|c| c.to_rfc3339()),
+            last_run_ref: t.last_run_ref,
+            last_ci_provider: t.last_ci_provider,
+            execution_count: t.execution_count,
+            passed_count: t.passed_count,
+            failed_count: t.failed_count,
+            skipped_count: t.skipped_count,
+            errored_count: t.errored_count,
+            average_duration_ms: t.average_duration_ms,
+        }
+    }
+}
+
+impl From<test_engine::TestExecutionSummary> for TestExecutionOut {
+    fn from(e: test_engine::TestExecutionSummary) -> Self {
+        Self {
+            id: e.id.to_string(),
+            status: e.status,
+            duration_ms: e.duration_ms,
+            stack: e.stack,
+            captured_at: e.captured_at.to_rfc3339(),
+            run_id: e.run_id.to_string(),
+            run_ref: e.run_ref,
+            ci_provider: e.ci_provider,
+            started_at: e.started_at.to_rfc3339(),
+            finished_at: e.finished_at.map(|finished| finished.to_rfc3339()),
+            invocation_id: e.invocation_id.map(|id| id.to_string()),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
