@@ -53,7 +53,7 @@ export default {
   'onboard.enterWorkspace': '进入工作区',
   'onboard.teamName': '团队名称',
   'onboard.teamSlug': '团队 slug',
-  'onboard.slugPattern': '小写字母、数字和连字符，最长 32 个字符',
+  'onboard.slugPattern': '小写字母、数字和连字符，最长 63 个字符',
   'onboard.slugHint': '小写字母、数字和连字符。',
   'onboard.createFailed': '创建失败',
   'onboard.creating': '正在创建…',

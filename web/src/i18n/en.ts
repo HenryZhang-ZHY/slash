@@ -53,7 +53,7 @@ export default {
   'onboard.enterWorkspace': 'Enter workspace',
   'onboard.teamName': 'Team name',
   'onboard.teamSlug': 'Team slug',
-  'onboard.slugPattern': 'Lowercase letters, numbers and hyphens; up to 32 characters',
+  'onboard.slugPattern': 'Lowercase letters, numbers and hyphens; up to 63 characters',
   'onboard.slugHint': 'Lowercase letters, numbers and hyphens.',
   'onboard.createFailed': 'Failed to create',
   'onboard.creating': 'Creating…',
