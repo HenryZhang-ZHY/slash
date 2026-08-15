@@ -7,7 +7,7 @@ sidebar:
 
 Slash serves its HTTP API and web console from the same origin. Replace
 `https://slash.example.com` in the examples with the origin of your Slash
-deployment. The console (see the [web console guide](/web-console/)) is a
+deployment. The console (see the [web console guide](/en/web-console/)) is a
 thin client over these same endpoints.
 
 All request bodies share a **5 MiB limit**. UUID path parameters use the
@@ -27,7 +27,7 @@ RFC 3339 strings.
 
 The tables below list every route registered by `slash-server`.
 
-### [Authentication and teams](/api/authentication/)
+### [Authentication and teams](/en/api/authentication/)
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -37,7 +37,7 @@ The tables below list every route registered by `slash-server`.
 | `GET` | `/api/auth/me` | Read the current user and teams |
 | `POST` | `/api/teams` | Create a team |
 
-### [Test Engine management](/api/test-engine/)
+### [Test Engine management](/en/api/test-engine/)
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -50,7 +50,7 @@ The tables below list every route registered by `slash-server`.
 | `POST` | `/api/test-engine/suites/{id}/tokens` | Issue a collection token |
 | `POST` | `/api/test-engine/suites/{id}/tokens/revoke` | Revoke a collection token |
 
-### [Test result ingestion](/api/ingestion/)
+### [Test result ingestion](/en/api/ingestion/)
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -59,7 +59,7 @@ The tables below list every route registered by `slash-server`.
 | `POST` | `/v1/test-engine/upload/vitest` | Upload Vitest results |
 | `GET` | `/v1/test-engine/quarantined` | List muted or skipped test names |
 
-### [Webhook and operations](/api/platform/)
+### [Webhook and operations](/en/api/platform/)
 
 | Method | Path | Purpose |
 | --- | --- | --- |

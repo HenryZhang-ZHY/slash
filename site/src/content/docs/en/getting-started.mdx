@@ -12,7 +12,7 @@ back to the PR as a check run.
 ## 1. Deploy the server
 
 Slash is a single stateless container plus Postgres — see
-[deployment](/deployment/) for the container image, environment
+[deployment](/en/deployment/) for the container image, environment
 variables, and the reference single-replica deployment. You need a public
 HTTPS URL for the webhook endpoint (`https://<your-host>/webhook`) before
 creating the GitHub App in step 2.
@@ -26,7 +26,7 @@ with:
 - **Webhook secret**: a random value — this becomes `SLASH_WEBHOOK_SECRET`
 - **Permissions**: `checks: write`, `actions: write`, `contents: read`,
   `pull_requests: write`, `issues: write`, `metadata: read` (see
-  [permissions](/permissions/) for why each one is needed —
+  [permissions](/en/permissions/) for why each one is needed —
   `issues: write` in particular is easy to under-scope and silently breaks
   everything)
 - **Subscribe to events**: `issue_comment`, `workflow_run`, `check_run`,
@@ -52,17 +52,17 @@ args:
     free_text: true
 ```
 
-See the [`.slash/` reference](/slash-config-reference/) for the full
+See the [`.slash/` reference](/en/slash-config-reference/) for the full
 schema, and run `slash validate .slash/` in your own CI to catch mistakes
 before they reach the default branch (see
-[known limitations](/limitations/) — Slash does not validate `.slash/` on
+[known limitations](/en/limitations/) — Slash does not validate `.slash/` on
 push itself).
 
 ## 4. Add the workflow
 
 Add `.github/workflows/echo.yml`, also on the default branch (GitHub only
 resolves `workflow_dispatch` targets registered there — see
-[workflow requirements](/workflow-requirements/)):
+[workflow requirements](/en/workflow-requirements/)):
 
 ```yaml
 name: echo
@@ -99,13 +99,13 @@ once the workflow run finishes, with a link to that run.
 
 ## Next steps
 
-- [`.slash/` reference](/slash-config-reference/) — the full
+- [`.slash/` reference](/en/slash-config-reference/) — the full
   `.slash/*.yml` schema
-- [Workflow requirements](/workflow-requirements/) — injected inputs,
+- [Workflow requirements](/en/workflow-requirements/) — injected inputs,
   the `env:`-not-`${{ }}` rule, required-status-check caveats
-- [Permissions](/permissions/) and [Grants](/grants/) — who can invoke what
-- [Web console](/web-console/) — sign in, create teams, manage the Test Engine
-- [Test Engine](/test-engine/) — collect results and quarantine flaky tests
-- [Deployment](/deployment/) — running the server, key rotation, incident
+- [Permissions](/en/permissions/) and [Grants](/en/grants/) — who can invoke what
+- [Web console](/en/web-console/) — sign in, create teams, manage the Test Engine
+- [Test Engine](/en/test-engine/) — collect results and quarantine flaky tests
+- [Deployment](/en/deployment/) — running the server, key rotation, incident
   procedure
-- [Known limitations](/limitations/) — what Slash deliberately does not do yet
+- [Known limitations](/en/limitations/) — what Slash deliberately does not do yet
