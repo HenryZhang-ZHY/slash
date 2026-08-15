@@ -23,7 +23,8 @@ Create a GitHub App (either on your personal account or an organization)
 with:
 
 - **Webhook URL**: `https://<your-host>/webhook`
-- **Webhook secret**: a random value — this becomes `SLASH_WEBHOOK_SECRET`
+- **Webhook secret**: a random value — this becomes the file pointed at by
+  `SLASH_WEBHOOK_SECRET_PATH`
 - **Permissions**: `checks: write`, `actions: write`, `contents: read`,
   `pull_requests: write`, `issues: write`, `metadata: read` (see
   [permissions](/en/permissions/) for why each one is needed —

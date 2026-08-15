@@ -79,6 +79,7 @@ of 1000 concurrent, individually-signed `POST /webhook` redeliveries against
 a release build and a real Postgres produced p99 ≈ 10ms
 (`slash_webhook_handler_seconds{outcome="accepted"}`: 999/1000 in the ≤10ms
 bucket, 1000/1000 in the ≤25ms bucket), comfortably inside the &lt;1s bar. Repro:
-run the server against any Postgres with a known `SLASH_WEBHOOK_SECRET`, then
+run the server against any Postgres with a known webhook secret (in a file at
+`SLASH_WEBHOOK_SECRET_PATH`), then
 fire a batch of HMAC-SHA256-signed requests with unique
 `X-GitHub-Delivery` values and read `GET /metrics` afterward.

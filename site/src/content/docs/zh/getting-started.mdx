@@ -21,7 +21,8 @@ GitHub App（第 2 步）之前，你需要一个公网 HTTPS 地址用于 webho
 在 GitHub 上创建一个 GitHub App（个人账户或组织均可），并配置：
 
 - **Webhook URL**：`https://<your-host>/webhook`
-- **Webhook secret**：一个随机值 —— 它将成为 `SLASH_WEBHOOK_SECRET`
+- **Webhook secret**：一个随机值 —— 它将成为 `SLASH_WEBHOOK_SECRET_PATH`
+  所指向文件的内容
 - **权限**：`checks: write`、`actions: write`、`contents: read`、
   `pull_requests: write`、`issues: write`、`metadata: read`（参见
   [权限](/zh/permissions/) 了解每个权限的用途 —— 尤其是

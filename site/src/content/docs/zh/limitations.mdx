@@ -59,5 +59,6 @@ sidebar:
 对一个 release 构建和真实 Postgres 打 1000 个并发、各自独立签名的 `POST /webhook`
 redelivery，得到 p99 ≈ 10ms（`slash_webhook_handler_seconds{outcome="accepted"}`：
 1000 个里 999 个在 ≤10ms 桶，1000/1000 在 ≤25ms 桶），从容满足 &lt;1s 的底线。
-复现：用已知 `SLASH_WEBHOOK_SECRET` 对任意 Postgres 跑服务器，然后用带唯一
+复现：用已知 webhook secret（放在 `SLASH_WEBHOOK_SECRET_PATH` 指向的文件里）
+对任意 Postgres 跑服务器，然后用带唯一
 `X-GitHub-Delivery` 值的一批 HMAC-SHA256 签名请求打它，之后读 `GET /metrics`。
