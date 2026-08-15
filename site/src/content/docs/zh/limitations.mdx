@@ -35,15 +35,10 @@ sidebar:
 这些在设计文档里没有点名，但值得知道：
 
 - **没有 kill switch。** 设计要求在每个会修改数据的 GitHub API 调用之前检查一个
-  按安装和全局的 kill switch，这样行为异常的安装可以在不影响其他安装的情况下被
-  暂停。这一点没有实现 —— 目前唯一的杠杆是整体停止服务器进程，会同时暂停所有
-  安装。参见 [部署指南](/zh/deployment/#incident-procedure)。
-- **`installations` 表尚未维护。** schema 存在（跟踪 `active`/`suspended`/`deleted`
-  状态），但目前没有任何代码写它：`installation`/`installation_repositories`
-  webhook 被解析并确认，但不会据此行动；经受住 token 重 mint 的 `401` 也还没有把
-  安装标记为 `deleted`。实际上，这意味着被暂停或卸载的 App 会继续走它正常的
-  token-mint/retry 路径（并失败），而不是识别出安装已消失并干净地停止。
-- **§6.4 反垃圾规则只部分接线。** 编辑距离回复门禁（`should_suggest_commands`）
+   按安装和全局的 kill switch，这样行为异常的安装可以在不影响其他安装的情况下被
+   暂停。这一点没有实现 —— 目前唯一的杠杆是整体停止服务器进程，会同时暂停所有
+   安装。参见 [部署指南](/zh/deployment/#incident-procedure)。
+ - **§6.4 反垃圾规则只部分接线。** 编辑距离回复门禁（`should_suggest_commands`）
   已生效：与已配置命令编辑距离在 2 以内的未知命令会得到一个建议回复。但 token
   bucket、每 PR 评论去重和 §3.2 misplaced-command 扫描还没有进入 dispatch pipeline。
   目前，Slash 实际的评论量由它的守卫结构限制（大多数拒绝每事件最多发一条评论），
