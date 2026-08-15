@@ -26,13 +26,14 @@ pub(crate) async fn sweep_run_deadline(pool: &PgPool, app: &GithubApp, config: &
         let Some(workflow_run_id) = invocation.workflow_run_id else {
             continue;
         };
-        let token = match app
-            .installation_token(
-                invocation.installation_id as u64,
-                invocation.repository_id as u64,
-                TOKEN_PERMISSIONS,
-            )
-            .await
+        let token = match crate::installations::mint_installation_token(
+            pool,
+            app,
+            invocation.installation_id as u64,
+            invocation.repository_id as u64,
+            TOKEN_PERMISSIONS,
+        )
+        .await
         {
             Ok(token) => token,
             Err(error) => {

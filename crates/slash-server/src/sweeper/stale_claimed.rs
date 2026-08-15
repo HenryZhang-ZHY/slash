@@ -42,13 +42,14 @@ pub(crate) async fn sweep_stale_claimed(pool: &PgPool, app: &GithubApp, config: 
         let Some(check_run_id) = invocation.check_run_id else {
             continue; // no check run was ever created; nothing to complete
         };
-        let token = match app
-            .installation_token(
-                invocation.installation_id as u64,
-                invocation.repository_id as u64,
-                TOKEN_PERMISSIONS,
-            )
-            .await
+        let token = match crate::installations::mint_installation_token(
+            pool,
+            app,
+            invocation.installation_id as u64,
+            invocation.repository_id as u64,
+            TOKEN_PERMISSIONS,
+        )
+        .await
         {
             Ok(token) => token,
             Err(error) => {
