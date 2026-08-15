@@ -1,0 +1,80 @@
+---
+title: Webhook 与运维
+description: "接收 GitHub 事件并监控 slash-server。"
+sidebar:
+  order: 4
+---
+
+这些端点支撑 GitHub App 控制面和服务器运维。它们不使用其他 API 表面使用的浏览器
+会话或 collection-token 认证。
+
+## POST `/webhook`
+
+接收 GitHub App webhook 投递。把它配置为 GitHub App 的 webhook URL：
+
+```text
+https://slash.example.com/webhook
+```
+
+必需头：
+
+| 头 | 值 |
+| --- | --- |
+| `Content-Type` | `application/json` |
+| `X-GitHub-Event` | GitHub 事件名，例如 `issue_comment` |
+| `X-GitHub-Delivery` | 唯一的 GitHub 投递 GUID |
+| `X-Hub-Signature-256` | 对精确请求体做的 `sha256=<hex HMAC-SHA256>` |
+
+HMAC 密钥是 `SLASH_WEBHOOK_SECRET`。Slash 先校验原始请求字节，再在确认之前持久化
+插入投递。JSON 解析和 GitHub API 工作在响应之后异步进行。
+
+| 状态 | 含义 |
+| --- | --- |
+| `200` | 投递已存储，或投递 GUID 已存储过 |
+| `400` | 事件、投递或接受的 content-type 头缺失或无效 |
+| `403` | 签名缺失、格式错误或不匹配 |
+| `413` | body 超过全局 5 MiB 限制 |
+| `500` | 投递无法被存储 |
+
+重投同一个 `X-GitHub-Delivery` 值是幂等的，返回 `200` 而不插入第二条投递。
+
+## GET `/healthz`
+
+无需认证的存活探针。
+
+```sh
+curl https://slash.example.com/healthz
+```
+
+成功：`200 OK`，带一个纯文本 body：
+
+```text
+ok
+```
+
+handler 不查询 Postgres 或 GitHub。它表示 HTTP 进程能服务请求，而不是下游依赖健康。
+
+## GET `/metrics`
+
+返回进程内指标注册表生成的无需认证的 Prometheus 文本格式输出。
+
+```sh
+curl https://slash.example.com/metrics
+```
+
+重要的指标族包括：
+
+| 指标 | 用途 |
+| --- | --- |
+| `slash_webhook_deliveries_total{event,outcome}` | Webhook 摄入结果 |
+| `slash_webhook_handler_seconds{outcome}` | Webhook handler 延迟 |
+| `slash_deliveries_pending` | 待处理的持久投递 |
+| `slash_deliveries_oldest_pending_age_seconds` | 最老待处理投递的年龄 |
+| `slash_invocations{status}` | Invocation 生命周期计数 |
+| `slash_invocations_max_dispatched_age_seconds` | 等待 run ID 的最老 dispatch |
+| `slash_correlation_total{path}` | Dispatch/run 关联路径 |
+| `slash_dispatch_failures_total{class}` | Dispatch 失败类别 |
+| `slash_command_catalog_loads_total{outcome,stage}` | 命令目录加载结果 |
+| `slash_test_engine_uploads_total{kind,outcome}` | 测试 ingestion 结果 |
+
+如果指标不应在你的部署里公开，请在网络或反向代理层保护这个端点。

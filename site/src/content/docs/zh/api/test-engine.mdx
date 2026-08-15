@@ -1,0 +1,253 @@
+---
+title: Test Engine 管理
+description: "管理套件、测试、执行历史、状态和 collection tokens。"
+sidebar:
+  order: 2
+---
+
+所有管理端点都需要有效的 `slash_session` cookie。套件和测试数据限定在拥有该套件的
+账户范围内。属于不同账户的资源报 `404 Not Found`，而不是泄露它们的存在。
+
+路径里的 ID 是 UUID。Test Engine JSON 字段使用 `snake_case`。
+
+## GET `/api/test-engine/suites`
+
+列出已认证账户的套件和聚合执行数。
+
+```sh
+curl -b cookies.txt \
+  https://slash.example.com/api/test-engine/suites
+```
+
+成功：`200 OK`，带一个数组。
+
+```json
+[
+  {
+    "id": "0e1ef24a-927f-4094-bdaf-477e17c123b8",
+    "suite_key": "ci-test",
+    "owner": "acme",
+    "repo": "checkout",
+    "total_tests": 42,
+    "muted": 2,
+    "skipped": 1,
+    "run_count": 18,
+    "execution_count": 756,
+    "passed_executions": 718,
+    "failed_executions": 30,
+    "skipped_executions": 6,
+    "errored_executions": 2,
+    "average_duration_ms": 83.4,
+    "last_captured": "2026-08-12T04:00:00+00:00"
+  }
+]
+```
+
+在获得执行数据之前，`average_duration_ms` 和 `last_captured` 是 `null`。存储失败
+返回 `500`。
+
+## POST `/api/test-engine/suites`
+
+创建套件，或当匹配套件已属于当前账户时复用它。它还会为 ingestion 签发一个
+collection token。
+
+```sh
+curl -b cookies.txt \
+  -H "Content-Type: application/json" \
+  -d '{"owner":"acme","repo":"checkout","suite_key":"ci-test"}' \
+  https://slash.example.com/api/test-engine/suites
+```
+
+三个字段都必填、会被 trim、并限制在 255 字节。
+
+成功：`201 Created`。
+
+```json
+{
+  "suite": {
+    "id": "0e1ef24a-927f-4094-bdaf-477e17c123b8",
+    "suite_key": "ci-test",
+    "owner": "acme",
+    "repo": "checkout",
+    "total_tests": 0,
+    "muted": 0,
+    "skipped": 0,
+    "run_count": 0,
+    "execution_count": 0,
+    "passed_executions": 0,
+    "failed_executions": 0,
+    "skipped_executions": 0,
+    "errored_executions": 0,
+    "average_duration_ms": null,
+    "last_captured": null
+  },
+  "token": "collection-token-value"
+}
+```
+
+token 是机密。把它存放在上传结果的 CI 系统里。
+
+| 状态 | 含义 |
+| --- | --- |
+| `201` | 套件可用且 token 已签发 |
+| `401` | 无有效会话 |
+| `409` | 另一个账户拥有匹配套件 |
+| `422` | 某个必填字段为空或过长 |
+| `500` | 套件或 token 持久化失败 |
+
+## GET `/api/test-engine/suites/{id}/tests`
+
+列出已拥有套件里的所有测试，包括当前处置状态、最近运行元数据和聚合执行数。
+
+```sh
+curl -b cookies.txt \
+  https://slash.example.com/api/test-engine/suites/0e1ef24a-927f-4094-bdaf-477e17c123b8/tests
+```
+
+成功：`200 OK`，带一个数组。
+
+```json
+[
+  {
+    "id": "df5a68b4-bf9f-4745-a320-a7cd39b59249",
+    "name": "checkout::completes_order",
+    "state": "enabled",
+    "file": "tests/checkout.rs",
+    "line_no": 42,
+    "labels": [],
+    "owner_team_ids": [],
+    "created_at": "2026-08-12T03:00:00+00:00",
+    "updated_at": "2026-08-12T04:00:00+00:00",
+    "last_status": "passed",
+    "last_captured": "2026-08-12T04:00:00+00:00",
+    "last_run_ref": "build/1842",
+    "last_ci_provider": "buildkite",
+    "execution_count": 18,
+    "passed_count": 17,
+    "failed_count": 1,
+    "skipped_count": 0,
+    "errored_count": 0,
+    "average_duration_ms": 91.2
+  }
+]
+```
+
+可选的来源、最近运行和平均字段可能是 `null`。未知或不拥有的套件返回 `404`；
+存储失败返回 `500`。
+
+## GET `/api/test-engine/tests/{id}/executions`
+
+返回属于当前账户的测试的一页最近执行历史。
+
+| 查询参数 | 默认 | 行为 |
+| --- | --- | --- |
+| `limit` | `100` | 限制在 `1..200` |
+| `offset` | `0` | 负值变成 `0` |
+
+```sh
+curl -b cookies.txt \
+  "https://slash.example.com/api/test-engine/tests/df5a68b4-bf9f-4745-a320-a7cd39b59249/executions?limit=25&offset=0"
+```
+
+成功：`200 OK`。
+
+```json
+{
+  "total": 18,
+  "limit": 25,
+  "offset": 0,
+  "items": [
+    {
+      "id": "f8789438-fb99-45f6-a374-1335593264d1",
+      "status": "passed",
+      "duration_ms": 87,
+      "stack": null,
+      "captured_at": "2026-08-12T04:00:00+00:00",
+      "run_id": "68e4a959-c699-4e32-9164-a4500ecfe26d",
+      "run_ref": "build/1842",
+      "ci_provider": "buildkite",
+      "started_at": "2026-08-12T03:59:00+00:00",
+      "finished_at": "2026-08-12T04:01:00+00:00",
+      "invocation_id": null
+    }
+  ]
+}
+```
+
+存储失败返回 `500`。不在账户已拥有套件里的测试不会包含在结果中。
+
+## PATCH `/api/test-engine/tests/{id}/state`
+
+改变测试的处置状态。
+
+```sh
+curl -b cookies.txt -X PATCH \
+  -H "Content-Type: application/json" \
+  -d '{"state":"muted"}' \
+  https://slash.example.com/api/test-engine/tests/df5a68b4-bf9f-4745-a320-a7cd39b59249/state
+```
+
+允许的取值是 `enabled`、`muted` 和 `skipped`。
+
+成功：`200 OK`。
+
+```json
+{
+  "state": "muted"
+}
+```
+
+| 状态 | 含义 |
+| --- | --- |
+| `200` | 状态已改变 |
+| `404` | 测试未知或不属于账户 |
+| `409` | 状态更新输给了并发变更 |
+| `422` | 请求的状态不受支持 |
+| `500` | 所有权查找或更新失败 |
+
+## GET `/api/test-engine/suites/{id}/tokens`
+
+返回已拥有套件最新有效、可恢复的 collection token。旧的仅哈希 token 无法恢复，
+显示为 `null`。
+
+```json
+{
+  "token": "collection-token-value"
+}
+```
+
+成功为 `200`。未知或不拥有的套件返回 `404`；存储或 token 解密失败返回 `500`。
+
+## POST `/api/test-engine/suites/{id}/tokens`
+
+为已拥有的套件签发一个新的可恢复 collection token。请求没有 body。
+
+```sh
+curl -b cookies.txt -X POST \
+  https://slash.example.com/api/test-engine/suites/0e1ef24a-927f-4094-bdaf-477e17c123b8/tokens
+```
+
+成功：`201 Created`。
+
+```json
+{
+  "token": "new-collection-token-value"
+}
+```
+
+未知或不拥有的套件返回 `404`；签发失败返回 `500`。
+
+## POST `/api/test-engine/suites/{id}/tokens/revoke`
+
+吊销一个 collection token。发送调用方仍持有的精确原始 token；Slash 在查找前先
+对它做哈希。
+
+```sh
+curl -b cookies.txt \
+  -H "Content-Type: application/json" \
+  -d '{"token":"collection-token-value"}' \
+  https://slash.example.com/api/test-engine/suites/0e1ef24a-927f-4094-bdaf-477e17c123b8/tokens/revoke
+```
+
+成功为 `204 No Content`。未知、已吊销或不拥有的 token 返回 `404`；存储失败返回
+`500`。被吊销的 token 立即停止认证 ingestion 请求。

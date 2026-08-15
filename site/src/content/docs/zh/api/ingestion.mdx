@@ -1,0 +1,163 @@
+---
+title: 测试结果 Ingestion
+description: "上传归一化、JUnit、Cargo 或 Vitest 结果并查询隔离状态。"
+sidebar:
+  order: 3
+---
+
+Ingestion 端点使用按套件的 collection token：
+
+```http
+Authorization: Bearer collection-token-value
+```
+
+token 通过 [Test Engine 管理 API](/zh/api/test-engine/) 签发。token 决定目标套件；
+客户端不在上传体里发送套件 ID。每个被接受的批次在一个数据库事务里提交。
+
+成功的上传返回 `200 OK` 和空 body。缺失、格式错误、未知或已吊销的 token 返回
+`401 Unauthorized`。无效 payload 返回 `400 Bad Request`，存储或 token 查找失败返回
+`500`。
+
+## POST `/v1/test-engine/upload`
+
+默认接受归一化 JSON，或当 `Content-Type` 是 `application/xml`、
+`application/junit+xml` 或 `text/xml` 时接受 JUnit XML。
+
+### 归一化 JSON
+
+```sh
+curl -X POST \
+  -H "Authorization: Bearer $SLASH_COLLECTION_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data-binary @results.json \
+  https://slash.example.com/v1/test-engine/upload
+```
+
+```json
+{
+  "ci_provider": "buildkite",
+  "run_ref": "build/1842",
+  "invocation_id": "6df850c6-f25e-49bf-8529-1edc665d476c",
+  "executions": [
+    {
+      "name": "checkout::completes_order",
+      "status": "passed",
+      "duration_ms": 87,
+      "stack": null,
+      "file": "tests/checkout.rs",
+      "line_no": 42
+    }
+  ]
+}
+```
+
+| 字段 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `ci_provider` | string | 是 | CI 系统身份 |
+| `run_ref` | string | 是 | 调用方定义的 CI run 身份 |
+| `invocation_id` | UUID 或 null | 否 | 触发该 run 的 Slash invocation |
+| `executions` | array | 是 | 每个观测到的测试一条 |
+| `executions[].name` | string | 是 | 套件内稳定的测试身份 |
+| `executions[].status` | string | 是 | `passed`、`failed`、`skipped` 或 `errored` |
+| `executions[].duration_ms` | integer | 否 | 默认 `0` |
+| `executions[].stack` | string 或 null | 否 | 失败详情 |
+| `executions[].file` | string 或 null | 否 | 源文件 |
+| `executions[].line_no` | integer 或 null | 否 | 源行 |
+
+不受支持的执行状态会在任何数据库写入之前以 `400` 拒绝整个批次。
+
+### JUnit XML
+
+```sh
+curl -X POST \
+  -H "Authorization: Bearer $SLASH_COLLECTION_TOKEN" \
+  -H "Content-Type: application/junit+xml" \
+  --data-binary @junit.xml \
+  https://slash.example.com/v1/test-engine/upload
+```
+
+JUnit 测试用例被归一化进同一执行模型。Slash 分配 `ci_provider: "junit"` 和一个生成的
+`junit/<uuid>` run 引用。JUnit 不填充源文件或行字段。
+
+## POST `/v1/test-engine/upload/cargo`
+
+接受 unstable Cargo libtest JSON 输出产生的换行分隔事件流。
+
+```sh
+cargo test -- -Z unstable-options --format json \
+  | curl -X POST \
+      -H "Authorization: Bearer $SLASH_COLLECTION_TOKEN" \
+      -H "Content-Type: application/x-ndjson" \
+      --data-binary @- \
+      https://slash.example.com/v1/test-engine/upload/cargo
+```
+
+示例输入：
+
+```jsonl
+{"type":"test","name":"tests::it_works","status":"passed","exec_time":0.012}
+{"type":"test","name":"tests::it_breaks","status":"failed","exec_time":0.5}
+```
+
+只有 `type: "test"` 且 `name` 非空的记录会被摄入。状态映射：
+
+| Cargo 状态 | Slash 状态 |
+| --- | --- |
+| `failed` | `failed` |
+| `ignored` | `skipped` |
+| 任何其他或缺失值 | `passed` |
+
+`exec_time` 按秒解释并取整为毫秒。Slash 使用 `ci_provider: "cargo"` 并生成一个
+`cargo/<uuid>` run 引用。
+
+## POST `/v1/test-engine/upload/vitest`
+
+接受一个测试数组，或一个 `tests` 字段是该数组的对象。
+
+```sh
+curl -X POST \
+  -H "Authorization: Bearer $SLASH_COLLECTION_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data-binary @vitest-results.json \
+  https://slash.example.com/v1/test-engine/upload/vitest
+```
+
+```json
+{
+  "tests": [
+    {
+      "name": "src/cart.test.ts > adds an item",
+      "status": "passed",
+      "duration": 51,
+      "location": {
+        "file": "src/cart.test.ts",
+        "line": 7
+      }
+    }
+  ]
+}
+```
+
+`duration` 或 `duration_ms` 按毫秒读取。`failed`、`skipped` 和 `errored` 直接映射；
+任何其他或缺失状态映射到 `passed`。没有非空 `name` 的条目会被忽略。Slash 使用
+`ci_provider: "vitest"` 并生成一个 `vitest/<uuid>` run 引用。
+
+## GET `/v1/test-engine/quarantined`
+
+返回 token 所属套件中当前状态为 `muted` 或 `skipped` 的测试名。
+
+```sh
+curl -H "Authorization: Bearer $SLASH_COLLECTION_TOKEN" \
+  https://slash.example.com/v1/test-engine/quarantined
+```
+
+成功：`200 OK`，带一个 JSON 数组。
+
+```json
+[
+  "checkout::intermittent_gateway",
+  "payments::legacy_processor"
+]
+```
+
+当 CI workflow 需要在运行套件前跳过或 soft-fail 已被 Slash 隔离的测试时，用这个端点。
