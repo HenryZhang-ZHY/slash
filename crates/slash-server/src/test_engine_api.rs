@@ -183,8 +183,8 @@ pub async fn list_test_executions(
     Path(id): Path<uuid::Uuid>,
     Query(page): Query<ExecutionPageRequest>,
 ) -> Result<Json<TestExecutionPageOut>, StatusCode> {
-    let limit = page.limit.clamp(1, 200);
-    let offset = page.offset.max(0);
+    let limit = normalize_execution_limit(page.limit);
+    let offset = normalize_execution_offset(page.offset);
     match test_engine::list_test_executions(&state.pool, id, auth_user.0, limit, offset).await {
         Ok(page) => Ok(Json(TestExecutionPageOut {
             total: page.total,
@@ -447,6 +447,20 @@ fn default_execution_limit() -> i64 {
     100
 }
 
+/// Hard cap so one request cannot materialize an unbounded execution page
+/// (design §8: bounded history reads).
+const MAX_EXECUTION_LIMIT: i64 = 200;
+
+/// Clamps a requested page size into `[1, MAX_EXECUTION_LIMIT]`.
+pub fn normalize_execution_limit(limit: i64) -> i64 {
+    limit.clamp(1, MAX_EXECUTION_LIMIT)
+}
+
+/// Normalizes a requested offset to a non-negative value.
+pub fn normalize_execution_offset(offset: i64) -> i64 {
+    offset.max(0)
+}
+
 #[derive(Debug, serde::Serialize)]
 pub struct TestExecutionPageOut {
     total: i64,
@@ -497,6 +511,7 @@ async fn require_suite_owner(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::expect_used)]
 mod tests {
     use super::*;
 
@@ -536,5 +551,37 @@ mod tests {
         ] {
             assert!(normalize_create_suite(request).is_none());
         }
+    }
+
+    #[test]
+    fn default_execution_limit_is_100() {
+        assert_eq!(default_execution_limit(), 100);
+    }
+
+    #[test]
+    fn normalize_execution_limit_clamps_low_values_to_one() {
+        assert_eq!(normalize_execution_limit(0), 1);
+        assert_eq!(normalize_execution_limit(-10), 1);
+    }
+
+    #[test]
+    fn normalize_execution_limit_passes_in_range_values_through() {
+        assert_eq!(normalize_execution_limit(1), 1);
+        assert_eq!(normalize_execution_limit(100), 100);
+        assert_eq!(normalize_execution_limit(200), 200);
+    }
+
+    #[test]
+    fn normalize_execution_limit_caps_above_max() {
+        assert_eq!(normalize_execution_limit(201), 200);
+        assert_eq!(normalize_execution_limit(100_000), 200);
+    }
+
+    #[test]
+    fn normalize_execution_offset_never_goes_below_zero() {
+        assert_eq!(normalize_execution_offset(0), 0);
+        assert_eq!(normalize_execution_offset(42), 42);
+        assert_eq!(normalize_execution_offset(-1), 0);
+        assert_eq!(normalize_execution_offset(-1000), 0);
     }
 }
