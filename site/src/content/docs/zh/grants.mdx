@@ -1,0 +1,142 @@
+---
+title: Grants（权限授权）
+description: "用离线、deny-by-default 的授权模型授权用户和团队调用命令。"
+sidebar:
+  order: 5
+---
+
+Slash 通过**离线 grant 模型**授权命令 dispatch：谁能调用命令由本地 `grants` 表
+决定，绝不通过实时的 GitHub API 查询。模型是 **deny-by-default 且 fail-closed** ——
+缺失 grant、数据库错误、或达不到所需档位的 grant，都意味着**拒绝**。
+
+本页记录 grant 模型。它取代了 [权限](/zh/permissions/) 页上描述的旧
+GitHub-collaborator-role 门禁。
+
+## 授权是如何工作的
+
+每条命令在 `.slash/*.yml` 里声明一个 `permission` 档位 —— `read`、`write` 或
+`admin`（默认 `write`）。grant 说明*谁*可以在*什么*上以*哪个档位*操作：一个用户或
+团队，范围到组织、仓库或单条命令。
+
+两者在 dispatch 时结合：
+
+```text
+granted tier ≥ command's required tier  →  allow
+otherwise (explicit deny / resolution failure / no matching row)  →  deny
+```
+
+授权是两步的离线路径：
+
+1. **预加载**（`preload_grants`）：服务器把 actor 的 Slash 用户（按 GitHub id）
+   和仓库的组织（按 installation id）解析出来，然后加载对该 actor 生效的每一行
+   grant —— 直接的用户 grants 加上 actor 所属团队的 grants —— 限定在该组织内。
+2. **判定**（`GrantsTrustGate` → `decide`）：一个纯 IO-free 的函数接收这些行加上
+   仓库和命令上下文，返回单个 `Allow` 或 `Denied` 判定。
+
+`TrustGate` 阶段就是 dispatch pipeline 里接入它的地方：grants 在 pipeline 入口
+异步加载，同步判定阶段消费它们。参见
+[`slash-core` 的 pipeline](https://github.com/HenryZhang-ZHY/slash/tree/main/crates/slash-core/src/pipeline.rs)
+和 [`grants` 模块](https://github.com/HenryZhang-ZHY/slash/tree/main/crates/slash-core/src/grants.rs)。
+
+## Grant 行
+
+一行 grant 存在于 `grants` 表，由以下字段唯一标识：
+
+| 字段 | 含义 |
+| --- | --- |
+| `organization_id` | grant 所属的租户组织。 |
+| `subject_type` / `subject_id` | 授权给谁：`user`（`users.id`）或 `team`（`teams.id`）。 |
+| `scope` | 适用范围：`org`、`repository` 或 `command`。 |
+| `repository` | `owner/repo` —— scope 为 `repository` 或 `command` 时必填。 |
+| `command` | 命令名 —— scope 为 `command` 时必填。 |
+| `permission` | 授予的档位：`read`、`write` 或 `admin`。 |
+| `effect` | `allow` 或 `deny` —— **deny 优先**。 |
+| `granted_by` | 创建该 grant 的用户的审计链接。 |
+
+每个 `(organization_id, subject_type, subject_id, scope, repository, command)`
+最多只有一行 grant。
+
+## 范围解析
+
+一行 grant 根据它的 scope 适用于某个 `(repo, command)` 上下文，从最具体到最宽泛：
+
+| 范围 | 何时适用 |
+| --- | --- |
+| `command` | 调用的命令匹配 grant 的 `command`（它的 `repository` 也必须匹配该仓库）。 |
+| `repository` | 调用的 `owner/repo` 匹配 grant 的 `repository`。 |
+| `org` | 组织内总是适用。 |
+
+更具体的 grant 并不是"必需"的 —— 每一行匹配的 grant 都会被考虑，而**所有匹配行
+（用户和团队 grants 合并）中允许的最高档位**就是 actor 操作的档位。
+
+## deny 优先
+
+针对匹配上下文的显式 `deny` 行会覆盖所有 `allow`，无论允许的档位多高：
+
+```text
+org 范围  allow admin  （团队 "eng"）
+command   deny  write  （用户 alice，命令 "deploy"，仓库 acme/widgets）
+→ alice 在 acme/widgets 上调用 /deploy 被 DENY
+```
+
+`deny` 只作用于它自己的上下文 —— 上例中 alice 仍然可以在 `acme/widgets` 上调用
+`release`（没有 deny 它），只是不能调用 `deploy`。
+
+## Fail-closed 与 deny-by-default
+
+每种歧义都解析为**拒绝**：
+
+- **根本没有匹配的 grant 行** → 拒绝。没有回退到 GitHub collaborator API，也没有
+  兼容 shim —— 所有仓库走同一条 grant 路径。
+- **允许的最高档位低于命令所需档位** → 拒绝。
+- **actor 不是 Slash 用户**（没有对应 GitHub id 的 `users` 行）→ 拒绝。
+- **仓库的组织无法解析**（没有对应 installation 的 `organizations` 行）→ 拒绝。
+- **路径上任何数据库错误或解析失败** → 拒绝。失败永远不可能变成 allow。
+
+这是对模型刻意的加固：grant 解析失败意味着 actor 的信任等级未知，而未知就是拒绝。
+
+## 管理 grants
+
+Grant 行在应用数据库里管理（CLI/DB 优先；目前没有管理 REST API 或 UI）。`slash`
+CLI 尚未暴露 grant 管理 —— 行通过 SQL 或未来的管理面添加。
+
+给 `eng` 团队在仓库 `acme/widgets` 的 `deploy` 命令上授予 `write`：
+
+```sql
+INSERT INTO grants (id, organization_id, subject_type, subject_id, scope,
+                    repository, command, permission, effect, granted_by)
+VALUES (gen_random_uuid(), '<org_id>', 'team', '<team_id>', 'command',
+        'acme/widgets', 'deploy', 'write', 'allow', '<admin_user_id>');
+```
+
+无论团队成员关系如何，阻止特定用户调用 `deploy`：
+
+```sql
+INSERT INTO grants (id, organization_id, subject_type, subject_id, scope,
+                    repository, command, permission, effect, granted_by)
+VALUES (gen_random_uuid(), '<org_id>', 'user', '<user_id>', 'command',
+        'acme/widgets', 'deploy', 'write', 'deny', '<admin_user_id>');
+```
+
+实用建议：
+
+- **优先团队 grant 而非逐用户 grant。** 团队是访问控制中心；给团队的 grant 覆盖
+  团队里每个人，并随成员变化而更新。
+- **授予你需要的尽量窄的 scope。** 用 `command` 做按命令授权，`repository` 做
+  一个仓库内的所有东西，`org` 做组织级策略。更窄的 scope 给出更细的 deny 面。
+- **用 `deny` 做例外。** 给团队一个宽泛的 `org` 或 `repository` allow，再给特定
+  用户加一个针对具体 `command` 或 `repository` 的 deny，是受支持的减法方式。
+- **记住档位语义。** 授予的档位是 subject 达到的*上限*；需要 `admin` 的命令要
+  `admin` grant，而不是 `write`。
+
+## 与重新运行的交互
+
+check run 的 **Re-run** 按钮会通过同一条 grant 路径重新授权*重新请求者* —— 不是
+原始调用者 —— 并对照命令的*当前*所需档位。grant 自原始调用后被移除或降级的用户在
+重新运行时会被拒绝，所以重新运行绝不是绕过门禁的途径。
+
+## 参见
+
+- [权限](/zh/permissions/) —— 授权模型及其历史
+- [`.slash/` 参考](/zh/slash-config-reference/) —— 命令上的 `permission` 字段
+- [部署](/zh/deployment/) —— 托管 `grants` 表的服务器

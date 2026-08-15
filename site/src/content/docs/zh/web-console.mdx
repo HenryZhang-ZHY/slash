@@ -1,0 +1,51 @@
+---
+title: Web 控制台
+description: "从 Slash 的 Web UI 登录、创建团队并管理 Test Engine。"
+sidebar:
+  order: 8
+---
+
+Slash 从与 API 相同的来源提供一个 Web 控制台（React SPA）。它涵盖账户 onboarding
+和 Test Engine 控制面板。控制台没有任何仅客户端的数据 —— 每个屏幕都调用有文档的
+HTTP API，所以控制台能做的任何事通过 API 也都能做。
+
+## 登录与注册
+
+打开控制台根路径（例如 `https://slash.example.com/`）—— 未认证访问会重定向到
+`/login`。登录页在 **Sign in** 和 **Create your account** 之间切换：
+
+- **Create your account** —— 用邮箱和至少 8 字节的密码注册（`POST
+  /api/auth/register`）。注册后立即登录。
+- **Sign in** —— 用现有账户登录（`POST /api/auth/login`）。
+
+两者都设置 `HttpOnly` 会话 cookie；控制台永远看不到密码。
+
+## Onboarding：创建你的第一个团队
+
+登录后，控制台重定向到 `/onboarding`，要求输入**团队名**和**团队 slug**（小写
+字母、数字和连字符，最多 63 个字符）。创建团队调用 `POST /api/teams`，在一个事务里
+为你创建 home 组织（如果你还没有）并把你设为团队的 maintainer。团队是仓库和自动化
+的访问控制边界 —— 参见 [Grants](/zh/grants/) 了解团队如何获得命令权限。
+
+## 仪表盘
+
+工作区首页（`/`）显示概览：你的团队数量、Test Engine 套件/测试用例/执行数量、
+团队列表，以及进入 Test Engine 控制台的快捷方式。
+
+## Test Engine 控制台
+
+`/tests` 页面是 Test Engine 控制面板。你可以：
+
+- **列出并选择套件** —— 选一个套件查看它的测试、通过率和 muted/skipped 数量。
+- **创建套件** —— 这与 API 暴露的创建套件端点相同，并返回一个用于 ingestion 的
+  collection token。
+- **浏览测试** —— 按状态过滤（`all`、`failing`、`passing`、`muted`、
+  `skipped`），按名字/文件/标签搜索，按最近、名字、最慢或失败数排序。
+- **检查测试** —— 查看它的元数据、聚合历史和执行行。
+- **改变测试状态** —— mute 或 skip 一个测试（`PATCH
+  /api/test-engine/tests/{id}/state`），或重新启用它。
+- **管理 collection tokens** —— 读取和吊销套件的 token（`GET`/`POST`/`DELETE`
+  token 端点）。
+
+控制台里的每个动作都一一对应
+[Test Engine 管理 API](/zh/api/test-engine/) 里的一个端点。
