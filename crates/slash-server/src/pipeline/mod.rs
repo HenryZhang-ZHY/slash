@@ -15,6 +15,17 @@
 //! (all injected inputs plus args are sent unconditionally, which spec
 //! explicitly allows as the fallback when the workflow file isn't
 //! introspected).
+//!
+//! Split (R2 #29): `handle_issue_comment` (the guard sequence) lives here
+//! with the pipeline types; the shared feedback helpers
+//! (`log_permission_api_failure`, `report_catalog_error`,
+//! `supersede_older_invocations`) live in `feedback`.
+
+mod feedback;
+
+pub(crate) use feedback::{
+    log_permission_api_failure, report_catalog_error, supersede_older_invocations,
+};
 
 use serde_json::{Map, Value as Json};
 use slash_core::{ResolvedRole, TrustGate, messages};
@@ -23,7 +34,7 @@ use slash_github::{GithubApp, RepoClient, WebhookEventPayload};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::catalog::{CatalogError, CatalogOutcome, load_catalog, resolve_default_branch};
+use crate::catalog::{CatalogOutcome, load_catalog, resolve_default_branch};
 use crate::invocations::{self, ClaimOutcome, NewInvocation};
 
 /// The permissions requested for the least-privilege, per-repo installation
@@ -482,116 +493,6 @@ pub async fn handle_issue_comment(
     Ok(())
 }
 
-fn log_permission_api_failure(
-    stage: &'static str,
-    owner: &str,
-    repo: &str,
-    username: &str,
-    comment_id: u64,
-    error: &slash_github::ClientError,
-) {
-    tracing::warn!(
-        stage,
-        owner,
-        repo,
-        username,
-        comment_id,
-        status = ?error.status_code(),
-        error = %error,
-        "collaborator permission API failed"
-    );
-}
-
-async fn report_catalog_error(
-    ctx: &PipelineContext<'_>,
-    client: &RepoClient,
-    issue_number: u64,
-    comment_id: u64,
-    can_comment: bool,
-    error: &CatalogError,
-) {
-    let outcome = match error {
-        CatalogError::Invalid { .. } => "invalid",
-        CatalogError::Unavailable { .. } => "unavailable",
-    };
-    ctx.metrics
-        .command_catalog_loads_total
-        .with_label_values(&[outcome, error.stage()])
-        .inc();
-    tracing::warn!(
-        owner = %ctx.owner,
-        repo = %ctx.repo,
-        stage = error.stage(),
-        path = ?error.path(),
-        status = ?error.status_code(),
-        error = %error,
-        "command catalog load failed"
-    );
-
-    if can_comment {
-        let body = match error {
-            CatalogError::Invalid { details } => messages::config_error(details),
-            CatalogError::Unavailable { .. } => messages::command_catalog_unavailable(),
-        };
-        if let Err(feedback_error) = client.create_comment(issue_number, &body).await {
-            tracing::warn!(error = %feedback_error, "failed to post command catalog feedback");
-        }
-    }
-    if let Err(feedback_error) = client
-        .create_comment_reaction(comment_id, ReactionContent::Confused)
-        .await
-    {
-        tracing::warn!(error = %feedback_error, "failed to react to command catalog failure");
-    }
-}
-
-async fn supersede_older_invocations(
-    ctx: &PipelineContext<'_>,
-    client: &RepoClient,
-    pr_number: u64,
-    command: &str,
-    except_id: Uuid,
-) -> Result<(), PipelineError> {
-    let candidates = invocations::find_supersede_candidates(
-        ctx.pool,
-        ctx.installation_id as i64,
-        &ctx.owner,
-        &ctx.repo,
-        pr_number as i64,
-        command,
-        except_id,
-    )
-    .await?;
-
-    for candidate in candidates {
-        invocations::transition_status(
-            ctx.pool,
-            candidate.id,
-            slash_core::InvocationStatus::Superseded,
-        )
-        .await?;
-
-        if let Some(check_run_id) = candidate.check_run_id {
-            let _ = client
-                .update_check_run(
-                    check_run_id as u64,
-                    slash_github::CheckRunUpdate {
-                        status: Some(octocrab::params::checks::CheckRunStatus::Completed),
-                        conclusion: Some(octocrab::params::checks::CheckRunConclusion::Neutral),
-                        details_url: None,
-                        output: Some((
-                            "Superseded",
-                            "A newer invocation of this command supersedes this one.",
-                        )),
-                    },
-                )
-                .await;
-        }
-    }
-
-    Ok(())
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::expect_used)]
 mod tests {
@@ -611,7 +512,7 @@ mod tests {
     use crate::metrics::Metrics;
 
     const TEST_KEY_PEM: &[u8] =
-        include_bytes!("../../slash-github/tests/fixtures/test-app-key.pem");
+        include_bytes!("../../../slash-github/tests/fixtures/test-app-key.pem");
 
     #[derive(Clone)]
     struct CaptureWriter(Arc<Mutex<Vec<u8>>>);
@@ -677,7 +578,9 @@ mod tests {
         )
         .bind(org)
         .bind(installation_id)
-        .execute(pool).await.unwrap();
+        .execute(pool)
+        .await
+        .unwrap();
         let uid = uuid::Uuid::new_v4();
         sqlx::query(
             "INSERT INTO users (id, email, password_hash, display_name, status, github_user_id)
@@ -685,7 +588,9 @@ mod tests {
         )
         .bind(uid)
         .bind(github_user_id)
-        .execute(pool).await.unwrap();
+        .execute(pool)
+        .await
+        .unwrap();
         // org-scope write allow so any write-tier command in this install/new repo dispatches.
         sqlx::query(
             "INSERT INTO grants (id, organization_id, subject_type, subject_id, scope, repository, command, permission, effect)

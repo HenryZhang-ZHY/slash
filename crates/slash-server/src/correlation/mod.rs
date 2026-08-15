@@ -10,20 +10,28 @@
 //! webhook path, since both ultimately need to write the same terminal
 //! conclusion from a freshly re-fetched run. Deliberately deferred and
 //! flagged rather than silently skipped: failed-check-run-update retry.
+//!
+//! Split (R2 #29): each webhook handler lives in its own submodule;
+//! this module holds the shared helpers, the re-exports, and the test
+//! suite (which exercises every handler).
 
-use octocrab::models::webhook_events::payload::{
-    CheckRunWebhookEventAction, CheckRunWebhookEventPayload, PullRequestWebhookEventAction,
-    PullRequestWebhookEventPayload, WorkflowRunWebhookEventAction, WorkflowRunWebhookEventPayload,
-};
-use octocrab::params::checks::{CheckRunConclusion, CheckRunStatus};
-use slash_core::{CheckConclusion, InvocationStatus, TrustGate, messages};
-use slash_github::{CheckRunUpdate, RepoClient, WebhookEvent, WorkflowRun};
-use sqlx::PgPool;
+mod rerequest;
+mod synchronize;
+mod workflow_run;
 
-use crate::catalog::{CatalogError, CatalogOutcome, load_catalog, resolve_default_branch};
-use crate::invocations::{self, Invocation, NewInvocation};
-use crate::pipeline::{PipelineContext, PipelineError, TOKEN_PERMISSIONS};
+pub(crate) use rerequest::handle_check_run_rerequested;
+pub(crate) use synchronize::handle_pull_request_synchronize;
+pub(crate) use workflow_run::{apply_completed_run, handle_workflow_run};
 
+use octocrab::params::checks::CheckRunConclusion;
+use slash_core::CheckConclusion;
+
+use crate::catalog::CatalogError;
+use crate::pipeline::PipelineContext;
+
+/// Maps a `slash_core::CheckConclusion` to the octocrab check-run conclusion
+/// enum GitHub's API accepts. Shared by the `workflow_run.completed` path
+/// and the sweeper's re-fetch terminal writes.
 pub(crate) fn to_octocrab_conclusion(conclusion: CheckConclusion) -> CheckRunConclusion {
     match conclusion {
         CheckConclusion::Success => CheckRunConclusion::Success,
@@ -35,7 +43,11 @@ pub(crate) fn to_octocrab_conclusion(conclusion: CheckConclusion) -> CheckRunCon
     }
 }
 
-fn record_catalog_error(ctx: &PipelineContext<'_>, error: &CatalogError, message: &'static str) {
+pub(crate) fn record_catalog_error(
+    ctx: &PipelineContext<'_>,
+    error: &CatalogError,
+    message: &'static str,
+) {
     let outcome = match error {
         CatalogError::Invalid { .. } => "invalid",
         CatalogError::Unavailable { .. } => "unavailable",
@@ -53,429 +65,6 @@ fn record_catalog_error(ctx: &PipelineContext<'_>, error: &CatalogError, message
         error = %error,
         "{message}"
     );
-}
-
-/// Writes a freshly re-fetched, `completed` run's outcome to both the
-/// invocation row and its check run (spec §6.3's re-fetch-before-terminal
-/// rule). Shared by the `workflow_run.completed` webhook path and the
-/// sweeper's lost-webhook/run-deadline polling — both call this only after
-/// confirming, via their own means, that the run has actually completed.
-pub(crate) async fn apply_completed_run(
-    pool: &PgPool,
-    client: &RepoClient,
-    invocation: &Invocation,
-    fresh: &WorkflowRun,
-) -> Result<(), PipelineError> {
-    let transitioned =
-        invocations::transition_status(pool, invocation.id, InvocationStatus::Completed).await?;
-    if !transitioned {
-        return Ok(());
-    }
-
-    let (conclusion, raw) = slash_core::map_conclusion(fresh.conclusion.as_deref());
-    invocations::set_conclusion(pool, invocation.id, conclusion.as_str()).await?;
-    invocations::set_last_reported_status(pool, invocation.id, "completed").await?;
-
-    if let Some(check_run_id) = invocation.check_run_id {
-        let head_sha_mismatch = fresh.head_sha != invocation.head_sha;
-        let duration = fresh
-            .run_started_at
-            .map(|started| (fresh.created_at - started).num_seconds().abs());
-        let mut summary = messages::check_run_summary(
-            &invocation.raw_comment_line,
-            &invocation.actor,
-            &fresh.html_url,
-            duration,
-            head_sha_mismatch,
-        );
-        if let Some(raw_value) = raw {
-            summary.push_str(&format!(
-                "\nRaw conclusion: {}",
-                messages::escape_user_text(&raw_value)
-            ));
-        }
-
-        let _ = client
-            .update_check_run(
-                check_run_id as u64,
-                CheckRunUpdate {
-                    status: Some(CheckRunStatus::Completed),
-                    conclusion: Some(to_octocrab_conclusion(conclusion)),
-                    details_url: Some(&fresh.html_url),
-                    output: Some(("Result", &summary)),
-                },
-            )
-            .await;
-    }
-
-    Ok(())
-}
-
-/// Handles one `workflow_run` webhook event: exact match by run id (spec
-/// §6.3), a guarded transition, and — only on `completed` — a re-fetch of
-/// the run before writing a terminal conclusion, never trusting the webhook
-/// body directly.
-pub async fn handle_workflow_run(
-    ctx: &PipelineContext<'_>,
-    payload: &WorkflowRunWebhookEventPayload,
-) -> Result<(), PipelineError> {
-    let Ok(run) = serde_json::from_value::<WorkflowRun>(payload.workflow_run.clone()) else {
-        return Ok(());
-    };
-
-    let Some(invocation) = invocations::find_by_workflow_run_id(
-        ctx.pool,
-        ctx.installation_id as i64,
-        &ctx.owner,
-        &ctx.repo,
-        run.id as i64,
-    )
-    .await?
-    else {
-        // Not ours: never correlated (an ambiguous dispatch outcome, left
-        // for the sweeper's polling fallback), or a human-started run of
-        // the same workflow — never claimed by run id alone.
-        return Ok(());
-    };
-
-    let Some(status) = InvocationStatus::parse(&invocation.status) else {
-        return Ok(());
-    };
-    if status.is_terminal() {
-        // Stale event after a terminal state, a duplicate `completed`, or
-        // `completed` having already arrived before this `in_progress`
-        // (spec §6.2's monotonic guarantee) — dropped, not reprocessed.
-        return Ok(());
-    }
-
-    let token = ctx
-        .app
-        .installation_token(ctx.installation_id, ctx.repository_id, TOKEN_PERMISSIONS)
-        .await?;
-    let client =
-        RepoClient::with_base_uri(&token, ctx.owner.clone(), ctx.repo.clone(), ctx.base_uri)?;
-
-    match payload.action {
-        WorkflowRunWebhookEventAction::Completed => {
-            // Re-fetch before writing a terminal conclusion (spec §6.3).
-            let fresh = client.get_workflow_run(run.id).await?;
-            apply_completed_run(ctx.pool, &client, &invocation, &fresh).await?;
-        }
-        WorkflowRunWebhookEventAction::InProgress | WorkflowRunWebhookEventAction::Requested => {
-            let target = if payload.action == WorkflowRunWebhookEventAction::InProgress {
-                "in_progress"
-            } else {
-                "queued"
-            };
-            if invocation.last_reported_status.as_deref() == Some(target) {
-                return Ok(()); // already reported; updates are idempotent (spec §7.2)
-            }
-            invocations::set_last_reported_status(ctx.pool, invocation.id, target).await?;
-
-            if let Some(check_run_id) = invocation.check_run_id {
-                let status = if target == "in_progress" {
-                    CheckRunStatus::InProgress
-                } else {
-                    CheckRunStatus::Queued
-                };
-                let _ = client
-                    .update_check_run(
-                        check_run_id as u64,
-                        CheckRunUpdate {
-                            status: Some(status),
-                            conclusion: None,
-                            details_url: None,
-                            output: None,
-                        },
-                    )
-                    .await;
-            }
-        }
-        // Non-exhaustive enum (octocrab may add actions); nothing else is
-        // meaningful for correlation.
-        _ => {}
-    }
-
-    Ok(())
-}
-
-/// Handles `check_run.rerequested` (spec §6.5): re-resolve the
-/// *rerequester's* permission — never the original invoker's — against the
-/// command's current configuration, claim a fresh invocation row for the
-/// same comment at the next attempt, and run the normal pipeline from the
-/// claim onward.
-pub async fn handle_check_run_rerequested(
-    ctx: &PipelineContext<'_>,
-    event: &WebhookEvent,
-) -> Result<(), PipelineError> {
-    let slash_github::WebhookEventPayload::CheckRun(payload) = &event.specific else {
-        return Ok(());
-    };
-    let CheckRunWebhookEventPayload {
-        action: CheckRunWebhookEventAction::Rerequested,
-        check_run,
-        ..
-    } = payload.as_ref()
-    else {
-        return Ok(());
-    };
-
-    #[derive(serde::Deserialize)]
-    struct MinimalCheckRun {
-        id: u64,
-        external_id: Option<String>,
-    }
-    let Ok(check_run) = serde_json::from_value::<MinimalCheckRun>(check_run.clone()) else {
-        return Ok(());
-    };
-
-    let Some(original) = invocations::find_by_check_run_id(
-        ctx.pool,
-        ctx.installation_id as i64,
-        &ctx.owner,
-        &ctx.repo,
-        check_run.id as i64,
-    )
-    .await?
-    else {
-        // A stale or unknown check_run_id: nothing to re-run.
-        return Ok(());
-    };
-    let _ = check_run.external_id;
-
-    let Some(rerequester) = &event.sender else {
-        return Ok(());
-    };
-
-    let token = ctx
-        .app
-        .installation_token(ctx.installation_id, ctx.repository_id, TOKEN_PERMISSIONS)
-        .await?;
-    let client =
-        RepoClient::with_base_uri(&token, ctx.owner.clone(), ctx.repo.clone(), ctx.base_uri)?;
-
-    // Re-capture the PR head and re-check the command's *current*
-    // permission requirement (config may have changed since the original
-    // invocation).
-    let pr = client.get_pull_request(original.pr_number as u64).await?;
-    let hinted_default_branch = pr
-        .base
-        .repo
-        .as_ref()
-        .and_then(|repo| repo.default_branch.as_deref());
-    let resolved = match resolve_default_branch(&client, hinted_default_branch).await {
-        Ok(resolved) => resolved,
-        Err(error) => {
-            record_catalog_error(ctx, &error, "rerequest command catalog resolution failed");
-            let body = messages::command_catalog_unavailable();
-            let _ = client
-                .update_check_run(
-                    check_run.id,
-                    CheckRunUpdate {
-                        status: Some(CheckRunStatus::Completed),
-                        conclusion: Some(CheckRunConclusion::ActionRequired),
-                        details_url: None,
-                        output: Some(("Re-run unavailable", &body)),
-                    },
-                )
-                .await;
-            return Ok(());
-        }
-    };
-    tracing::debug!(
-        owner = %ctx.owner,
-        repo = %ctx.repo,
-        default_branch = %resolved.name,
-        config_sha = %resolved.sha,
-        "resolved rerequest command catalog snapshot"
-    );
-    let catalog = match load_catalog(&client, &resolved.sha).await {
-        Ok(CatalogOutcome::Loaded(catalog)) => {
-            ctx.metrics
-                .command_catalog_loads_total
-                .with_label_values(&["loaded", "complete"])
-                .inc();
-            catalog
-        }
-        Ok(CatalogOutcome::NotConfigured) => {
-            ctx.metrics
-                .command_catalog_loads_total
-                .with_label_values(&["not_configured", "complete"])
-                .inc();
-            let body = messages::installed_but_not_configured();
-            let _ = client
-                .update_check_run(
-                    check_run.id,
-                    CheckRunUpdate {
-                        status: Some(CheckRunStatus::Completed),
-                        conclusion: Some(CheckRunConclusion::ActionRequired),
-                        details_url: None,
-                        output: Some(("Re-run denied", &body)),
-                    },
-                )
-                .await;
-            return Ok(());
-        }
-        Err(error) => {
-            record_catalog_error(ctx, &error, "rerequest command catalog load failed");
-            let (title, body) = match &error {
-                CatalogError::Invalid { details } => {
-                    ("Re-run denied", messages::config_error(details))
-                }
-                CatalogError::Unavailable { .. } => (
-                    "Re-run unavailable",
-                    messages::command_catalog_unavailable(),
-                ),
-            };
-            let _ = client
-                .update_check_run(
-                    check_run.id,
-                    CheckRunUpdate {
-                        status: Some(CheckRunStatus::Completed),
-                        conclusion: Some(CheckRunConclusion::ActionRequired),
-                        details_url: None,
-                        output: Some((title, &body)),
-                    },
-                )
-                .await;
-            return Ok(());
-        }
-    };
-    let Some(validated) = catalog.find(&original.command) else {
-        return Ok(());
-    };
-
-    // Re-authorize the rerequester against the same grants-backed decision
-    // source as the main pipeline (R2 TrustGate, org/user #23): async preload
-    // of the rerequester's grants, then the sync grants decision. Fail-closed:
-    // a load/decision error or a missing grant that reaches the required tier
-    // denies. This replaces the old GitHub-collaborator-role comparison, which
-    // let a collaborator without a grant re-run (fail-open) and blocked a
-    // granted non-collaborator.
-    let grants = crate::grants_loader::preload_grants(
-        ctx.pool,
-        rerequester.id.0 as i64,
-        ctx.installation_id as i64,
-        &ctx.owner,
-        &ctx.repo,
-    )
-    .await;
-    let actor = slash_core::pipeline::Actor {
-        login: rerequester.login.clone(),
-        github_user_id: rerequester.id.0,
-    };
-    let outcome = match grants {
-        Ok(grants) => {
-            let gate = crate::grants_trust_gate::GrantsTrustGate;
-            gate.check(&grants, &actor, &original.command, validated.permission)
-        }
-        // Fail closed: a preload DB/parse error is a deny (TrustOutcome::Error).
-        Err(error) => slash_core::pipeline::TrustOutcome::Error(error.to_string()),
-    };
-    if !outcome.is_granted() {
-        // No comment surface for a denied re-run (spec §6.5); the check
-        // run itself communicates the denial.
-        let required = match validated.permission {
-            slash_config::Permission::Read => "read",
-            slash_config::Permission::Write => "write",
-            slash_config::Permission::Admin => "admin",
-        };
-        let _ = client
-            .update_check_run(
-                check_run.id,
-                CheckRunUpdate {
-                    status: Some(CheckRunStatus::Completed),
-                    conclusion: Some(CheckRunConclusion::ActionRequired),
-                    details_url: None,
-                    output: Some((
-                        "Re-run denied",
-                        &messages::rerequest_permission_denied(&original.command, required),
-                    )),
-                },
-            )
-            .await;
-        return Ok(());
-    }
-
-    let new_id = uuid::Uuid::new_v4();
-    let new_invocation = NewInvocation {
-        id: new_id,
-        installation_id: ctx.installation_id as i64,
-        repository_id: ctx.repository_id as i64,
-        owner: &ctx.owner,
-        repo: &ctx.repo,
-        comment_id: original.comment_id,
-        attempt: original.attempt + 1,
-        pr_number: original.pr_number,
-        head_sha: &pr.head.sha,
-        head_branch: &pr.head.ref_field,
-        actor: &rerequester.login,
-        actor_id: rerequester.id.0 as i64,
-        command: &original.command,
-        raw_comment_line: &original.raw_comment_line,
-        args: serde_json::Value::Object(serde_json::Map::new()),
-        workflow_file: &original.workflow_file,
-    };
-
-    let claim_outcome = invocations::claim(ctx.pool, &new_invocation).await?;
-    let invocations::ClaimOutcome::Claimed(id) = claim_outcome else {
-        return Ok(());
-    };
-
-    let check_run_name = format!("slash/{}", original.command);
-    let new_check_run = client
-        .create_check_run(&check_run_name, &pr.head.sha, &id.to_string())
-        .await?;
-    invocations::set_check_run_id(ctx.pool, id, new_check_run.id.0 as i64).await?;
-    invocations::transition_status(ctx.pool, id, InvocationStatus::Dispatched).await?;
-
-    let dispatch_ref = format!("refs/heads/{}", pr.head.ref_field);
-    let inputs = serde_json::json!({
-        "slash_run_id": id.to_string(),
-        "slash_pr_number": original.pr_number.to_string(),
-        "slash_head_sha": pr.head.sha,
-        "slash_actor": rerequester.login,
-        "slash_actor_id": rerequester.id.0.to_string(),
-    });
-
-    if let Ok(outcome) = client
-        .dispatch_workflow(&original.workflow_file, &dispatch_ref, inputs)
-        .await
-    {
-        invocations::set_workflow_run_id(ctx.pool, id, outcome.workflow_run_id as i64).await?;
-        invocations::transition_status(ctx.pool, id, InvocationStatus::Correlated).await?;
-        ctx.metrics
-            .correlation_total
-            .with_label_values(&["dispatch_response"])
-            .inc();
-    }
-
-    Ok(())
-}
-
-/// `pull_request.synchronize` (spec §7.3): records the moved head SHA on
-/// the PR's open invocations, purely for the eventual completion summary to
-/// note "the branch moved after this command was issued" — it never
-/// re-triggers anything (spec §2.4).
-pub async fn handle_pull_request_synchronize(
-    ctx: &PipelineContext<'_>,
-    payload: &PullRequestWebhookEventPayload,
-) -> Result<(), PipelineError> {
-    if payload.action != PullRequestWebhookEventAction::Synchronize {
-        return Ok(());
-    }
-
-    invocations::record_new_head_sha(
-        ctx.pool,
-        ctx.installation_id as i64,
-        &ctx.owner,
-        &ctx.repo,
-        payload.number as i64,
-        &payload.pull_request.head.sha,
-    )
-    .await?;
-
-    Ok(())
 }
 
 #[cfg(test)]
@@ -496,14 +85,17 @@ mod tests {
 
     use super::*;
     use crate::db;
+    use crate::invocations;
     use crate::invocations::{ClaimOutcome, NewInvocation};
     use crate::metrics::Metrics;
+    use slash_core::InvocationStatus;
     use slash_github::GithubApp;
+    use slash_github::WebhookEvent;
     use sqlx::PgPool;
     use uuid::Uuid;
 
     const TEST_KEY_PEM: &[u8] =
-        include_bytes!("../../slash-github/tests/fixtures/test-app-key.pem");
+        include_bytes!("../../../slash-github/tests/fixtures/test-app-key.pem");
 
     async fn test_pool() -> Option<PgPool> {
         let url = crate::test_support::test_database_url()?;
@@ -527,7 +119,9 @@ mod tests {
         )
         .bind(org)
         .bind(installation_id)
-        .execute(pool).await.unwrap();
+        .execute(pool)
+        .await
+        .unwrap();
         let uid = Uuid::new_v4();
         sqlx::query(
             "INSERT INTO users (id, email, password_hash, display_name, status, github_user_id)
@@ -535,7 +129,9 @@ mod tests {
         )
         .bind(uid)
         .bind(github_user_id)
-        .execute(pool).await.unwrap();
+        .execute(pool)
+        .await
+        .unwrap();
         sqlx::query(
             "INSERT INTO grants (id, organization_id, subject_type, subject_id, scope, repository, command, permission, effect)
              VALUES ($1, $2, 'user', $3, 'org', NULL, NULL, 'write', 'allow')",
