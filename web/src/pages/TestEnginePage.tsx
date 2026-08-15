@@ -1,37 +1,32 @@
-import { useDeferredValue, useEffect, useState } from 'react'
+import { useDeferredValue, useState } from 'react'
 import {
   Activity,
-  Check,
   ChevronRight,
   CircleAlert,
-  Copy,
-  Eye,
-  EyeOff,
   FileCode2,
   Filter,
-  KeyRound,
   ListChecks,
   Plus,
   RefreshCw,
   Search,
   Settings2,
-  X,
 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
+import { StatusBadge } from '@/components/test-engine/StatusBadge'
+import { Metric } from '@/components/test-engine/Metric'
+import { MetadataRow } from '@/components/test-engine/MetadataRow'
+import { ExecutionRow } from '@/components/test-engine/ExecutionRow'
 import {
-  testEngineApi,
-  type TestExecution,
-  type TestExecutionPage,
-  type TestSuiteSummary,
-  type TestSummary,
-} from '@/lib/api'
+  ManagementDialog,
+  type ManagementPanel,
+} from '@/components/test-engine/ManagementDialog'
+import { useTestEngine } from '@/hooks/useTestEngine'
+import { formatDate, formatDuration, percentage } from '@/lib/test-engine/format'
 
 type CaseFilter = 'all' | 'failed' | 'passing' | 'muted' | 'skipped'
 type CaseSort = 'recent' | 'name' | 'slowest' | 'failures'
-type ManagementPanel = 'create' | 'settings' | null
 
 const FILTERS: Array<{ value: CaseFilter; label: string }> = [
   { value: 'all', label: 'All' },
@@ -41,407 +36,37 @@ const FILTERS: Array<{ value: CaseFilter; label: string }> = [
   { value: 'skipped', label: 'Skipped' },
 ]
 
-const STATUS_TONE: Record<string, string> = {
-  passed: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
-  failed: 'bg-red-50 text-red-700 ring-red-200',
-  errored: 'bg-red-50 text-red-700 ring-red-200',
-  skipped: 'bg-zinc-100 text-zinc-600 ring-zinc-200',
-  enabled: 'bg-emerald-50 text-emerald-700 ring-emerald-200',
-  muted: 'bg-amber-50 text-amber-700 ring-amber-200',
-}
-
-function formatDuration(durationMs: number | null) {
-  if (durationMs === null) return '—'
-  if (durationMs < 1) return '<1 ms'
-  if (durationMs < 1000) return `${Math.round(durationMs)} ms`
-  if (durationMs < 60_000) return `${(durationMs / 1000).toFixed(2)} s`
-  return `${(durationMs / 60_000).toFixed(1)} min`
-}
-
-function formatDate(value: string | null) {
-  if (!value) return 'Never'
-  return new Intl.DateTimeFormat(undefined, {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(new Date(value))
-}
-
-function percentage(part: number, total: number) {
-  return total === 0 ? 0 : Math.round((part / total) * 1000) / 10
-}
-
-function StatusBadge({ value }: { value: string | null }) {
-  const status = value ?? 'unknown'
-  return (
-    <span
-      className={`inline-flex items-center rounded-sm px-1.5 py-0.5 text-[11px] font-medium ring-1 ring-inset ${STATUS_TONE[status] ?? 'bg-zinc-100 text-zinc-600 ring-zinc-200'}`}
-    >
-      {status}
-    </span>
-  )
-}
-
-function Metric({ label, value, detail }: { label: string; value: string; detail?: string }) {
-  return (
-    <div className="min-w-0 px-4 py-4 first:pl-0 md:px-5 md:first:pl-0">
-      <div className="text-[11px] font-medium text-muted-foreground uppercase">{label}</div>
-      <div className="mt-1.5 flex items-baseline gap-2">
-        <span className="text-xl font-semibold tabular-nums">{value}</span>
-        {detail && <span className="truncate text-xs text-muted-foreground">{detail}</span>}
-      </div>
-    </div>
-  )
-}
-
-function MetadataRow({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="grid grid-cols-[104px_minmax(0,1fr)] gap-3 py-2 text-xs">
-      <dt className="text-muted-foreground">{label}</dt>
-      <dd className="min-w-0 break-words text-foreground">{children}</dd>
-    </div>
-  )
-}
-
-function ExecutionRow({ execution }: { execution: TestExecution }) {
-  return (
-    <div className="border-b px-4 py-3 last:border-b-0">
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <StatusBadge value={execution.status} />
-            <span className="font-mono text-xs">{formatDuration(execution.duration_ms)}</span>
-            <span className="text-xs text-muted-foreground">{execution.ci_provider}</span>
-          </div>
-          <div
-            className="mt-2 truncate font-mono text-[11px] text-muted-foreground"
-            title={execution.run_ref}
-          >
-            {execution.run_ref}
-          </div>
-        </div>
-        <time className="shrink-0 text-[11px] text-muted-foreground">
-          {formatDate(execution.captured_at)}
-        </time>
-      </div>
-      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
-        <span>Started {formatDate(execution.started_at)}</span>
-        {execution.finished_at && <span>Finished {formatDate(execution.finished_at)}</span>}
-        {execution.invocation_id && (
-          <span className="font-mono">Invocation {execution.invocation_id.slice(0, 8)}</span>
-        )}
-      </div>
-      {execution.stack && (
-        <details className="mt-3 border bg-zinc-950 text-zinc-100">
-          <summary className="cursor-pointer px-3 py-2 text-xs text-zinc-300">
-            Failure output
-          </summary>
-          <pre className="max-h-56 overflow-auto border-t border-zinc-800 p-3 text-[11px] leading-relaxed whitespace-pre-wrap">
-            {execution.stack}
-          </pre>
-        </details>
-      )}
-    </div>
-  )
-}
-
-function ManagementDialog({
-  mode,
-  suite,
-  onClose,
-  onCreated,
-}: {
-  mode: Exclude<ManagementPanel, null>
-  suite: TestSuiteSummary | null
-  onClose: () => void
-  onCreated: (suite: TestSuiteSummary) => void
-}) {
-  const [owner, setOwner] = useState(suite?.owner ?? '')
-  const [repo, setRepo] = useState(suite?.repo ?? '')
-  const [suiteKey, setSuiteKey] = useState('')
-  const [token, setToken] = useState<string | null>(null)
-  const [tokenVisible, setTokenVisible] = useState(false)
-  const [copied, setCopied] = useState(false)
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  useEffect(() => {
-    if (mode !== 'settings' || !suite) return
-    testEngineApi
-      .getToken(suite.id)
-      .then((response) => setToken(response.token))
-      .catch((requestError) =>
-        setError(requestError instanceof Error ? requestError.message : 'Token 加载失败'),
-      )
-  }, [mode, suite])
-
-  const createSuite = async (event: React.FormEvent) => {
-    event.preventDefault()
-    setBusy(true)
-    setError(null)
-    try {
-      const result = await testEngineApi.createSuite(owner, repo, suiteKey)
-      onCreated(result.suite)
-      onClose()
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'Suite 创建失败')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const issueToken = async () => {
-    if (!suite) return
-    setBusy(true)
-    setError(null)
-    try {
-      const result = await testEngineApi.issueToken(suite.id)
-      setToken(result.token)
-      setTokenVisible(false)
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'Token 生成失败')
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const copyToken = async () => {
-    if (!token) return
-    await navigator.clipboard.writeText(token)
-    setCopied(true)
-    window.setTimeout(() => setCopied(false), 1500)
-  }
-
-  return (
-    <div
-      className="fixed inset-0 z-50 flex items-start justify-end bg-black/20"
-      role="presentation"
-      onMouseDown={onClose}
-    >
-      <section
-        role="dialog"
-        aria-modal="true"
-        aria-label={mode === 'create' ? 'Create test suite' : 'Suite settings'}
-        className="h-full w-full max-w-lg overflow-y-auto border-l bg-white shadow-2xl"
-        onMouseDown={(event) => event.stopPropagation()}
-      >
-        <div className="flex h-14 items-center justify-between border-b px-5">
-          <div>
-            <div className="text-sm font-semibold">
-              {mode === 'create' ? 'Create suite' : 'Suite settings'}
-            </div>
-            {suite && (
-              <div className="text-xs text-muted-foreground">
-                {suite.owner}/{suite.repo} · {suite.suite_key}
-              </div>
-            )}
-          </div>
-          <Button size="icon" variant="ghost" onClick={onClose} aria-label="Close">
-            <X />
-          </Button>
-        </div>
-
-        {mode === 'create' ? (
-          <form onSubmit={createSuite} className="space-y-5 p-5">
-            <div className="space-y-1.5">
-              <Label htmlFor="create-owner">GitHub owner</Label>
-              <Input
-                id="create-owner"
-                value={owner}
-                onChange={(event) => setOwner(event.target.value)}
-                placeholder="acme"
-                required
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="create-repo">Repository</Label>
-              <Input
-                id="create-repo"
-                value={repo}
-                onChange={(event) => setRepo(event.target.value)}
-                placeholder="widgets"
-                required
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="create-key">Suite key</Label>
-              <Input
-                id="create-key"
-                value={suiteKey}
-                onChange={(event) => setSuiteKey(event.target.value)}
-                placeholder="ci-test"
-                required
-              />
-            </div>
-            {error && <p className="text-sm text-red-600">{error}</p>}
-            <div className="flex justify-end gap-2 border-t pt-4">
-              <Button type="button" variant="ghost" onClick={onClose}>
-                Cancel
-              </Button>
-              <Button type="submit" disabled={busy}>
-                <Plus />
-                {busy ? 'Creating…' : 'Create suite'}
-              </Button>
-            </div>
-          </form>
-        ) : (
-          <div className="p-5">
-            <div className="border-b pb-6">
-              <h3 className="text-sm font-semibold">Collection token</h3>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Used by CI collectors to authenticate uploads to this suite.
-              </p>
-              <div className="mt-4 flex items-center gap-2">
-                <Input
-                  className="font-mono"
-                  type={tokenVisible ? 'text' : 'password'}
-                  value={token ?? ''}
-                  placeholder="No recoverable token"
-                  readOnly
-                />
-                <Button
-                  size="icon"
-                  variant="outline"
-                  onClick={() => setTokenVisible((visible) => !visible)}
-                  disabled={!token}
-                  aria-label={tokenVisible ? 'Hide token' : 'Show token'}
-                >
-                  {tokenVisible ? <EyeOff /> : <Eye />}
-                </Button>
-                <Button
-                  size="icon"
-                  variant="outline"
-                  onClick={copyToken}
-                  disabled={!token}
-                  aria-label="Copy token"
-                >
-                  {copied ? <Check /> : <Copy />}
-                </Button>
-              </div>
-              <Button className="mt-3" variant="outline" onClick={issueToken} disabled={busy}>
-                <KeyRound />
-                {busy ? 'Generating…' : 'Generate new token'}
-              </Button>
-            </div>
-            <div className="pt-6">
-              <h3 className="text-sm font-semibold">Collector endpoints</h3>
-              <dl className="mt-3 divide-y border-y">
-                <MetadataRow label="Generic">
-                  <code>/v1/test-engine/upload</code>
-                </MetadataRow>
-                <MetadataRow label="Cargo">
-                  <code>/v1/test-engine/upload/cargo</code>
-                </MetadataRow>
-                <MetadataRow label="Vitest">
-                  <code>/v1/test-engine/upload/vitest</code>
-                </MetadataRow>
-              </dl>
-            </div>
-            {error && <p className="mt-4 text-sm text-red-600">{error}</p>}
-          </div>
-        )}
-      </section>
-    </div>
-  )
-}
-
 export function TestEnginePage() {
-  const [suites, setSuites] = useState<TestSuiteSummary[]>([])
-  const [selectedSuiteId, setSelectedSuiteId] = useState<string | null>(null)
-  const [tests, setTests] = useState<TestSummary[] | null>(null)
-  const [selectedTestId, setSelectedTestId] = useState<string | null>(null)
-  const [executions, setExecutions] = useState<TestExecutionPage | null>(null)
-  const [executionItems, setExecutionItems] = useState<TestExecution[]>([])
   const [query, setQuery] = useState('')
   const deferredQuery = useDeferredValue(query)
   const [filter, setFilter] = useState<CaseFilter>('all')
   const [sort, setSort] = useState<CaseSort>('recent')
   const [compactView, setCompactView] = useState<'cases' | 'details'>('cases')
-  const [loadingSuites, setLoadingSuites] = useState(true)
-  const [loadingTests, setLoadingTests] = useState(false)
-  const [loadingExecutions, setLoadingExecutions] = useState(false)
-  const [updatingState, setUpdatingState] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   const [panel, setPanel] = useState<ManagementPanel>(null)
 
-  const selectedSuite = suites.find((suite) => suite.id === selectedSuiteId) ?? null
-  const selectedTest = tests?.find((test) => test.id === selectedTestId) ?? null
-
-  const loadSuites = async () => {
-    setLoadingSuites(true)
-    setError(null)
-    try {
-      const result = await testEngineApi.listSuites()
-      setSuites(result)
-      setSelectedSuiteId((current) =>
-        current && result.some((suite) => suite.id === current)
-          ? current
-          : (result[0]?.id ?? null),
-      )
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'Suite 加载失败')
-    } finally {
-      setLoadingSuites(false)
-    }
-  }
-
-  const loadTests = async (suiteId: string) => {
-    setLoadingTests(true)
-    setError(null)
-    try {
-      const result = await testEngineApi.listTests(suiteId)
-      setTests(result)
-      setSelectedTestId((current) =>
-        current && result.some((test) => test.id === current)
-          ? current
-          : (result.find(
-              (test) => test.last_status === 'failed' || test.last_status === 'errored',
-            )?.id ??
-            result[0]?.id ??
-            null),
-      )
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'Test cases 加载失败')
-    } finally {
-      setLoadingTests(false)
-    }
-  }
-
-  const loadExecutions = async (testId: string, offset = 0) => {
-    setLoadingExecutions(true)
-    try {
-      const page = await testEngineApi.listExecutions(testId, 100, offset)
-      setExecutions(page)
-      setExecutionItems((current) => (offset === 0 ? page.items : [...current, ...page.items]))
-    } catch (requestError) {
-      setError(
-        requestError instanceof Error ? requestError.message : 'Execution history 加载失败',
-      )
-    } finally {
-      setLoadingExecutions(false)
-    }
-  }
-
-  useEffect(() => {
-    void loadSuites()
-  }, [])
-
-  useEffect(() => {
-    if (!selectedSuiteId) {
-      setTests([])
-      return
-    }
-    setTests(null)
-    setSelectedTestId(null)
-    void loadTests(selectedSuiteId)
-  }, [selectedSuiteId])
-
-  useEffect(() => {
-    setExecutions(null)
-    setExecutionItems([])
-    if (selectedTestId) void loadExecutions(selectedTestId)
-  }, [selectedTestId])
+  const {
+    suites,
+    selectedSuiteId,
+    setSelectedSuiteId,
+    selectedSuite,
+    tests,
+    selectedTestId,
+    setSelectedTestId,
+    selectedTest,
+    executions,
+    executionItems,
+    loadingSuites,
+    loadingTests,
+    loadingExecutions,
+    updatingState,
+    error,
+    hasMoreExecutions,
+    loadSuites,
+    loadTests,
+    loadExecutions,
+    createSuite,
+    updateTestState,
+  } = useTestEngine()
 
   const normalizedQuery = deferredQuery.trim().toLowerCase()
   const filteredTests = (tests ?? [])
@@ -471,48 +96,12 @@ export function TestEnginePage() {
       return new Date(right.last_captured ?? 0).getTime() - new Date(left.last_captured ?? 0).getTime()
     })
 
-  const createSuite = (suite: TestSuiteSummary) => {
-    setSuites((current) => [suite, ...current.filter((item) => item.id !== suite.id)])
-    setSelectedSuiteId(suite.id)
-  }
-
-  const updateTestState = async (state: TestSummary['state']) => {
-    if (!selectedTest) return
-    setUpdatingState(true)
-    setError(null)
-    try {
-      await testEngineApi.setTestState(selectedTest.id, state)
-      setTests((current) =>
-        current?.map((test) => (test.id === selectedTest.id ? { ...test, state } : test)) ?? null,
-      )
-      if (selectedSuiteId) {
-        setSuites((current) =>
-          current.map((suite) => {
-            if (suite.id !== selectedSuiteId) return suite
-            const previous = selectedTest.state
-            return {
-              ...suite,
-              muted: suite.muted + (state === 'muted' ? 1 : 0) - (previous === 'muted' ? 1 : 0),
-              skipped:
-                suite.skipped + (state === 'skipped' ? 1 : 0) - (previous === 'skipped' ? 1 : 0),
-            }
-          }),
-        )
-      }
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'Disposition 更新失败')
-    } finally {
-      setUpdatingState(false)
-    }
-  }
-
   const suitePassRate = selectedSuite
     ? percentage(selectedSuite.passed_executions, selectedSuite.execution_count)
     : 0
   const casePassRate = selectedTest
     ? percentage(selectedTest.passed_count, selectedTest.execution_count)
     : 0
-  const hasMoreExecutions = executions ? executionItems.length < executions.total : false
 
   return (
     <div className="flex min-h-[calc(100vh-3.5rem)] flex-col bg-white xl:h-[calc(100vh-3.5rem)] xl:min-h-0 xl:overflow-hidden">
@@ -570,9 +159,7 @@ export function TestEnginePage() {
               type="button"
               onClick={() => setCompactView(view)}
               className={`h-8 text-xs capitalize ${
-                compactView === view
-                  ? 'bg-white font-medium shadow-sm'
-                  : 'text-muted-foreground'
+                compactView === view ? 'bg-white font-medium shadow-sm' : 'text-muted-foreground'
               }`}
             >
               {view}
@@ -907,12 +494,8 @@ export function TestEnginePage() {
                       ? selectedTest.owner_team_ids.join(', ')
                       : 'None'}
                   </MetadataRow>
-                  <MetadataRow label="First seen">
-                    {formatDate(selectedTest.created_at)}
-                  </MetadataRow>
-                  <MetadataRow label="Updated">
-                    {formatDate(selectedTest.updated_at)}
-                  </MetadataRow>
+                  <MetadataRow label="First seen">{formatDate(selectedTest.created_at)}</MetadataRow>
+                  <MetadataRow label="Updated">{formatDate(selectedTest.updated_at)}</MetadataRow>
                 </dl>
               </section>
 
