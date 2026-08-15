@@ -86,7 +86,7 @@ export function OnboardingPage() {
               value={slug}
               onChange={(event) => setSlug(slugify(event.target.value))}
               placeholder="acme-engineering"
-              pattern="[a-z0-9-]{1,32}"
+              pattern="[a-z0-9-]{1,63}"
               title={t('onboard.slugPattern')}
               required
             />
