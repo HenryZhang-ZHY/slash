@@ -7,6 +7,10 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lib]
+name = "slash_server"
+path = "src/lib.rs"
+
 [[bin]]
 name = "slash-server"
 path = "src/main.rs"
@@ -34,7 +38,6 @@ tower-http = { version = "0.7.0", features = ["catch-panic", "limit", "trace", "
 tracing.workspace = true
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 uuid = { workspace = true, features = ["v4", "serde"] }
-aes-gcm = "0.10.3"
 
 [lints]
 workspace = true

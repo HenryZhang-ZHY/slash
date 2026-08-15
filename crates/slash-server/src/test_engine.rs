@@ -537,7 +537,7 @@ fn placeholders(offset: usize, count: usize) -> String {
     out
 }
 
-fn parse_test_state(state: &str) -> TestState {
+pub fn parse_test_state(state: &str) -> TestState {
     match state {
         "enabled" => TestState::Enabled,
         "muted" => TestState::Muted,
@@ -558,78 +558,12 @@ fn parse_execution_status(status: &str) -> ExecutionStatus {
 
 // --- collection tokens (design §4) ---
 
-#[derive(Debug, Clone)]
-pub struct EncryptedCollectionToken {
-    pub ciphertext: Vec<u8>,
-    pub nonce: Vec<u8>,
-}
-
-#[derive(Debug, thiserror::Error)]
-pub enum TokenCryptoError {
-    #[error("collection token encryption failed")]
-    Encryption,
-    #[error("collection token decryption failed")]
-    Decryption,
-}
-
-fn collection_token_cipher(
-    secret: &crate::auth::AuthSecret,
-) -> Result<aes_gcm::Aes256Gcm, TokenCryptoError> {
-    use aes_gcm::KeyInit;
-    use sha2::{Digest, Sha256};
-
-    let mut hasher = Sha256::new();
-    hasher.update(b"slash:collection-token:v1\0");
-    hasher.update(secret.0.as_bytes());
-    let key: [u8; 32] = hasher.finalize().into();
-    aes_gcm::Aes256Gcm::new_from_slice(&key).map_err(|_| TokenCryptoError::Encryption)
-}
-
-pub fn encrypt_collection_token(
-    raw_token: &str,
-    secret: &crate::auth::AuthSecret,
-) -> Result<EncryptedCollectionToken, TokenCryptoError> {
-    use aes_gcm::aead::{Aead, AeadCore, OsRng};
-
-    let cipher = collection_token_cipher(secret)?;
-    let nonce = aes_gcm::Aes256Gcm::generate_nonce(&mut OsRng);
-    let ciphertext = cipher
-        .encrypt(&nonce, raw_token.as_bytes())
-        .map_err(|_| TokenCryptoError::Encryption)?;
-    Ok(EncryptedCollectionToken {
-        ciphertext,
-        nonce: nonce.to_vec(),
-    })
-}
-
-pub fn decrypt_collection_token(
-    encrypted: &EncryptedCollectionToken,
-    secret: &crate::auth::AuthSecret,
-) -> Result<String, TokenCryptoError> {
-    use aes_gcm::aead::Aead;
-
-    if encrypted.nonce.len() != 12 {
-        return Err(TokenCryptoError::Decryption);
-    }
-    let cipher = collection_token_cipher(secret).map_err(|_| TokenCryptoError::Decryption)?;
-    let nonce_bytes: [u8; 12] = encrypted
-        .nonce
-        .as_slice()
-        .try_into()
-        .map_err(|_| TokenCryptoError::Decryption)?;
-    let nonce = aes_gcm::Nonce::from(nonce_bytes);
-    let plaintext = cipher
-        .decrypt(&nonce, encrypted.ciphertext.as_ref())
-        .map_err(|_| TokenCryptoError::Decryption)?;
-    String::from_utf8(plaintext).map_err(|_| TokenCryptoError::Decryption)
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum RecoverableTokenError {
     #[error(transparent)]
     Database(#[from] sqlx::Error),
     #[error(transparent)]
-    Crypto(#[from] TokenCryptoError),
+    Crypto(#[from] slash_core::TokenCryptoError),
 }
 
 /// Tenancy resolved from a collection token's suite.
@@ -646,25 +580,15 @@ pub struct SuiteTokenIdentity {
     pub repo: String,
 }
 
-/// Hashes a raw token with sha256 for storage / lookup. Returns the raw byte
-/// hash.
-pub fn hash_token(token: &str) -> [u8; 32] {
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(token.as_bytes());
-    hasher.finalize().into()
-}
-
-/// Issues a token whose hash authenticates ingestion and whose AES-GCM
-/// ciphertext can be recovered by the owning user in the console.
+/// Revokes a collection token for a suite (marks it `revoked`, stopping
 pub async fn issue_recoverable_collection_token(
     pool: &PgPool,
     suite_id: Uuid,
     secret: &crate::auth::AuthSecret,
 ) -> Result<String, RecoverableTokenError> {
-    let raw = crypto_random_token();
-    let hash = hash_token(&raw);
-    let encrypted = encrypt_collection_token(&raw, secret)?;
+    let raw = slash_core::crypto_random_token();
+    let hash = slash_core::hash_token(&raw);
+    let encrypted = slash_core::encrypt_collection_token(&raw, secret.0.as_bytes())?;
     sqlx::query(
         "INSERT INTO collection_tokens
             (id, suite_id, token_hash, status, token_ciphertext, token_nonce)
@@ -739,7 +663,10 @@ pub async fn latest_collection_token(
 
     encrypted
         .map(|(ciphertext, nonce)| {
-            decrypt_collection_token(&EncryptedCollectionToken { ciphertext, nonce }, secret)
+            slash_core::decrypt_collection_token(
+                &slash_core::EncryptedCollectionToken { ciphertext, nonce },
+                secret.0.as_bytes(),
+            )
         })
         .transpose()
         .map_err(RecoverableTokenError::from)
@@ -752,7 +679,7 @@ pub async fn find_suite_for_token(
     pool: &PgPool,
     raw_token: &str,
 ) -> Result<Option<SuiteTokenIdentity>, sqlx::Error> {
-    let hash = hash_token(raw_token);
+    let hash = slash_core::hash_token(raw_token);
     let row: Option<(Uuid, String, i64, String, String)> = sqlx::query_as(
         "SELECT ts.id, ts.suite_key, ts.installation_id, ts.owner, ts.repo
          FROM collection_tokens ct\n         JOIN test_suites ts ON ts.id = ct.suite_id
@@ -781,7 +708,7 @@ pub async fn revoke_collection_token(
     suite_id: Uuid,
     raw_token: &str,
 ) -> Result<bool, sqlx::Error> {
-    let hash = hash_token(raw_token);
+    let hash = slash_core::hash_token(raw_token);
     let result = sqlx::query(
         "UPDATE collection_tokens SET status = 'revoked', revoked_at = now() \
          WHERE suite_id = $1 AND token_hash = $2 AND status = 'active'",
@@ -793,29 +720,23 @@ pub async fn revoke_collection_token(
     Ok(result.rows_affected() > 0)
 }
 
-/// Generates a cryptographically random, URL-safe token. Backs
-/// `issue_collection_token` (M2-4 token management).
-pub fn crypto_random_token() -> String {
-    uuid::Uuid::new_v4().to_string()
-}
-
+/// Pure, dependency-free unit tests for the test-engine parsing helpers —
+/// the fast safety net @Quality's P1 asks for (no DB, no wiremock).
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::expect_used)]
-mod tests {
+mod pure_tests {
     use super::*;
     use crate::auth::AuthSecret;
-    use crate::db;
-    use crate::test_engine::ExecutionStatus::{Failed, Passed};
     use std::sync::Arc;
 
     #[test]
     fn collection_token_encryption_round_trips() {
         let secret = AuthSecret(Arc::from("correct-auth-secret"));
-        let encrypted = encrypt_collection_token("collector-token", &secret).unwrap();
+        let encrypted =
+            slash_core::encrypt_collection_token("collector-token", secret.0.as_bytes()).unwrap();
 
         assert_ne!(encrypted.ciphertext, b"collector-token");
         assert_eq!(
-            decrypt_collection_token(&encrypted, &secret).unwrap(),
+            slash_core::decrypt_collection_token(&encrypted, secret.0.as_bytes()).unwrap(),
             "collector-token"
         );
     }
@@ -824,391 +745,13 @@ mod tests {
     fn collection_token_decryption_rejects_wrong_secret() {
         let secret = AuthSecret(Arc::from("correct-auth-secret"));
         let wrong_secret = AuthSecret(Arc::from("wrong-auth-secret"));
-        let encrypted = encrypt_collection_token("collector-token", &secret).unwrap();
+        let encrypted =
+            slash_core::encrypt_collection_token("collector-token", secret.0.as_bytes()).unwrap();
 
-        assert!(decrypt_collection_token(&encrypted, &wrong_secret).is_err());
+        assert!(
+            slash_core::decrypt_collection_token(&encrypted, wrong_secret.0.as_bytes()).is_err()
+        );
     }
-
-    /// `None` when `SLASH_TEST_DATABASE_URL` is unset — callers skip cleanly
-    /// (plan M4).
-    async fn test_pool() -> Option<PgPool> {
-        let url = crate::test_support::test_database_url()?;
-        let pool = db::connect(&url).await.unwrap();
-        db::migrate(&pool).await.unwrap();
-        sqlx::query(
-            "TRUNCATE test_executions, test_runs, tests, test_suites, collection_tokens CASCADE",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-        Some(pool)
-    }
-
-    /// Provisions a suite + a collection token, returning (suite_id, raw_token).
-    async fn provision_suite(pool: &PgPool) -> (Uuid, String) {
-        let mut tx = pool.begin().await.unwrap();
-        let suite_id = upsert_suite(
-            &mut tx,
-            &NewSuite {
-                installation_id: 1,
-                owner: "acme",
-                repo: "widgets",
-                suite_key: "wire",
-            },
-        )
-        .await
-        .unwrap();
-        tx.commit().await.unwrap();
-
-        let secret = AuthSecret(Arc::from("test-auth-secret"));
-        let raw = issue_recoverable_collection_token(pool, suite_id, &secret)
-            .await
-            .unwrap();
-        (suite_id, raw)
-    }
-
-    #[serial_test::serial(db)]
-    #[tokio::test]
-    async fn lists_only_suites_owned_by_the_user() {
-        let Some(pool) = test_pool().await else {
-            return;
-        };
-        let user_id = Uuid::new_v4();
-        sqlx::query(
-            "INSERT INTO users (id, email, password_hash, display_name, status)
-             VALUES ($1, $2, 'unused', 'Owner', 'active')",
-        )
-        .bind(user_id)
-        .bind(format!("{user_id}@example.test"))
-        .execute(&pool)
-        .await
-        .unwrap();
-        let mut tx = pool.begin().await.unwrap();
-        let suite_id = upsert_owned_suite(
-            &mut tx,
-            &NewSuite {
-                installation_id: 1,
-                owner: "acme",
-                repo: "widgets",
-                suite_key: "web",
-            },
-            user_id,
-        )
-        .await
-        .unwrap()
-        .unwrap();
-        tx.commit().await.unwrap();
-
-        let suites = list_suites(&pool, 1, user_id).await.unwrap();
-
-        assert_eq!(suites.len(), 1);
-        assert_eq!(suites[0].id, suite_id);
-        assert_eq!(suites[0].total_tests, 0);
-    }
-
-    #[serial_test::serial(db)]
-    #[tokio::test]
-    async fn provisioned_token_resolves_to_the_suite_identity() {
-        let Some(pool) = test_pool().await else {
-            return;
-        };
-        let (suite_id, raw) = provision_suite(&pool).await;
-        let _ = suite_id;
-
-        let identity = find_suite_for_token(&pool, &raw).await.unwrap();
-        let identity = identity.expect("token should resolve");
-        assert_eq!(identity.suite_key, "wire");
-        assert_eq!(identity.installation_id, 1);
-        assert_eq!(identity.owner, "acme");
-        assert_eq!(identity.repo, "widgets");
-
-        let unknown = find_suite_for_token(&pool, "definitely-not-a-token")
-            .await
-            .unwrap();
-        assert!(unknown.is_none());
-    }
-
-    #[serial_test::serial(db)]
-    #[tokio::test]
-    async fn revoked_token_no_longer_authenticates() {
-        let Some(pool) = test_pool().await else {
-            return;
-        };
-        let (suite_id, raw) = provision_suite(&pool).await;
-
-        // Active token resolves.
-        assert!(find_suite_for_token(&pool, &raw).await.unwrap().is_some());
-
-        // Revoke: applies and the token no longer authenticates (fail-closed).
-        let revoked = revoke_collection_token(&pool, suite_id, &raw)
-            .await
-            .unwrap();
-        assert!(revoked);
-        assert!(find_suite_for_token(&pool, &raw).await.unwrap().is_none());
-
-        // Revoking again is a no-op (already non-active).
-        let again = revoke_collection_token(&pool, suite_id, &raw)
-            .await
-            .unwrap();
-        assert!(!again);
-    }
-
-    #[serial_test::serial(db)]
-    #[tokio::test]
-    async fn ingestion_writes_suite_test_run_and_executions_durably() {
-        let Some(pool) = test_pool().await else {
-            return;
-        };
-        let (suite_id, _raw) = provision_suite(&pool).await;
-
-        let mut tx = pool.begin().await.unwrap();
-        let test_a = upsert_test(
-            &mut tx,
-            suite_id,
-            &NewTest {
-                name: "tests::it_works",
-                file: Some("tests/foo.rs"),
-                line_no: Some(3),
-                owner_team_ids: vec![],
-            },
-        )
-        .await
-        .unwrap();
-        let run_id = upsert_run(
-            &mut tx,
-            &NewRun {
-                suite_id,
-                installation_id: 1,
-                ci_provider: "github_actions",
-                run_ref: "run-1",
-                invocation_id: None,
-            },
-        )
-        .await
-        .unwrap();
-        insert_executions(
-            &mut tx,
-            run_id,
-            &[NewExecution {
-                test_id: test_a.id,
-                status: ExecutionStatus::Passed,
-                duration_ms: 12,
-                stack: None,
-            }],
-        )
-        .await
-        .unwrap();
-        tx.commit().await.unwrap();
-
-        let (exec_count,): (i64,) = sqlx::query_as("SELECT count(*) FROM test_executions")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert_eq!(exec_count, 1);
-
-        let (run_count,): (i64,) =
-            sqlx::query_as("SELECT count(*) FROM test_runs WHERE run_ref = 'run-1'")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        assert_eq!(run_count, 1);
-    }
-
-    #[serial_test::serial(db)]
-    #[tokio::test]
-    async fn duplicate_run_ref_is_a_single_run() {
-        let Some(pool) = test_pool().await else {
-            return;
-        };
-        let (suite_id, _raw) = provision_suite(&pool).await;
-
-        let mut tx = pool.begin().await.unwrap();
-        let run = NewRun {
-            suite_id,
-            installation_id: 1,
-            ci_provider: "github_actions",
-            run_ref: "run-x",
-            invocation_id: None,
-        };
-        let first = upsert_run(&mut tx, &run).await.unwrap();
-        let second = upsert_run(&mut tx, &run).await.unwrap();
-        tx.commit().await.unwrap();
-
-        assert_eq!(first, second);
-    }
-
-    #[serial_test::serial(db)]
-    #[tokio::test]
-    async fn flaky_reconcile_mutes_then_recovers_a_test() {
-        let Some(pool) = test_pool().await else {
-            return;
-        };
-        let (suite_id, _raw) = provision_suite(&pool).await;
-
-        // Seed: test "tests::wobbly" gets one failing run then a passing run,
-        // so across >=3 executions there is a fail->pass recovery.
-        seed_runs(&pool, suite_id, "tests::wobbly", &[Failed, Passed, Passed]).await;
-        // A healthy control must NOT be muted.
-        seed_runs(&pool, suite_id, "tests::steady", &[Passed, Passed, Passed]).await;
-
-        let transitions = crate::flaky::reconcile(&pool).await.unwrap();
-        assert!(transitions >= 1);
-
-        let state = state_of(&pool, suite_id, "tests::wobbly").await;
-        assert_eq!(state, Some(TestState::Muted));
-        let steady = state_of(&pool, suite_id, "tests::steady").await;
-        assert_eq!(steady, Some(TestState::Enabled));
-    }
-
-    #[serial_test::serial(db)]
-    #[tokio::test]
-    async fn flaky_reconcile_leaves_sub_threshold_tests_alone() {
-        let Some(pool) = test_pool().await else {
-            return;
-        };
-        let (suite_id, _raw) = provision_suite(&pool).await;
-
-        // Only 2 executions, one fail then pass — below the denominator.
-        seed_runs(&pool, suite_id, "tests::edge", &[Failed, Passed]).await;
-
-        crate::flaky::reconcile(&pool).await.unwrap();
-
-        let state = state_of(&pool, suite_id, "tests::edge").await;
-        assert_eq!(state, Some(TestState::Enabled));
-    }
-
-    #[serial_test::serial(db)]
-    #[tokio::test]
-    async fn direct_set_state_is_a_guarded_cas() {
-        let Some(pool) = test_pool().await else {
-            return;
-        };
-        let (suite_id, _raw) = provision_suite(&pool).await;
-        let mut tx = pool.begin().await.unwrap();
-        let test = upsert_test(
-            &mut tx,
-            suite_id,
-            &NewTest {
-                name: "tests::cas",
-                file: None,
-                line_no: None,
-                owner_team_ids: vec![],
-            },
-        )
-        .await
-        .unwrap();
-        tx.commit().await.unwrap();
-
-        // enabled -> muted succeeds.
-        let ok = set_test_state(&pool, test.id, &[TestState::Enabled], TestState::Muted)
-            .await
-            .unwrap();
-        assert!(ok);
-        // muted -> muted from [Enabled] fails (guarded).
-        let stale = set_test_state(&pool, test.id, &[TestState::Enabled], TestState::Skipped)
-            .await
-            .unwrap();
-        assert!(!stale);
-        // muted -> enabled succeeds.
-        let recovered = set_test_state(&pool, test.id, &[TestState::Muted], TestState::Enabled)
-            .await
-            .unwrap();
-        assert!(recovered);
-    }
-
-    #[serial_test::serial(db)]
-    #[tokio::test]
-    async fn closed_loop_disposal_hook_reports_the_quarantined_test() {
-        let Some(pool) = test_pool().await else {
-            return;
-        };
-        let (suite_id, _raw) = provision_suite(&pool).await;
-
-        // Ingest a flaky test (fail then passes, >=3 executions) and a healthy
-        // one, then run the reconcile — the closed loop: ingest -> flaky-mark.
-        seed_runs(
-            &pool,
-            suite_id,
-            "tests::flaky_one",
-            &[Failed, Passed, Passed],
-        )
-        .await;
-        seed_runs(&pool, suite_id, "tests::healthy", &[Passed, Passed, Passed]).await;
-        crate::flaky::reconcile(&pool).await.unwrap();
-
-        // The disposal hook (bktec-style skip/mute): query quarantined tests.
-        let quarantined = quarantined_tests(&pool, suite_id).await.unwrap();
-        assert!(quarantined.contains(&"tests::flaky_one".to_string()));
-        assert!(!quarantined.contains(&"tests::healthy".to_string()));
-    }
-
-    // --- helpers ---
-
-    /// Seeds `statuses` of executions for a named test/suite across distinct
-    /// runs, each at a slightly later `captured_at`, so the flaky criterion
-    /// sees them in window order.
-    async fn seed_runs(pool: &PgPool, suite_id: Uuid, name: &str, statuses: &[ExecutionStatus]) {
-        let mut tx = pool.begin().await.unwrap();
-        let test = upsert_test(
-            &mut tx,
-            suite_id,
-            &NewTest {
-                name,
-                file: None,
-                line_no: None,
-                owner_team_ids: vec![],
-            },
-        )
-        .await
-        .unwrap();
-
-        for (i, status) in statuses.iter().enumerate() {
-            let run_ref = format!("seed-{name}-{i}");
-            let run_id = upsert_run(
-                &mut tx,
-                &NewRun {
-                    suite_id,
-                    installation_id: 1,
-                    ci_provider: "seed",
-                    run_ref: &run_ref,
-                    invocation_id: None,
-                },
-            )
-            .await
-            .unwrap();
-            insert_executions(
-                &mut tx,
-                run_id,
-                &[NewExecution {
-                    test_id: test.id,
-                    status: *status,
-                    duration_ms: 5,
-                    stack: None,
-                }],
-            )
-            .await
-            .unwrap();
-        }
-        tx.commit().await.unwrap();
-    }
-
-    async fn state_of(pool: &PgPool, suite_id: Uuid, name: &str) -> Option<TestState> {
-        let (state,): (String,) =
-            sqlx::query_as("SELECT state FROM tests WHERE suite_id = $1 AND name = $2")
-                .bind(suite_id)
-                .bind(name)
-                .fetch_one(pool)
-                .await
-                .ok()?;
-        Some(parse_test_state(&state))
-    }
-}
-
-/// Pure, dependency-free unit tests for the test-engine parsing helpers —
-/// the fast safety net @Quality's P1 asks for (no DB, no wiremock).
-#[cfg(test)]
-mod pure_tests {
-    use super::*;
 
     #[test]
     fn parse_test_state_maps_each_label_and_defaults_unknown_to_enabled() {
@@ -1242,23 +785,5 @@ mod pure_tests {
         // predecessor states at $3+.
         assert_eq!(placeholders(3, 1), "$3");
         assert_eq!(placeholders(3, 2), "$3, $4");
-    }
-
-    #[test]
-    fn hash_token_is_deterministic_and_32_bytes() {
-        let a = hash_token("suite-token");
-        let b = hash_token("suite-token");
-        let c = hash_token("different");
-        assert_eq!(a, b);
-        assert_ne!(a, c);
-        assert_eq!(a.len(), 32);
-    }
-
-    #[test]
-    fn crypto_random_token_is_unique_and_parseable_uuid() {
-        let a = crypto_random_token();
-        let b = crypto_random_token();
-        assert_ne!(a, b);
-        assert!(uuid::Uuid::parse_str(&a).is_ok());
     }
 }
