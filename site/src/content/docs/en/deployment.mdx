@@ -50,29 +50,23 @@ a bad migration never leaves the process half-started.
 | `SLASH_WEBHOOK_SECRET_PATH` | yes | Path to a file containing the webhook secret (matches the GitHub App's webhook secret). The server refuses to start without it — signature verification is never optional. |
 | `SLASH_GITHUB_APP_ID` | yes | The GitHub App's numeric ID. |
 | `SLASH_GITHUB_PRIVATE_KEY_PATH` | yes | Path to the App's private key **file** (not the key inline) — mount it read-only, mode `0400` if your platform supports setting it. |
-| `SLASH_AUTH_SECRET` | yes | HMAC secret for signing user session cookies (account/team console). See the dual-path note below. |
-| `SLASH_AUTH_SECRET_PATH` | no | Path to a file containing `SLASH_AUTH_SECRET` (trimmed), read instead of the inline env var. |
+| `SLASH_AUTH_SECRET_PATH` | yes | Path to a file containing the HMAC session-signing secret (trimmed). File-only, like the other secrets. |
 | `SLASH_WEB_DIR` | no | Root directory of the built web console SPA. Defaults to `web/dist` (relative to the server's working directory). |
 | `RUST_LOG` | no | `tracing_subscriber` env-filter syntax, e.g. `info` or `slash_server=debug`. |
 
-Each secret above also has an inline fallback (`SLASH_DATABASE_URL`,
-`SLASH_WEBHOOK_SECRET`, `SLASH_AUTH_SECRET`) — but the file variants are
-**strongly preferred** so secrets are never visible via `docker inspect` or
-`ps aux`. If a `*_PATH` file is unreadable or empty, startup fails rather than
-silently falling back. `SLASH_AUTH_SECRET_PATH` (the HMAC session secret)
-follows the same rule; see `docs/user/onboarding` for it.
+Every secret is **file-only** — there is exactly one way to configure each,
+a `*_PATH` env var pointing at a file read at startup (mirroring the GitHub
+App private key). The old inline variants (`SLASH_DATABASE_URL`,
+`SLASH_WEBHOOK_SECRET`, `SLASH_AUTH_SECRET`) are **not** recognized, so a
+secret can never end up visible via `docker inspect` or `ps aux`. If a
+`*_PATH` env var is unset, or its file is unreadable or empty, startup fails
+rather than skipping the secret. See `docs/user/onboarding` for the auth
+secret.
 
 There is deliberately no way to pass the private key as an inline
 environment variable — only a file path — and the config struct has no
 `Debug`/`Display` implementation, so neither the webhook secret nor the
 database URL (which may embed a password) can leak via a stray log line.
-
-`SLASH_AUTH_SECRET` follows the same philosophy as the private key: prefer
-`SLASH_AUTH_SECRET_PATH` so the session-signing secret lives in a mounted file
-rather than the environment. When the file is set it takes precedence; the
-inline `SLASH_AUTH_SECRET` is the fallback. As with the webhook secret, the
-server refuses to start without a resolvable auth secret, and the secret is
-never logged.
 
 ### Endpoints
 
@@ -118,7 +112,8 @@ Rotating either credential requires no code change, only a config update and
 restart:
 
 - **Webhook secret**: generate a new secret, update it in the GitHub App's
-  settings, then update `SLASH_WEBHOOK_SECRET` and restart the server. There
+  settings, then update the file pointed at by `SLASH_WEBHOOK_SECRET_PATH` and
+  restart the server. There
   is a brief window where GitHub may deliver with the old secret before the
   App settings save propagates — a handful of `401`s during that window are
   expected and harmless (GitHub retries deliveries).

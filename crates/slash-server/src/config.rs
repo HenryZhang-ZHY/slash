@@ -28,51 +28,23 @@ impl ServerConfig {
     /// skipped (spec §7.3).
     pub fn from_env() -> Result<Self, ConfigError> {
         let lookup = |name: &str| std::env::var(name).ok();
-        // Secrets may come from a file (`*_PATH`) so they never show up in
-        // `ps aux`/env dumps — mirroring how the GitHub App private key is
-        // handled. Falls back to the inline env var when the path variant is
-        // unset.
+        // Secrets are file-only (never inline env), mirroring the GitHub App
+        // private key — so they never show up in `ps aux`/env dumps or
+        // `docker inspect`. One way to configure a secret, the secure one.
         let file_reader = |path: &str| std::fs::read_to_string(path);
         Self::from_lookup_with_reader(&lookup, file_reader)
-    }
-
-    /// Testable core: takes a lookup function instead of touching the real
-    /// process environment, so tests don't need `std::env::set_var` (which
-    /// is `unsafe` and process-global, and this workspace forbids `unsafe`
-    /// entirely). Test-only: production uses `from_env`.
-    #[cfg(test)]
-    fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Result<Self, ConfigError> {
-        Self::from_lookup_with_reader(&lookup, |_path| {
-            Err(std::io::Error::other("no file reader available"))
-        })
     }
 
     fn from_lookup_with_reader(
         lookup: &impl Fn(&str) -> Option<String>,
         mut read_file: impl FnMut(&str) -> std::io::Result<String>,
     ) -> Result<Self, ConfigError> {
-        // Secrets may come from a file (`*_PATH`) so they never show up in
-        // `ps aux`/env dumps / `docker inspect` — mirroring how the GitHub App
-        // private key is handled. Falls back to the inline env var when the
-        // path variant is unset.
-        let webhook_secret = resolve_secret(
-            lookup,
-            &mut read_file,
-            "SLASH_WEBHOOK_SECRET_PATH",
-            "SLASH_WEBHOOK_SECRET",
-        )?;
-        let database_url = resolve_secret(
-            lookup,
-            &mut read_file,
-            "SLASH_DATABASE_URL_PATH",
-            "SLASH_DATABASE_URL",
-        )?;
-        let auth_secret = resolve_secret(
-            lookup,
-            &mut read_file,
-            "SLASH_AUTH_SECRET_PATH",
-            "SLASH_AUTH_SECRET",
-        )?;
+        // Secrets are file-only: each has exactly one way to be set, a
+        // `*_PATH` env var pointing at a file read at startup (mirroring the
+        // GitHub App private key). Inline env variants are not recognized.
+        let webhook_secret = resolve_secret(lookup, &mut read_file, "SLASH_WEBHOOK_SECRET_PATH")?;
+        let database_url = resolve_secret(lookup, &mut read_file, "SLASH_DATABASE_URL_PATH")?;
+        let auth_secret = resolve_secret(lookup, &mut read_file, "SLASH_AUTH_SECRET_PATH")?;
         let github_app_id_raw = require(lookup, "SLASH_GITHUB_APP_ID")?;
         let github_app_id = github_app_id_raw
             .parse()
@@ -90,29 +62,27 @@ impl ServerConfig {
     }
 }
 
-/// Resolves a secret: prefer `<PATH_VAR>` (read from file, trimmed) so it
-/// doesn't leak via env/`docker inspect`; fall back to `<DIRECT_VAR>`. Fail-
-/// closed: if the path file is unreadable/empty, or neither var is set, this
-/// returns an error — a secret is never defaulted or skipped.
+/// Resolves a secret from a file: reads `<PATH_VAR>`'s file and trims it, so
+/// it never leaks via env/`docker inspect`. This is the only way a secret is
+/// configured — there is no inline fallback. Fail-closed: a missing/empty
+/// `<PATH_VAR>` or an unreadable/empty file is a startup error; a secret is
+/// never defaulted or skipped.
 fn resolve_secret(
     lookup: &impl Fn(&str) -> Option<String>,
     read_file: &mut impl FnMut(&str) -> std::io::Result<String>,
     path_var: &'static str,
-    direct_var: &'static str,
 ) -> Result<String, ConfigError> {
-    if let Some(path) = lookup(path_var) {
-        let content =
-            read_file(&path).map_err(|e| ConfigError::UnreadableFile(path_var, e.to_string()))?;
-        let secret = content.trim().to_string();
-        if secret.is_empty() {
-            return Err(ConfigError::UnreadableFile(
-                path_var,
-                "file is empty".to_string(),
-            ));
-        }
-        return Ok(secret);
+    let path = lookup(path_var).ok_or(ConfigError::MissingEnvVar(path_var))?;
+    let content =
+        read_file(&path).map_err(|e| ConfigError::UnreadableFile(path_var, e.to_string()))?;
+    let secret = content.trim().to_string();
+    if secret.is_empty() {
+        return Err(ConfigError::UnreadableFile(
+            path_var,
+            "file is empty".to_string(),
+        ));
     }
-    require(lookup, direct_var)
+    Ok(secret)
 }
 
 fn require(
@@ -139,89 +109,104 @@ mod tests {
         move |name| env.get(name).cloned()
     }
 
+    /// Writes a temp secret file and returns its path string. Callers pass
+    /// the path as the `*_PATH` env var; the reader is the real filesystem.
+    fn secret_file(content: &str) -> String {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("slash-secret-{}", uuid::Uuid::new_v4()));
+        std::fs::write(&path, content).unwrap();
+        path.to_string_lossy().into_owned()
+    }
+
+    /// Env for a complete config: all three secrets come from files.
+    fn file_env(env: &mut HashMap<String, String>) -> HashMap<String, String> {
+        env.insert(
+            "SLASH_WEBHOOK_SECRET_PATH".to_string(),
+            secret_file("webhook-secret\n"),
+        );
+        env.insert(
+            "SLASH_DATABASE_URL_PATH".to_string(),
+            secret_file("postgres://slash:slash@db/slash\n"),
+        );
+        env.insert(
+            "SLASH_AUTH_SECRET_PATH".to_string(),
+            secret_file("auth-secret\n"),
+        );
+        env.clone()
+    }
+
+    fn load(env: &HashMap<String, String>) -> Result<ServerConfig, ConfigError> {
+        ServerConfig::from_lookup_with_reader(&lookup(env), |p| std::fs::read_to_string(p))
+    }
+
     #[test]
-    fn refuses_to_start_without_webhook_secret() {
+    fn refuses_to_start_without_a_secret_path() {
         let env = env_of(&[
-            ("SLASH_DATABASE_URL", "postgres://x"),
             ("SLASH_GITHUB_APP_ID", "1"),
             ("SLASH_GITHUB_PRIVATE_KEY_PATH", "/key.pem"),
         ]);
-        // `ServerConfig` deliberately has no `Debug` impl (so the webhook
-        // secret can never leak via a stray `{:?}`), so `.unwrap_err()`
-        // (which requires `T: Debug`) isn't available here — match instead.
-        match ServerConfig::from_lookup(lookup(&env)) {
-            Err(err) => assert!(matches!(
-                err,
-                ConfigError::MissingEnvVar("SLASH_WEBHOOK_SECRET")
-            )),
-            Ok(_) => panic!("expected a MissingEnvVar error"),
+        // The webhook secret's path env var is unset: file-only means no
+        // secret can be resolved, and startup fails closed.
+        match load(&env) {
+            Err(ConfigError::MissingEnvVar("SLASH_WEBHOOK_SECRET_PATH")) => {}
+            _ => panic!("expected a missing webhook secret path error"),
         }
     }
 
     #[test]
-    fn loads_a_complete_configuration() {
-        let env = env_of(&[
-            ("SLASH_WEBHOOK_SECRET", "shh"),
-            ("SLASH_DATABASE_URL", "postgres://x"),
+    fn loads_a_complete_configuration_from_files() {
+        let mut env = env_of(&[
             ("SLASH_GITHUB_APP_ID", "42"),
             ("SLASH_GITHUB_PRIVATE_KEY_PATH", "/key.pem"),
-            ("SLASH_AUTH_SECRET", "authsecret"),
         ]);
-        let config = ServerConfig::from_lookup(lookup(&env)).unwrap();
+        let env = file_env(&mut env);
+        let config = load(&env).unwrap();
         assert_eq!(config.github_app_id, 42);
-        assert_eq!(config.webhook_secret, "shh");
-        assert_eq!(config.auth_secret, "authsecret");
+        assert_eq!(config.webhook_secret, "webhook-secret");
+        assert_eq!(config.database_url, "postgres://slash:slash@db/slash");
+        assert_eq!(config.auth_secret, "auth-secret");
     }
 
     #[test]
     fn rejects_a_non_numeric_app_id() {
-        let env = env_of(&[
-            ("SLASH_WEBHOOK_SECRET", "shh"),
-            ("SLASH_DATABASE_URL", "postgres://x"),
-            ("SLASH_AUTH_SECRET", "authsecret"),
+        let mut env = env_of(&[
             ("SLASH_GITHUB_APP_ID", "not-a-number"),
             ("SLASH_GITHUB_PRIVATE_KEY_PATH", "/key.pem"),
         ]);
-        match ServerConfig::from_lookup(lookup(&env)) {
-            Err(err) => assert!(matches!(
-                err,
-                ConfigError::InvalidInt("SLASH_GITHUB_APP_ID", _)
-            )),
-            Ok(_) => panic!("expected an InvalidInt error"),
+        let env = file_env(&mut env);
+        match load(&env) {
+            Err(ConfigError::InvalidInt("SLASH_GITHUB_APP_ID", _)) => {}
+            _ => panic!("expected an InvalidInt error"),
         }
     }
 
     #[test]
     fn auth_secret_is_read_from_the_path_when_set() {
-        // Real file read: write a temp secret and verify config picks it up.
-        let dir = std::env::temp_dir();
-        let path = dir.join(format!("slash-auth-secret-{}", uuid::Uuid::new_v4()));
-        std::fs::write(&path, "file-secret-value\n").unwrap();
-
-        let env = env_of(&[
-            ("SLASH_WEBHOOK_SECRET", "shh"),
-            ("SLASH_DATABASE_URL", "postgres://x"),
+        let mut env = env_of(&[
             ("SLASH_GITHUB_APP_ID", "42"),
             ("SLASH_GITHUB_PRIVATE_KEY_PATH", "/key.pem"),
-            ("SLASH_AUTH_SECRET_PATH", path.to_str().unwrap()),
         ]);
-        match ServerConfig::from_lookup_with_reader(&lookup(&env), |p| std::fs::read_to_string(p)) {
-            Ok(config) => assert_eq!(config.auth_secret, "file-secret-value"),
-            Err(_) => panic!("expected the file secret to be read"),
-        }
-        let _ = std::fs::remove_file(&path);
+        let mut env = file_env(&mut env);
+        env.insert(
+            "SLASH_AUTH_SECRET_PATH".to_string(),
+            secret_file("file-secret-value\n"),
+        );
+        let config = load(&env).unwrap();
+        assert_eq!(config.auth_secret, "file-secret-value");
     }
 
     #[test]
     fn auth_secret_path_missing_file_is_an_error() {
-        let env = env_of(&[
-            ("SLASH_WEBHOOK_SECRET", "shh"),
-            ("SLASH_DATABASE_URL", "postgres://x"),
+        let mut env = env_of(&[
             ("SLASH_GITHUB_APP_ID", "42"),
             ("SLASH_GITHUB_PRIVATE_KEY_PATH", "/key.pem"),
-            ("SLASH_AUTH_SECRET_PATH", "/does/not/exist/secret.txt"),
         ]);
-        match ServerConfig::from_lookup_with_reader(&lookup(&env), |p| std::fs::read_to_string(p)) {
+        let mut env = file_env(&mut env);
+        env.insert(
+            "SLASH_AUTH_SECRET_PATH".to_string(),
+            "/does/not/exist/secret.txt".to_string(),
+        );
+        match load(&env) {
             Err(ConfigError::UnreadableFile("SLASH_AUTH_SECRET_PATH", _)) => {}
             _ => panic!("expected an unreadable-file error"),
         }
@@ -229,61 +214,62 @@ mod tests {
 
     #[test]
     fn webhook_secret_is_read_from_the_path_when_set() {
-        let dir = std::env::temp_dir();
-        let path = dir.join(format!("slash-webhook-secret-{}", uuid::Uuid::new_v4()));
-        std::fs::write(&path, "webhook-secret-value\n").unwrap();
-
-        let env = env_of(&[
-            ("SLASH_DATABASE_URL", "postgres://x"),
+        let mut env = env_of(&[
             ("SLASH_GITHUB_APP_ID", "42"),
             ("SLASH_GITHUB_PRIVATE_KEY_PATH", "/key.pem"),
-            ("SLASH_AUTH_SECRET", "authsecret"),
-            ("SLASH_WEBHOOK_SECRET_PATH", path.to_str().unwrap()),
         ]);
-        match ServerConfig::from_lookup_with_reader(&lookup(&env), |p| std::fs::read_to_string(p)) {
-            Ok(config) => assert_eq!(config.webhook_secret, "webhook-secret-value"),
-            Err(_) => panic!("expected the file secret to be read"),
-        }
-        let _ = std::fs::remove_file(&path);
+        let mut env = file_env(&mut env);
+        env.insert(
+            "SLASH_WEBHOOK_SECRET_PATH".to_string(),
+            secret_file("webhook-secret-value\n"),
+        );
+        let config = load(&env).unwrap();
+        assert_eq!(config.webhook_secret, "webhook-secret-value");
     }
 
     #[test]
     fn database_url_is_read_from_the_path_when_set() {
-        let dir = std::env::temp_dir();
-        let path = dir.join(format!("slash-db-url-{}", uuid::Uuid::new_v4()));
-        std::fs::write(&path, "postgres://user:pass@db/slash\n").unwrap();
-
-        let env = env_of(&[
-            ("SLASH_WEBHOOK_SECRET", "shh"),
+        let mut env = env_of(&[
             ("SLASH_GITHUB_APP_ID", "42"),
             ("SLASH_GITHUB_PRIVATE_KEY_PATH", "/key.pem"),
-            ("SLASH_AUTH_SECRET", "authsecret"),
-            ("SLASH_DATABASE_URL_PATH", path.to_str().unwrap()),
         ]);
-        match ServerConfig::from_lookup_with_reader(&lookup(&env), |p| std::fs::read_to_string(p)) {
-            Ok(config) => assert_eq!(config.database_url, "postgres://user:pass@db/slash"),
-            Err(_) => panic!("expected the file database URL to be read"),
-        }
-        let _ = std::fs::remove_file(&path);
+        let mut env = file_env(&mut env);
+        env.insert(
+            "SLASH_DATABASE_URL_PATH".to_string(),
+            secret_file("postgres://user:pass@db/slash\n"),
+        );
+        let config = load(&env).unwrap();
+        assert_eq!(config.database_url, "postgres://user:pass@db/slash");
     }
 
     #[test]
     fn webhook_secret_path_empty_file_is_an_error() {
-        let dir = std::env::temp_dir();
-        let path = dir.join(format!("slash-webhook-empty-{}", uuid::Uuid::new_v4()));
-        std::fs::write(&path, "  \n").unwrap();
-
-        let env = env_of(&[
-            ("SLASH_DATABASE_URL", "postgres://x"),
+        let mut env = env_of(&[
             ("SLASH_GITHUB_APP_ID", "42"),
             ("SLASH_GITHUB_PRIVATE_KEY_PATH", "/key.pem"),
-            ("SLASH_AUTH_SECRET", "authsecret"),
-            ("SLASH_WEBHOOK_SECRET_PATH", path.to_str().unwrap()),
         ]);
-        match ServerConfig::from_lookup_with_reader(&lookup(&env), |p| std::fs::read_to_string(p)) {
+        let mut env = file_env(&mut env);
+        env.insert("SLASH_WEBHOOK_SECRET_PATH".to_string(), secret_file("  \n"));
+        match load(&env) {
             Err(ConfigError::UnreadableFile("SLASH_WEBHOOK_SECRET_PATH", _)) => {}
             _ => panic!("expected an empty-file error"),
         }
-        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn inline_env_secret_variants_are_not_recognized() {
+        // The old inline fallbacks (SLASH_WEBHOOK_SECRET / SLASH_DATABASE_URL
+        // / SLASH_AUTH_SECRET) must NOT be honored — file-only is the one way.
+        let env = env_of(&[
+            ("SLASH_WEBHOOK_SECRET", "shh"),
+            ("SLASH_DATABASE_URL", "postgres://x"),
+            ("SLASH_AUTH_SECRET", "authsecret"),
+            ("SLASH_GITHUB_APP_ID", "42"),
+            ("SLASH_GITHUB_PRIVATE_KEY_PATH", "/key.pem"),
+        ]);
+        match load(&env) {
+            Err(ConfigError::MissingEnvVar("SLASH_WEBHOOK_SECRET_PATH")) => {}
+            _ => panic!("expected a missing webhook secret path error"),
+        }
     }
 }
