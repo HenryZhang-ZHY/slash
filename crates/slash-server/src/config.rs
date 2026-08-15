@@ -62,11 +62,13 @@ impl ServerConfig {
     }
 }
 
-/// Resolves a secret from a file: reads `<PATH_VAR>`'s file and trims it, so
-/// it never leaks via env/`docker inspect`. This is the only way a secret is
-/// configured — there is no inline fallback. Fail-closed: a missing/empty
-/// `<PATH_VAR>` or an unreadable/empty file is a startup error; a secret is
-/// never defaulted or skipped.
+/// Resolves a secret from a file: reads `<PATH_VAR>`'s file **exactly** — no
+/// trimming. If the file's content is off by a single byte (a trailing
+/// newline, whitespace, anything), that's the secret's value, and it will
+/// simply fail to match downstream rather than being silently "corrected".
+/// This is the only way a secret is configured — there is no inline fallback.
+/// Fail-closed: a missing/empty `<PATH_VAR>` or an unreadable/empty file is a
+/// startup error; a secret is never defaulted or skipped.
 fn resolve_secret(
     lookup: &impl Fn(&str) -> Option<String>,
     read_file: &mut impl FnMut(&str) -> std::io::Result<String>,
@@ -75,14 +77,13 @@ fn resolve_secret(
     let path = lookup(path_var).ok_or(ConfigError::MissingEnvVar(path_var))?;
     let content =
         read_file(&path).map_err(|e| ConfigError::UnreadableFile(path_var, e.to_string()))?;
-    let secret = content.trim().to_string();
-    if secret.is_empty() {
+    if content.is_empty() {
         return Err(ConfigError::UnreadableFile(
             path_var,
             "file is empty".to_string(),
         ));
     }
-    Ok(secret)
+    Ok(content)
 }
 
 fn require(
@@ -118,19 +119,21 @@ mod tests {
         path.to_string_lossy().into_owned()
     }
 
-    /// Env for a complete config: all three secrets come from files.
+    /// Env for a complete config: all three secrets come from files. The
+    /// files hold exactly the secret bytes (no trailing newline) — matching
+    /// how a correctly written secret file should look.
     fn file_env(env: &mut HashMap<String, String>) -> HashMap<String, String> {
         env.insert(
             "SLASH_WEBHOOK_SECRET_PATH".to_string(),
-            secret_file("webhook-secret\n"),
+            secret_file("webhook-secret"),
         );
         env.insert(
             "SLASH_DATABASE_URL_PATH".to_string(),
-            secret_file("postgres://slash:slash@db/slash\n"),
+            secret_file("postgres://slash:slash@db/slash"),
         );
         env.insert(
             "SLASH_AUTH_SECRET_PATH".to_string(),
-            secret_file("auth-secret\n"),
+            secret_file("auth-secret"),
         );
         env.clone()
     }
@@ -189,7 +192,7 @@ mod tests {
         let mut env = file_env(&mut env);
         env.insert(
             "SLASH_AUTH_SECRET_PATH".to_string(),
-            secret_file("file-secret-value\n"),
+            secret_file("file-secret-value"),
         );
         let config = load(&env).unwrap();
         assert_eq!(config.auth_secret, "file-secret-value");
@@ -221,7 +224,7 @@ mod tests {
         let mut env = file_env(&mut env);
         env.insert(
             "SLASH_WEBHOOK_SECRET_PATH".to_string(),
-            secret_file("webhook-secret-value\n"),
+            secret_file("webhook-secret-value"),
         );
         let config = load(&env).unwrap();
         assert_eq!(config.webhook_secret, "webhook-secret-value");
@@ -236,10 +239,28 @@ mod tests {
         let mut env = file_env(&mut env);
         env.insert(
             "SLASH_DATABASE_URL_PATH".to_string(),
-            secret_file("postgres://user:pass@db/slash\n"),
+            secret_file("postgres://user:pass@db/slash"),
         );
         let config = load(&env).unwrap();
         assert_eq!(config.database_url, "postgres://user:pass@db/slash");
+    }
+
+    #[test]
+    fn secret_file_content_is_read_exactly_without_trimming() {
+        // No trim: if the file holds a trailing newline (or other whitespace),
+        // that is the secret's value — a mismatch surfaces instead of being
+        // silently "corrected".
+        let mut env = env_of(&[
+            ("SLASH_GITHUB_APP_ID", "42"),
+            ("SLASH_GITHUB_PRIVATE_KEY_PATH", "/key.pem"),
+        ]);
+        let mut env = file_env(&mut env);
+        env.insert(
+            "SLASH_WEBHOOK_SECRET_PATH".to_string(),
+            secret_file("webhook-secret\n"),
+        );
+        let config = load(&env).unwrap();
+        assert_eq!(config.webhook_secret, "webhook-secret\n");
     }
 
     #[test]
@@ -249,7 +270,7 @@ mod tests {
             ("SLASH_GITHUB_PRIVATE_KEY_PATH", "/key.pem"),
         ]);
         let mut env = file_env(&mut env);
-        env.insert("SLASH_WEBHOOK_SECRET_PATH".to_string(), secret_file("  \n"));
+        env.insert("SLASH_WEBHOOK_SECRET_PATH".to_string(), secret_file(""));
         match load(&env) {
             Err(ConfigError::UnreadableFile("SLASH_WEBHOOK_SECRET_PATH", _)) => {}
             _ => panic!("expected an empty-file error"),

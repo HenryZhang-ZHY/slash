@@ -40,20 +40,21 @@ docker run -p 8080:8080 \
 
 | 变量 | 必填 | 说明 |
 | ---------------------------------- | ---------- | ------- |
-| `SLASH_DATABASE_URL_PATH` | 是 | 包含 Postgres 连接串的文件路径，启动时读取并 trim。 |
+| `SLASH_DATABASE_URL_PATH` | 是 | 包含 Postgres 连接串的文件路径，启动时逐字节读取。 |
 | `SLASH_WEBHOOK_SECRET_PATH` | 是 | 包含 webhook secret 的文件路径（须匹配 GitHub App 上配置的 webhook secret）。没有它服务器拒绝启动 —— 签名校验绝不省略。 |
 | `SLASH_GITHUB_APP_ID` | 是 | GitHub App 的数字 ID。 |
 | `SLASH_GITHUB_PRIVATE_KEY_PATH` | 是 | App 私钥的**文件**路径（不是内联密钥）—— 只读挂载，平台支持时 mode `0400`。 |
-| `SLASH_AUTH_SECRET_PATH` | 是 | 包含会话签名 HMAC secret（会 trim）的文件路径。和其他 secret 一样仅文件方式。 |
+| `SLASH_AUTH_SECRET_PATH` | 是 | 包含会话签名 HMAC secret 的文件路径，逐字节读取。和其他 secret 一样仅文件方式。 |
 | `SLASH_WEB_DIR` | 否 | 构建好的 web 控制台 SPA 的根目录。默认 `web/dist`（相对服务器工作目录）。 |
 | `RUST_LOG` | 否 | `tracing_subscriber` env-filter 语法，例如 `info` 或 `slash_server=debug`。 |
 
 每个 secret 都**只走文件**——每种 secret 只有一种配置方式：一个指向启动时读取
 文件的 `*_PATH` 环境变量（与 GitHub App 私钥一致）。旧的 inline 变体
 （`SLASH_DATABASE_URL` / `SLASH_WEBHOOK_SECRET` / `SLASH_AUTH_SECRET`）**不再
-识别**，所以 secret 永远不会通过 `docker inspect` 或 `ps aux` 暴露。若 `*_PATH`
-未设置、或其文件不可读/为空，服务器拒绝启动而不是跳过该 secret。auth secret
-见 `docs/user/onboarding`。
+识别**，所以 secret 永远不会通过 `docker inspect` 或 `ps aux` 暴露。文件内容
+**逐字节读取、不做 trim**——末尾换行或多余空白就是 secret 的一部分，配不上就
+让配不上，而不是被悄悄"修正"。若 `*_PATH` 未设置、或其文件不可读/为空，服务器
+拒绝启动而不是跳过该 secret。auth secret 见 `docs/user/onboarding`。
 
 刻意没有把私钥作为内联环境变量传入的方式 —— 只有文件路径 —— 而且 config 结构体
 没有 `Debug`/`Display` 实现，所以 webhook secret 和数据库 URL（可能内嵌密码）都

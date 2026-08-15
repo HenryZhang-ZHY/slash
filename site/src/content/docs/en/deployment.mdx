@@ -46,11 +46,11 @@ a bad migration never leaves the process half-started.
 
 | Variable | Required | Notes |
 | ---------------------------------- | ---------- | ------- |
-| `SLASH_DATABASE_URL_PATH` | yes | Path to a file containing the Postgres connection string. The file is read at startup and trimmed. |
+| `SLASH_DATABASE_URL_PATH` | yes | Path to a file containing the Postgres connection string. The file is read at startup, byte-for-byte. |
 | `SLASH_WEBHOOK_SECRET_PATH` | yes | Path to a file containing the webhook secret (matches the GitHub App's webhook secret). The server refuses to start without it — signature verification is never optional. |
 | `SLASH_GITHUB_APP_ID` | yes | The GitHub App's numeric ID. |
 | `SLASH_GITHUB_PRIVATE_KEY_PATH` | yes | Path to the App's private key **file** (not the key inline) — mount it read-only, mode `0400` if your platform supports setting it. |
-| `SLASH_AUTH_SECRET_PATH` | yes | Path to a file containing the HMAC session-signing secret (trimmed). File-only, like the other secrets. |
+| `SLASH_AUTH_SECRET_PATH` | yes | Path to a file containing the HMAC session-signing secret, read byte-for-byte. File-only, like the other secrets. |
 | `SLASH_WEB_DIR` | no | Root directory of the built web console SPA. Defaults to `web/dist` (relative to the server's working directory). |
 | `RUST_LOG` | no | `tracing_subscriber` env-filter syntax, e.g. `info` or `slash_server=debug`. |
 
@@ -58,10 +58,12 @@ Every secret is **file-only** — there is exactly one way to configure each,
 a `*_PATH` env var pointing at a file read at startup (mirroring the GitHub
 App private key). The old inline variants (`SLASH_DATABASE_URL`,
 `SLASH_WEBHOOK_SECRET`, `SLASH_AUTH_SECRET`) are **not** recognized, so a
-secret can never end up visible via `docker inspect` or `ps aux`. If a
-`*_PATH` env var is unset, or its file is unreadable or empty, startup fails
-rather than skipping the secret. See `docs/user/onboarding` for the auth
-secret.
+secret can never end up visible via `docker inspect` or `ps aux`. The file's
+content is read **byte-for-byte — no trimming** — a trailing newline or stray
+whitespace is part of the secret, and a mismatch simply fails rather than
+being silently corrected. If a `*_PATH` env var is unset, or its file is
+unreadable or empty, startup fails rather than skipping the secret. See
+`docs/user/onboarding` for the auth secret.
 
 There is deliberately no way to pass the private key as an inline
 environment variable — only a file path — and the config struct has no
