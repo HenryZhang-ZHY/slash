@@ -2,12 +2,13 @@
 title: API reference
 description: "HTTP endpoints exposed by slash-server."
 sidebar:
-  order: 7
+  order: 10
 ---
 
 Slash serves its HTTP API and web console from the same origin. Replace
 `https://slash.example.com` in the examples with the origin of your Slash
-deployment.
+deployment. The console (see the [web console guide](/web-console/)) is a
+thin client over these same endpoints.
 
 All request bodies share a **5 MiB limit**. UUID path parameters use the
 standard hyphenated UUID representation. Timestamps in JSON responses are

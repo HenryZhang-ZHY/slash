@@ -56,7 +56,7 @@ See the [`.slash/` reference](/slash-config-reference/) for the full
 schema, and run `slash validate .slash/` in your own CI to catch mistakes
 before they reach the default branch (see
 [known limitations](/limitations/) — Slash does not validate `.slash/` on
-push itself in 0.0.1).
+push itself).
 
 ## 4. Add the workflow
 
@@ -103,7 +103,9 @@ once the workflow run finishes, with a link to that run.
   `.slash/*.yml` schema
 - [Workflow requirements](/workflow-requirements/) — injected inputs,
   the `env:`-not-`${{ }}` rule, required-status-check caveats
-- [Permissions](/permissions/) — who can invoke what
+- [Permissions](/permissions/) and [Grants](/grants/) — who can invoke what
+- [Web console](/web-console/) — sign in, create teams, manage the Test Engine
+- [Test Engine](/test-engine/) — collect results and quarantine flaky tests
 - [Deployment](/deployment/) — running the server, key rotation, incident
   procedure
-- [Known limitations](/limitations/) — what 0.0.1 deliberately does not do yet
+- [Known limitations](/limitations/) — what Slash deliberately does not do yet
