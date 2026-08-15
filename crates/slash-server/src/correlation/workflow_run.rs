@@ -103,10 +103,14 @@ pub async fn handle_workflow_run(
         return Ok(());
     }
 
-    let token = ctx
-        .app
-        .installation_token(ctx.installation_id, ctx.repository_id, TOKEN_PERMISSIONS)
-        .await?;
+    let token = crate::installations::mint_installation_token(
+        ctx.pool,
+        ctx.app,
+        ctx.installation_id,
+        ctx.repository_id,
+        TOKEN_PERMISSIONS,
+    )
+    .await?;
     let client =
         RepoClient::with_base_uri(&token, ctx.owner.clone(), ctx.repo.clone(), ctx.base_uri)?;
 

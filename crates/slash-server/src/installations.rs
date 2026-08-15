@@ -9,7 +9,7 @@
 
 use octocrab::models::webhook_events::WebhookEventPayload;
 use octocrab::models::webhook_events::payload::InstallationWebhookEventAction;
-use slash_github::WebhookEvent;
+use slash_github::{AppAuthError, GithubApp, WebhookEvent};
 use sqlx::PgPool;
 
 /// Upserts the installation's lifecycle state from an `installation` webhook.
@@ -77,6 +77,52 @@ async fn upsert(
     .execute(pool)
     .await?;
     Ok(())
+}
+
+/// Marks an installation `deleted` — the 401 fallback path: GitHub answered
+/// `401` on token mint, meaning the installation was uninstalled (or the App
+/// lost access to it) without a `deleted` webhook ever being delivered. Idempotent.
+pub async fn mark_deleted(pool: &PgPool, installation_id: i64) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO installations (installation_id, account, state)
+         VALUES ($1, '', 'deleted')
+         ON CONFLICT (installation_id) DO UPDATE
+         SET state = 'deleted', updated_at = now()",
+    )
+    .bind(installation_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Mints an installation token, and when GitHub answers `401` (the
+/// installation is gone) marks it `deleted` so callers can stop retrying
+/// instead of looping on mint failures (spec §7.5). Passes through any other
+/// mint error untouched.
+pub async fn mint_installation_token(
+    pool: &PgPool,
+    app: &GithubApp,
+    installation_id: u64,
+    repository_id: u64,
+    permissions: &[(&str, &str)],
+) -> Result<String, AppAuthError> {
+    match app
+        .installation_token(installation_id, repository_id, permissions)
+        .await
+    {
+        Ok(token) => Ok(token),
+        Err(AppAuthError::InstallationGone { installation_id }) => {
+            if let Err(db_error) = mark_deleted(pool, installation_id as i64).await {
+                tracing::error!(
+                    %db_error,
+                    installation_id,
+                    "failed to mark deleted installation in the 401 path"
+                );
+            }
+            Err(AppAuthError::InstallationGone { installation_id })
+        }
+        Err(other) => Err(other),
+    }
 }
 
 #[cfg(test)]
@@ -245,5 +291,108 @@ mod tests {
                 .unwrap();
         assert_eq!(row.0, "gagbo");
         assert_eq!(row.1, "suspended");
+    }
+
+    #[serial_test::serial(db)]
+    #[tokio::test]
+    async fn mark_deleted_sets_deleted_and_is_idempotent() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        handle_installation_event(&pool, &installation_event("created"))
+            .await
+            .unwrap();
+        mark_deleted(&pool, 39593433).await.unwrap();
+        assert_eq!(state_of(&pool, 39593433).await, "deleted");
+        // Second call overwrites state again — still deleted, no error.
+        mark_deleted(&pool, 39593433).await.unwrap();
+        assert_eq!(state_of(&pool, 39593433).await, "deleted");
+    }
+
+    #[serial_test::serial(db)]
+    #[tokio::test]
+    async fn mark_deleted_creates_the_row_when_absent() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        // No prior webhook: the 401 fallback still records the row so the
+        // installation is known to be gone.
+        mark_deleted(&pool, 999).await.unwrap();
+        assert_eq!(state_of(&pool, 999).await, "deleted");
+    }
+
+    #[serial_test::serial(db)]
+    #[tokio::test]
+    async fn mint_401_marks_the_installation_deleted() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        handle_installation_event(&pool, &installation_event("created"))
+            .await
+            .unwrap();
+
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path(
+                "/app/installations/39593433/access_tokens",
+            ))
+            .respond_with(
+                wiremock::ResponseTemplate::new(401)
+                    .set_body_json(serde_json::json!({ "message": "Bad credentials" })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let app = slash_github::GithubApp::with_base_uri(
+            123,
+            include_bytes!("../../slash-github/tests/fixtures/test-app-key.pem"),
+            Some(&server.uri()),
+        )
+        .unwrap();
+        let result =
+            mint_installation_token(&pool, &app, 39593433, 99, &[("checks", "write")]).await;
+        assert!(matches!(
+            result,
+            Err(AppAuthError::InstallationGone {
+                installation_id: 39593433
+            })
+        ));
+        assert_eq!(state_of(&pool, 39593433).await, "deleted");
+    }
+
+    #[serial_test::serial(db)]
+    #[tokio::test]
+    async fn mint_other_error_passes_through_without_touching_state() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        handle_installation_event(&pool, &installation_event("created"))
+            .await
+            .unwrap();
+
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .and(wiremock::matchers::path(
+                "/app/installations/39593433/access_tokens",
+            ))
+            .respond_with(
+                wiremock::ResponseTemplate::new(403)
+                    .set_body_json(serde_json::json!({ "message": "Forbidden" })),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let app = slash_github::GithubApp::with_base_uri(
+            123,
+            include_bytes!("../../slash-github/tests/fixtures/test-app-key.pem"),
+            Some(&server.uri()),
+        )
+        .unwrap();
+        let result =
+            mint_installation_token(&pool, &app, 39593433, 99, &[("checks", "write")]).await;
+        assert!(matches!(result, Err(AppAuthError::Mint(_))));
+        assert_eq!(state_of(&pool, 39593433).await, "active");
     }
 }
