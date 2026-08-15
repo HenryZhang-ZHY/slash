@@ -502,13 +502,15 @@ fn log_permission_api_failure(
     );
 }
 
-async fn report_catalog_error(
+/// Records a failed command-catalog load: bumps the `command_catalog_loads_total`
+/// counter and logs the failure. Shared by the pipeline's user-facing
+/// [`report_catalog_error`] (which additionally posts a comment/reaction) and
+/// the correlation module's re-run path, which has no comment surface (spec
+/// §6.5). Pure observability — never raises, never writes to GitHub.
+pub(crate) fn record_catalog_load_metrics(
     ctx: &PipelineContext<'_>,
-    client: &RepoClient,
-    issue_number: u64,
-    comment_id: u64,
-    can_comment: bool,
     error: &CatalogError,
+    message: &'static str,
 ) {
     let outcome = match error {
         CatalogError::Invalid { .. } => "invalid",
@@ -525,8 +527,19 @@ async fn report_catalog_error(
         path = ?error.path(),
         status = ?error.status_code(),
         error = %error,
-        "command catalog load failed"
+        "{message}"
     );
+}
+
+async fn report_catalog_error(
+    ctx: &PipelineContext<'_>,
+    client: &RepoClient,
+    issue_number: u64,
+    comment_id: u64,
+    can_comment: bool,
+    error: &CatalogError,
+) {
+    record_catalog_load_metrics(ctx, error, "command catalog load failed");
 
     if can_comment {
         let body = match error {

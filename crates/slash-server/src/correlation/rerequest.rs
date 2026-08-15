@@ -7,9 +7,7 @@ use slash_github::{CheckRunUpdate, RepoClient, WebhookEvent};
 
 use crate::catalog::{CatalogError, CatalogOutcome, load_catalog, resolve_default_branch};
 use crate::invocations::{self, NewInvocation};
-use crate::pipeline::{PipelineContext, PipelineError, TOKEN_PERMISSIONS};
-
-use super::record_catalog_error;
+use crate::pipeline::{PipelineContext, PipelineError, TOKEN_PERMISSIONS, record_catalog_load_metrics};
 
 /// Handles `check_run.rerequested` (spec §6.5): re-resolve the
 /// *rerequester's* permission — never the original invoker's — against the
@@ -78,7 +76,7 @@ pub async fn handle_check_run_rerequested(
     let resolved = match resolve_default_branch(&client, hinted_default_branch).await {
         Ok(resolved) => resolved,
         Err(error) => {
-            record_catalog_error(ctx, &error, "rerequest command catalog resolution failed");
+            record_catalog_load_metrics(ctx, &error, "rerequest command catalog resolution failed");
             let body = messages::command_catalog_unavailable();
             let _ = client
                 .update_check_run(
@@ -129,7 +127,7 @@ pub async fn handle_check_run_rerequested(
             return Ok(());
         }
         Err(error) => {
-            record_catalog_error(ctx, &error, "rerequest command catalog load failed");
+            record_catalog_load_metrics(ctx, &error, "rerequest command catalog load failed");
             let (title, body) = match &error {
                 CatalogError::Invalid { details } => {
                     ("Re-run denied", messages::config_error(details))
