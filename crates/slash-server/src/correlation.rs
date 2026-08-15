@@ -16,7 +16,7 @@ use octocrab::models::webhook_events::payload::{
     PullRequestWebhookEventPayload, WorkflowRunWebhookEventAction, WorkflowRunWebhookEventPayload,
 };
 use octocrab::params::checks::{CheckRunConclusion, CheckRunStatus};
-use slash_core::{CheckConclusion, InvocationStatus, ResolvedRole, messages};
+use slash_core::{CheckConclusion, InvocationStatus, TrustGate, messages};
 use slash_github::{CheckRunUpdate, RepoClient, WebhookEvent, WorkflowRun};
 use sqlx::PgPool;
 
@@ -254,22 +254,6 @@ pub async fn handle_check_run_rerequested(
     let client =
         RepoClient::with_base_uri(&token, ctx.owner.clone(), ctx.repo.clone(), ctx.base_uri)?;
 
-    // Re-resolve the rerequester's permission (never the original
-    // invoker's). Fail closed with no comment surface here (spec §5.2,
-    // §6.5): a resolution failure is dropped.
-    let Ok(permission) = client.get_collaborator_permission(&rerequester.login).await else {
-        return Ok(());
-    };
-    let role = ResolvedRole::from_role_name(&permission.role_name).unwrap_or_else(|| {
-        ResolvedRole::from_permission_booleans(
-            permission.user.permissions.admin,
-            permission.user.permissions.maintain,
-            permission.user.permissions.push,
-            permission.user.permissions.triage,
-            permission.user.permissions.pull,
-        )
-    });
-
     // Re-capture the PR head and re-check the command's *current*
     // permission requirement (config may have changed since the original
     // invocation).
@@ -361,9 +345,41 @@ pub async fn handle_check_run_rerequested(
         return Ok(());
     };
 
-    if !slash_core::meets(role, validated.permission) {
+    // Re-authorize the rerequester against the same grants-backed decision
+    // source as the main pipeline (R2 TrustGate, org/user #23): async preload
+    // of the rerequester's grants, then the sync grants decision. Fail-closed:
+    // a load/decision error or a missing grant that reaches the required tier
+    // denies. This replaces the old GitHub-collaborator-role comparison, which
+    // let a collaborator without a grant re-run (fail-open) and blocked a
+    // granted non-collaborator.
+    let grants = crate::grants_loader::preload_grants(
+        ctx.pool,
+        rerequester.id.0 as i64,
+        ctx.installation_id as i64,
+        &ctx.owner,
+        &ctx.repo,
+    )
+    .await;
+    let actor = slash_core::pipeline::Actor {
+        login: rerequester.login.clone(),
+        github_user_id: rerequester.id.0,
+    };
+    let outcome = match grants {
+        Ok(grants) => {
+            let gate = crate::grants_trust_gate::GrantsTrustGate;
+            gate.check(&grants, &actor, &original.command, validated.permission)
+        }
+        // Fail closed: a preload DB/parse error is a deny (TrustOutcome::Error).
+        Err(error) => slash_core::pipeline::TrustOutcome::Error(error.to_string()),
+    };
+    if !outcome.is_granted() {
         // No comment surface for a denied re-run (spec §6.5); the check
         // run itself communicates the denial.
+        let required = match validated.permission {
+            slash_config::Permission::Read => "read",
+            slash_config::Permission::Write => "write",
+            slash_config::Permission::Admin => "admin",
+        };
         let _ = client
             .update_check_run(
                 check_run.id,
@@ -373,7 +389,7 @@ pub async fn handle_check_run_rerequested(
                     details_url: None,
                     output: Some((
                         "Re-run denied",
-                        &messages::rerequest_permission_denied(&original.command, "write"),
+                        &messages::rerequest_permission_denied(&original.command, required),
                     )),
                 },
             )
@@ -493,11 +509,39 @@ mod tests {
         let url = crate::test_support::test_database_url()?;
         let pool = db::connect(&url).await.unwrap();
         db::migrate(&pool).await.unwrap();
-        sqlx::query("TRUNCATE invocations")
+        sqlx::query("TRUNCATE invocations, grants, org_members, team_members, teams, organizations, users CASCADE")
             .execute(&pool)
             .await
             .unwrap();
         Some(pool)
+    }
+
+    /// Seed the DB so `preload_grants` + `GrantsTrustGate` let the
+    /// rerequester (GitHub user id `github_user_id`) re-run a write-tier
+    /// command in `installation_id`'s org (grants M2-4 strict deny-by-default).
+    async fn seed_rerequest_grant(pool: &PgPool, installation_id: i64, github_user_id: i64) {
+        let org = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO organizations (id, slug, name, installation_id, state)
+             VALUES ($1, 'test-org', 'Test', $2, 'active')",
+        )
+        .bind(org)
+        .bind(installation_id)
+        .execute(pool).await.unwrap();
+        let uid = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO users (id, email, password_hash, display_name, status, github_user_id)
+             VALUES ($1, 'bob@example.com', 'x', 'Bob', 'active', $2)",
+        )
+        .bind(uid)
+        .bind(github_user_id)
+        .execute(pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO grants (id, organization_id, subject_type, subject_id, scope, repository, command, permission, effect)
+             VALUES ($1, $2, 'user', $3, 'org', NULL, NULL, 'write', 'allow')",
+        )
+        .bind(Uuid::new_v4()).bind(org).bind(uid)
+        .execute(pool).await.unwrap();
     }
 
     fn author_json(login: &str, id: u64) -> serde_json::Value {
@@ -985,34 +1029,15 @@ mod tests {
         let Some(pool) = test_pool().await else {
             return;
         };
+        // Grants-backed authorization (M3 #23): the rerequester needs an org
+        // write grant, not a GitHub collaborator role.
+        seed_rerequest_grant(&pool, 1, 9).await;
         let id = Uuid::new_v4();
         invocations::claim(&pool, &sample(id)).await.unwrap();
         invocations::set_check_run_id(&pool, id, 55).await.unwrap();
 
         let server = MockServer::start().await;
         mount_rerequest_common(&server).await;
-        Mock::given(method("GET"))
-            .and(path("/repos/acme/widgets/collaborators/bob/permission"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "permission": "push", "role_name": "write",
-                "user": {
-                    "login": "bob", "id": 9, "node_id": "n", "avatar_url": "https://avatars.githubusercontent.com/u/9",
-                    "gravatar_id": "", "url": "https://api.github.com/users/bob", "html_url": "https://github.com/bob",
-                    "followers_url": "https://api.github.com/users/bob/followers",
-                    "following_url": "https://api.github.com/users/bob/following{/other_user}",
-                    "gists_url": "https://api.github.com/users/bob/gists{/gist_id}",
-                    "starred_url": "https://api.github.com/users/bob/starred{/owner}{/repo}",
-                    "subscriptions_url": "https://api.github.com/users/bob/subscriptions",
-                    "organizations_url": "https://api.github.com/users/bob/orgs",
-                    "repos_url": "https://api.github.com/users/bob/repos",
-                    "events_url": "https://api.github.com/users/bob/events{/privacy}",
-                    "received_events_url": "https://api.github.com/users/bob/received_events",
-                    "type": "User", "site_admin": false,
-                    "permissions": {"admin": false, "push": true, "pull": true}
-                },
-            })))
-            .mount(&server)
-            .await;
         Mock::given(method("POST"))
             .and(path("/repos/acme/widgets/check-runs"))
             .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
@@ -1022,6 +1047,7 @@ mod tests {
                 "output": {"title": null, "summary": null, "text": null, "annotations_count": 0, "annotations_url": "https://api.github.com/x"},
                 "started_at": null, "completed_at": null, "name": "slash/echo", "pull_requests": []
             })))
+            .expect(1)
             .mount(&server)
             .await;
         Mock::given(method("POST"))
@@ -1033,6 +1059,7 @@ mod tests {
                 "run_url": "https://api.github.com/repos/acme/widgets/actions/runs/1000",
                 "html_url": "https://github.com/acme/widgets/actions/runs/1000"
             })))
+            .expect(1)
             .mount(&server)
             .await;
 
@@ -1068,28 +1095,6 @@ mod tests {
 
         let server = MockServer::start().await;
         mount_rerequest_common(&server).await;
-        Mock::given(method("GET"))
-            .and(path("/repos/acme/widgets/collaborators/bob/permission"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "permission": "push", "role_name": "write",
-                "user": {
-                    "login": "bob", "id": 9, "node_id": "n", "avatar_url": "https://avatars.githubusercontent.com/u/9",
-                    "gravatar_id": "", "url": "https://api.github.com/users/bob", "html_url": "https://github.com/bob",
-                    "followers_url": "https://api.github.com/users/bob/followers",
-                    "following_url": "https://api.github.com/users/bob/following{/other_user}",
-                    "gists_url": "https://api.github.com/users/bob/gists{/gist_id}",
-                    "starred_url": "https://api.github.com/users/bob/starred{/owner}{/repo}",
-                    "subscriptions_url": "https://api.github.com/users/bob/subscriptions",
-                    "organizations_url": "https://api.github.com/users/bob/orgs",
-                    "repos_url": "https://api.github.com/users/bob/repos",
-                    "events_url": "https://api.github.com/users/bob/events{/privacy}",
-                    "received_events_url": "https://api.github.com/users/bob/received_events",
-                    "type": "User", "site_admin": false,
-                    "permissions": {"admin": false, "push": true, "pull": true}
-                },
-            })))
-            .mount(&server)
-            .await;
         Mock::given(method("GET"))
             .and(path("/repos/acme/widgets/contents/.slash"))
             .and(query_param("ref", "config-sha"))
@@ -1139,38 +1144,20 @@ mod tests {
 
     #[serial_test::serial(db)]
     #[tokio::test]
-    async fn check_run_rerequested_is_denied_for_a_read_only_rerequester() {
+    async fn check_run_rerequested_is_denied_for_a_rerequester_without_a_grant() {
         let Some(pool) = test_pool().await else {
             return;
         };
+        // No grant is seeded: grants-backed authorization denies by default
+        // (fail-closed, spec §5.2). This also pins the fix for the previous
+        // collaborator-role check, which would have allowed a read-only
+        // collaborator with no grant to re-run.
         let id = Uuid::new_v4();
         invocations::claim(&pool, &sample(id)).await.unwrap();
         invocations::set_check_run_id(&pool, id, 55).await.unwrap();
 
         let server = MockServer::start().await;
         mount_rerequest_common(&server).await;
-        Mock::given(method("GET"))
-            .and(path("/repos/acme/widgets/collaborators/bob/permission"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "permission": "pull", "role_name": "read",
-                "user": {
-                    "login": "bob", "id": 9, "node_id": "n", "avatar_url": "https://avatars.githubusercontent.com/u/9",
-                    "gravatar_id": "", "url": "https://api.github.com/users/bob", "html_url": "https://github.com/bob",
-                    "followers_url": "https://api.github.com/users/bob/followers",
-                    "following_url": "https://api.github.com/users/bob/following{/other_user}",
-                    "gists_url": "https://api.github.com/users/bob/gists{/gist_id}",
-                    "starred_url": "https://api.github.com/users/bob/starred{/owner}{/repo}",
-                    "subscriptions_url": "https://api.github.com/users/bob/subscriptions",
-                    "organizations_url": "https://api.github.com/users/bob/orgs",
-                    "repos_url": "https://api.github.com/users/bob/repos",
-                    "events_url": "https://api.github.com/users/bob/events{/privacy}",
-                    "received_events_url": "https://api.github.com/users/bob/received_events",
-                    "type": "User", "site_admin": false,
-                    "permissions": {"admin": false, "push": false, "pull": true}
-                },
-            })))
-            .mount(&server)
-            .await;
         Mock::given(method("PATCH"))
             .and(path("/repos/acme/widgets/check-runs/55"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -1180,6 +1167,7 @@ mod tests {
                 "output": {"title": null, "summary": null, "text": null, "annotations_count": 0, "annotations_url": "https://api.github.com/x"},
                 "started_at": null, "completed_at": null, "name": "slash/echo", "pull_requests": []
             })))
+            .expect(1)
             .mount(&server)
             .await;
 
@@ -1199,6 +1187,139 @@ mod tests {
         assert_eq!(
             count, 1,
             "a denied re-run must never claim a new invocation row"
+        );
+    }
+
+    #[serial_test::serial(db)]
+    #[tokio::test]
+    async fn check_run_rerequested_allows_a_granted_rerequester_without_a_collaborator_role() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        // The rerequester has an org write grant but is NOT a repo
+        // collaborator. The grants-backed decision (M3 #23) allows the re-run;
+        // the old collaborator-role check would have denied it. No
+        // collaborators/:permission mock is mounted, proving the decision no
+        // longer consults the GitHub collaborator role at all.
+        seed_rerequest_grant(&pool, 1, 9).await;
+        let id = Uuid::new_v4();
+        invocations::claim(&pool, &sample(id)).await.unwrap();
+        invocations::set_check_run_id(&pool, id, 55).await.unwrap();
+
+        let server = MockServer::start().await;
+        mount_rerequest_common(&server).await;
+        Mock::given(method("POST"))
+            .and(path("/repos/acme/widgets/check-runs"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "id": 56, "node_id": "n2", "head_sha": "deadbeef",
+                "url": "https://api.github.com/repos/acme/widgets/check-runs/56",
+                "html_url": null, "details_url": null, "conclusion": null,
+                "output": {"title": null, "summary": null, "text": null, "annotations_count": 0, "annotations_url": "https://api.github.com/x"},
+                "started_at": null, "completed_at": null, "name": "slash/echo", "pull_requests": []
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path(
+                "/repos/acme/widgets/actions/workflows/echo.yml/dispatches",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "workflow_run_id": 1000,
+                "run_url": "https://api.github.com/repos/acme/widgets/actions/runs/1000",
+                "html_url": "https://github.com/acme/widgets/actions/runs/1000"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let app = GithubApp::with_base_uri(1, TEST_KEY_PEM, Some(&server.uri())).unwrap();
+        let metrics = Metrics::new().unwrap();
+        handle_check_run_rerequested(
+            &ctx(&pool, &app, &server, &metrics),
+            &check_run_rerequested_event(),
+        )
+        .await
+        .unwrap();
+
+        let row: (i32, String, Option<i64>) = sqlx::query_as(
+            "SELECT attempt, status, workflow_run_id FROM invocations WHERE comment_id = 100 AND attempt = 2",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.0, 2);
+        assert_eq!(row.1, "correlated");
+        assert_eq!(row.2, Some(1000));
+    }
+
+    #[serial_test::serial(db)]
+    #[tokio::test]
+    async fn check_run_rerequested_denies_a_collaborator_without_a_grant() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        // The rerequester is a repo collaborator but has no grant. The
+        // grants-backed decision denies (fail-closed); the old
+        // collaborator-role check would have allowed this re-run (fail-open,
+        // violating deny-by-default, spec §5.2).
+        let id = Uuid::new_v4();
+        invocations::claim(&pool, &sample(id)).await.unwrap();
+        invocations::set_check_run_id(&pool, id, 55).await.unwrap();
+
+        let server = MockServer::start().await;
+        mount_rerequest_common(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/repos/acme/widgets/collaborators/bob/permission"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "permission": "push", "role_name": "write",
+                "user": {
+                    "login": "bob", "id": 9, "node_id": "n", "avatar_url": "https://avatars.githubusercontent.com/u/9",
+                    "gravatar_id": "", "url": "https://api.github.com/users/bob", "html_url": "https://github.com/bob",
+                    "followers_url": "https://api.github.com/users/bob/followers",
+                    "following_url": "https://api.github.com/users/bob/following{/other_user}",
+                    "gists_url": "https://api.github.com/users/bob/gists{/gist_id}",
+                    "starred_url": "https://api.github.com/users/bob/starred{/owner}{/repo}",
+                    "subscriptions_url": "https://api.github.com/users/bob/subscriptions",
+                    "organizations_url": "https://api.github.com/users/bob/orgs",
+                    "repos_url": "https://api.github.com/users/bob/repos",
+                    "events_url": "https://api.github.com/users/bob/events{/privacy}",
+                    "received_events_url": "https://api.github.com/users/bob/received_events",
+                    "type": "User", "site_admin": false,
+                    "permissions": {"admin": false, "push": true, "pull": true}
+                },
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("PATCH"))
+            .and(path("/repos/acme/widgets/check-runs/55"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": 55, "node_id": "n1", "head_sha": "deadbeef",
+                "url": "https://api.github.com/repos/acme/widgets/check-runs/55",
+                "html_url": null, "details_url": null, "conclusion": "action_required",
+                "output": {"title": null, "summary": null, "text": null, "annotations_count": 0, "annotations_url": "https://api.github.com/x"},
+                "started_at": null, "completed_at": null, "name": "slash/echo", "pull_requests": []
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let app = GithubApp::with_base_uri(1, TEST_KEY_PEM, Some(&server.uri())).unwrap();
+        let metrics = Metrics::new().unwrap();
+        handle_check_run_rerequested(
+            &ctx(&pool, &app, &server, &metrics),
+            &check_run_rerequested_event(),
+        )
+        .await
+        .unwrap();
+
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM invocations")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            count, 1,
+            "a collaborator without a grant must be denied (fail-closed)"
         );
     }
 

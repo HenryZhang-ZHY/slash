@@ -364,6 +364,7 @@ mod authz_tests {
         (org, uid)
     }
 
+    #[serial_test::serial(db)]
     #[tokio::test]
     async fn grant_allows_and_missing_denies() {
         let p = pool().await;
@@ -385,6 +386,7 @@ mod authz_tests {
         assert!(!authorize_command_grants(&p, 111, 12345, "acme", "widgets", "deploy", slash_config::Permission::Write).await.unwrap());
     }
 
+    #[serial_test::serial(db)]
     #[tokio::test]
     async fn trustgate_live_path_allows_and_denies() {
         let p = pool().await;
