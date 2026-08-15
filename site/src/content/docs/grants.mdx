@@ -25,8 +25,8 @@ single command.
 The two pieces combine at dispatch time:
 
 ```text
-被授权的档位 ≥ 命令所需档位  →  allow
-否则（或任何显式 deny / 解析失败 / 无匹配行）  →  deny
+granted tier ≥ command's required tier  →  allow
+otherwise (explicit deny / resolution failure / no matching row)  →  deny
 ```
 
 Authorization is a two-step, offline path:
