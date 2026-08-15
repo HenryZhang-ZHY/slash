@@ -185,3 +185,48 @@ jobs:
             exit 1
           fi
           exit "$TEST_STATUS"
+
+  coverage:
+    name: Coverage report (cargo llvm-cov)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: slash
+          POSTGRES_PASSWORD: slash
+          POSTGRES_DB: slash
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U slash"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      SLASH_TEST_DATABASE_URL: postgres://slash:slash@localhost:5432/slash
+    steps:
+      - name: Check out the tested revision
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.slash_head_sha || github.sha }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: llvm-tools
+
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked
+
+      - name: Run coverage report
+        run: scripts/coverage.sh
+
+      - name: Upload coverage report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: llvm-cov-report
+          path: |
+            target/llvm-cov/html
+            target/llvm-cov/coverage.lcov
