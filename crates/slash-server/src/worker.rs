@@ -1,9 +1,8 @@
 //! The worker pool consuming `deliveries` (spec §7.3). `issue_comment` is
 //! the M5 dispatch pipeline; `workflow_run`, `check_run`, and
-//! `pull_request` are M6's correlation handlers. Anything else subscribed
-//! (`installation`, `installation_repositories`) is parsed and logged for
-//! now — `installations` table maintenance is a documented gap, not yet
-//! implemented.
+//! `pull_request` are M6's correlation handlers. `installation` /
+//! `installation_repositories` events maintain the `installations` table
+//! (`installations.rs`) so a removed/suspended install is recognized.
 
 use std::time::Duration;
 
@@ -52,6 +51,20 @@ pub async fn process_one(
             | WebhookEventType::PullRequest
     );
     if !needs_context {
+        // Installation lifecycle events (and anything else we don't dispatch
+        // on) are still processed — installation events maintain the
+        // `installations` table so a removed/suspended install is recognized
+        // instead of looping on token-mint failures.
+        if matches!(
+            parsed.kind,
+            WebhookEventType::Installation | WebhookEventType::InstallationRepositories
+        ) && let Err(error) =
+            crate::installations::handle_installation_event(pool, &parsed).await
+        {
+            tracing::error!(delivery_guid = %guid, event = %event_name, %error, "installation handler failed");
+            claimed.fail(&error.to_string()).await?;
+            return Ok(ProcessOutcome::Processed);
+        }
         tracing::info!(delivery_guid = %guid, event = %event_name, kind = ?parsed.kind, "processed delivery");
         claimed.complete().await?;
         return Ok(ProcessOutcome::Processed);

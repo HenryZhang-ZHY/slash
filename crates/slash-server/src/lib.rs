@@ -16,6 +16,7 @@ pub mod flaky;
 pub mod grants_loader;
 pub mod grants_trust_gate;
 pub mod ingestion;
+pub mod installations;
 pub mod invocations;
 pub mod junit;
 pub mod metrics;
