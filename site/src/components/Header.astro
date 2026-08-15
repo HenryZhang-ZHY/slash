@@ -4,6 +4,7 @@ import { Button } from "./ui/button";
 import { LinkButton } from "./ui/link-button";
 import { ThemeToggle } from "./ui/theme-toggle";
 import { SearchTrigger } from "./ui/search";
+import LanguageSwitcher from "./LanguageSwitcher.astro";
 import { config } from "virtual:nimbus/config";
 import { getSidebarSections } from "@cloudflare/nimbus-docs";
 import { withBasePath, withoutBasePath } from "@/lib/urls";
@@ -31,6 +32,7 @@ const currentSlug = withoutBasePath(Astro.url.pathname).replace(/\/$/, "") || "/
 const sections = await getSidebarSections(currentSlug, { collection });
 const showSections = sections.length >= 2;
 const homeHref = withBasePath("/");
+const headerPath = Astro.url.pathname;
 ---
 
 <header class="sticky top-0 z-30 border-b border-border bg-card/80 backdrop-blur-lg">
@@ -63,6 +65,7 @@ const homeHref = withBasePath("/");
     </div>
 
     <div class="flex items-center gap-2">
+      <LanguageSwitcher currentPath={headerPath} />
       {config.search !== false && <SearchTrigger />}
       {config.github && (
         <LinkButton

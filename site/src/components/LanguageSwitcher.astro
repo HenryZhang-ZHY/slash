@@ -1,0 +1,61 @@
+---
+// Language switcher for the i18n docs site. Toggles the locale prefix on the
+// current path (en <-> zh). Non-prefixed paths fall back to the default
+// locale (en).
+import { withBasePath } from "@/lib/urls";
+
+interface Props {
+  /** Current path including base, e.g. `/slash/en/getting-started/`. */
+  currentPath: string;
+}
+
+const { currentPath } = Astro.props;
+
+const base = withBasePath("/");
+const locales = [
+  { code: "en", label: "English" },
+  { code: "zh", label: "简体中文" },
+];
+
+function toLocalePath(path: string, locale: string): string {
+  // Strip the base path, then the leading locale segment if present.
+  const basePath = base.replace(/\/$/, "");
+  const rest = path.startsWith(basePath) ? path.slice(basePath.length) : path;
+  const seg = rest.split("/").filter(Boolean)[0];
+  // rest is like "/en/getting-started/". If the first segment is a locale
+  // prefix, drop "/<locale>" (the leading slash + segment); otherwise keep
+  // the path as-is.
+  const remaining =
+    seg === "en" || seg === "zh" ? rest.slice(seg.length + 1) : rest;
+  const normalized = remaining.startsWith("/") ? remaining : `/${remaining}`;
+  return `${basePath}/${locale}${normalized === "/" ? "" : normalized}`;
+}
+
+const currentLocale = (() => {
+  const basePath = base.replace(/\/$/, "");
+  const rest = currentPath.startsWith(basePath) ? currentPath.slice(basePath.length) : currentPath;
+  const seg = rest.split("/").filter(Boolean)[0];
+  return seg === "zh" ? "zh" : "en";
+})();
+---
+
+<div class="flex items-center gap-1">
+  {locales.map((locale) => {
+    const href = toLocalePath(currentPath, locale.code);
+    const isActive = currentLocale === locale.code;
+    return (
+      <a
+        href={href}
+        aria-current={isActive ? "true" : undefined}
+        class:list={[
+          "px-2 py-1 rounded-md text-[0.8125rem] font-medium no-underline transition-colors",
+          isActive
+            ? "text-foreground bg-accent"
+            : "text-muted-foreground hover:text-foreground hover:bg-accent/60",
+        ]}
+      >
+        {locale.label}
+      </a>
+    );
+  })}
+</div>

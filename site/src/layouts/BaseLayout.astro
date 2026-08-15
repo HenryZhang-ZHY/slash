@@ -11,7 +11,10 @@ import NimbusHead from "@cloudflare/nimbus-docs/components/NimbusHead.astro";
 import type { BasePageProps } from "@cloudflare/nimbus-docs/types";
 import { siteUrl } from "@/lib/urls";
 
-type Props = BasePageProps;
+type Props = BasePageProps & {
+  /** Override the `<html lang>` attribute (e.g. "zh" for Chinese pages). */
+  lang?: string;
+};
 
 const {
   title,
@@ -23,9 +26,10 @@ const {
   head: pageHead = [],
   collection,
   entryId,
+  lang: langOverride,
 } = Astro.props;
 
-const lang = config.locale ?? "en";
+const lang = langOverride ?? config.locale ?? "en";
 // Per-page agent-index pointer. For pages in non-primary or version
 // collections, this resolves to `/<prefix>/llms.txt` (e.g. `/v0/llms.txt`
 // for a v0 docs page, `/blog/llms.txt` for a blog post). Falls back to
