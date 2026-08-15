@@ -24,10 +24,12 @@ Build and run the container:
 ```sh
 docker build -t slash-server .
 docker run -p 8080:8080 \
-  -e SLASH_DATABASE_URL=postgres://slash:slash@your-postgres:5432/slash \
-  -e SLASH_WEBHOOK_SECRET=... \
+  -e SLASH_DATABASE_URL_PATH=/run/secrets/database-url \
+  -e SLASH_WEBHOOK_SECRET_PATH=/run/secrets/webhook-secret \
   -e SLASH_GITHUB_APP_ID=... \
   -e SLASH_GITHUB_PRIVATE_KEY_PATH=/run/secrets/github-app-key.pem \
+  -v /path/to/your-database-url.txt:/run/secrets/database-url:ro \
+  -v /path/to/your-webhook-secret.txt:/run/secrets/webhook-secret:ro \
   -v /path/to/your-app-key.pem:/run/secrets/github-app-key.pem:ro \
   slash-server
 ```
@@ -44,14 +46,21 @@ a bad migration never leaves the process half-started.
 
 | Variable | Required | Notes |
 | ---------------------------------- | ---------- | ------- |
-| `SLASH_DATABASE_URL` | yes | Postgres connection string. |
-| `SLASH_WEBHOOK_SECRET` | yes | Must match the webhook secret configured on the GitHub App. The server refuses to start without it — signature verification is never optional. |
+| `SLASH_DATABASE_URL_PATH` | yes | Path to a file containing the Postgres connection string. The file is read at startup and trimmed. |
+| `SLASH_WEBHOOK_SECRET_PATH` | yes | Path to a file containing the webhook secret (matches the GitHub App's webhook secret). The server refuses to start without it — signature verification is never optional. |
 | `SLASH_GITHUB_APP_ID` | yes | The GitHub App's numeric ID. |
 | `SLASH_GITHUB_PRIVATE_KEY_PATH` | yes | Path to the App's private key **file** (not the key inline) — mount it read-only, mode `0400` if your platform supports setting it. |
 | `SLASH_AUTH_SECRET` | yes | HMAC secret for signing user session cookies (account/team console). See the dual-path note below. |
 | `SLASH_AUTH_SECRET_PATH` | no | Path to a file containing `SLASH_AUTH_SECRET` (trimmed), read instead of the inline env var. |
 | `SLASH_WEB_DIR` | no | Root directory of the built web console SPA. Defaults to `web/dist` (relative to the server's working directory). |
 | `RUST_LOG` | no | `tracing_subscriber` env-filter syntax, e.g. `info` or `slash_server=debug`. |
+
+Each secret above also has an inline fallback (`SLASH_DATABASE_URL`,
+`SLASH_WEBHOOK_SECRET`, `SLASH_AUTH_SECRET`) — but the file variants are
+**strongly preferred** so secrets are never visible via `docker inspect` or
+`ps aux`. If a `*_PATH` file is unreadable or empty, startup fails rather than
+silently falling back. `SLASH_AUTH_SECRET_PATH` (the HMAC session secret)
+follows the same rule; see `docs/user/onboarding` for it.
 
 There is deliberately no way to pass the private key as an inline
 environment variable — only a file path — and the config struct has no
