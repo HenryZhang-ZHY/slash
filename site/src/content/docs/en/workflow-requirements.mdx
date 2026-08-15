@@ -93,7 +93,7 @@ jobs:
 
 Argument values are restricted to a safe charset precisely so that
 `env:`-passed values can never break out of a shell command (see
-the [`.slash/` reference](/slash-config-reference/#value-charset)). Inline
+the [`.slash/` reference](/en/slash-config-reference/#value-charset)). Inline
 `${{ }}` interpolation in `run:` bypasses that protection entirely — GitHub
 substitutes the raw string into the shell script text before it runs, so
 anyone who can pass your command's permission gate could inject arbitrary
@@ -125,6 +125,6 @@ Given that, marking `slash/<command>` as a required check makes sense either
 for a command your team expects to run on every PR revision, or as a
 deliberate manual merge gate — it is not something to turn on by default.
 
-See [known limitations](/limitations/) for the related gap: Slash does
+See [known limitations](/en/limitations/) for the related gap: Slash does
 not automatically re-trigger a command on `synchronize` the way some CI bots
 do; the Re-run button is the current substitute.

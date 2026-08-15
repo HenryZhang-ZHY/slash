@@ -62,7 +62,7 @@ command is invoked.
 
 | Field         | Required | Default | Notes |
 |---------------|----------|---------|-------|
-| `name`        | yes      | —       | `^[a-z][a-z0-9_-]*$`, unique within the command, must not start with `slash_` (reserved — see [workflow requirements](/workflow-requirements/)). |
+| `name`        | yes      | —       | `^[a-z][a-z0-9_-]*$`, unique within the command, must not start with `slash_` (reserved — see [workflow requirements](/en/workflow-requirements/)). |
 | `description` | no       | none    | Shown in usage errors. |
 | `required`    | no       | `false` | All `required: true` entries must come before any optional entry in the list — that order is also the order positional (non-`--key`) command-line arguments bind to. |
 | `choices`     | no       | none    | A list of allowed values; anything else is a usage error. |
@@ -82,7 +82,7 @@ Unless an argument sets `free_text: true`, its value must match:
 
 This exists because argument values flow into `workflow_dispatch` inputs, and
 a workflow that interpolates `${{ inputs.x }}` directly inside a `run:` step
-(instead of via `env:` — see [workflow requirements](/workflow-requirements/))
+(instead of via `env:` — see [workflow requirements](/en/workflow-requirements/))
 would otherwise be script-injectable by anyone who can pass the permission
 gate. Set `free_text: true` only on arguments whose workflow consumes them
 through `env:`, never through inline `${{ }}` interpolation in `run:`.

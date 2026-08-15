@@ -13,12 +13,22 @@ const nimbusConfig = defineNimbusConfig({
   locale: "en",
   github: "https://github.com/HenryZhang-ZHY/slash",
   socialImageAlt: "Slash documentation preview",
+  sidebar: {
+    scope: "section",
+  },
 });
 
 export default defineConfig({
   site: "https://henryzhang-zhy.github.io",
   base: basePath,
   output: "static",
+  i18n: {
+    locales: ["en", "zh"],
+    defaultLocale: "en",
+    routing: {
+      prefixDefaultLocale: true,
+    },
+  },
   // Tailwind v4 via its Vite plugin (the integration Astro recommends for
   // Tailwind v4 — replaces the PostCSS plugin, which doesn't build under
   // Astro 7's Vite 8 bundler).

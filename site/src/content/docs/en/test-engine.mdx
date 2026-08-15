@@ -100,7 +100,7 @@ installation:
 Authorization: Bearer collection-token-value
 ```
 
-Tokens are issued through the [Test Engine management API](/api/test-engine/).
+Tokens are issued through the [Test Engine management API](/en/api/test-engine/).
 The token determines the destination suite; uploads never carry a suite ID in
 the body. A token can be revoked at any time, which immediately stops it
 authenticating ingestion requests.
@@ -108,7 +108,7 @@ authenticating ingestion requests.
 ## Supported result formats
 
 The ingestion endpoint accepts three shapes (see the
-[ingestion API](/api/ingestion/) for full schemas):
+[ingestion API](/en/api/ingestion/) for full schemas):
 
 | Endpoint | Format |
 | --- | --- |
@@ -121,8 +121,8 @@ normalizes non-Buildkite CI just as easily.
 
 ## Where to go next
 
-- [Test Engine management API](/api/test-engine/) — suites, tests, executions,
+- [Test Engine management API](/en/api/test-engine/) — suites, tests, executions,
   state changes, and tokens
-- [Ingestion API](/api/ingestion/) — upload schemas and the quarantine lookup
+- [Ingestion API](/en/api/ingestion/) — upload schemas and the quarantine lookup
 - [Test Engine design](https://github.com/HenryZhang-ZHY/slash/tree/main/docs/design/1.0-test-engine.md)
   — the full milestone breakdown (M1–M3)

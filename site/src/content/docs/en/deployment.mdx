@@ -106,7 +106,7 @@ never logged.
 - `slash_dispatch_failures_total{class}` — dispatches that ended in
   `dispatch_failed`, by failure class.
 
-**Known gap** (see [known limitations](/limitations/)): there is no
+**Known gap** (see [known limitations](/en/limitations/)): there is no
 `slash_github_api_calls_total`/rate-limit-remaining metric yet — GitHub API
 call volume and remaining rate-limit budget are not currently observable
 through `/metrics`. Watch application logs for `sweeper: failed to mint
@@ -138,7 +138,7 @@ credentials suspected leaked, or GitHub reports abuse):
 
 1. **Stop the server process.** There is currently no per-installation or
    global kill switch (tracked as a known gap — see
-  [known limitations](/limitations/)); stopping the process is the only way
+  [known limitations](/en/limitations/)); stopping the process is the only way
    to immediately halt *all* dispatch activity across every installation.
    In-flight `claimed`/`dispatched` invocations are left durably in Postgres
    and will resolve themselves through the sweeper's normal timeout paths

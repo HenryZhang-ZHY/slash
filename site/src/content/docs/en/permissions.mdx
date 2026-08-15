@@ -6,7 +6,7 @@ sidebar:
 ---
 
 Command dispatch authorization runs through Slash's offline
-[grants](/grants/) model: who may invoke a command is decided locally from the
+[grants](/en/grants/) model: who may invoke a command is decided locally from the
 `grants` table, deny-by-default, never by a live GitHub API lookup. This page
 describes the model, the tier semantics, and the remaining gates around it.
 
@@ -25,7 +25,7 @@ At invocation time, Slash:
 3. and allows the dispatch only if the **highest allowed tier across matching
    grants is at or above** the command's declared `permission`.
 
-See [Grants](/grants/) for the full model: scopes, deny-first semantics, and
+See [Grants](/en/grants/) for the full model: scopes, deny-first semantics, and
 fail-closed behavior.
 
 ## Why `read` exists but is rarely the floor
@@ -52,7 +52,7 @@ deny are all the same verdict.
 
 ## What forks change
 
-Fork PRs are not supported (see [known limitations](/limitations/)):
+Fork PRs are not supported (see [known limitations](/en/limitations/)):
 `workflow_dispatch` cannot target a ref on a fork, so there is nothing to
 dispatch even if grant resolution succeeds. Slash detects this and comments
 once per PR rather than silently doing nothing.
