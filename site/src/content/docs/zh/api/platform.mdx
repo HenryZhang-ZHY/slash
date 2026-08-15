@@ -25,7 +25,8 @@ https://slash.example.com/webhook
 | `X-GitHub-Delivery` | 唯一的 GitHub 投递 GUID |
 | `X-Hub-Signature-256` | 对精确请求体做的 `sha256=<hex HMAC-SHA256>` |
 
-HMAC 密钥是 `SLASH_WEBHOOK_SECRET`。Slash 先校验原始请求字节，再在确认之前持久化
+HMAC 密钥是启动时从 `SLASH_WEBHOOK_SECRET_PATH` 指向的文件读出的 webhook secret。
+Slash 先校验原始请求字节，再在确认之前持久化
 插入投递。JSON 解析和 GitHub API 工作在响应之后异步进行。
 
 | 状态 | 含义 |

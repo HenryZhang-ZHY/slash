@@ -27,7 +27,8 @@ Required headers:
 | `X-GitHub-Delivery` | Unique GitHub delivery GUID |
 | `X-Hub-Signature-256` | `sha256=<hex HMAC-SHA256>` over the exact request body |
 
-The HMAC key is `SLASH_WEBHOOK_SECRET`. Slash verifies the raw request bytes,
+The HMAC key is the webhook secret read at startup from the file pointed at by
+`SLASH_WEBHOOK_SECRET_PATH`. Slash verifies the raw request bytes,
 then durably inserts the delivery before acknowledging it. JSON parsing and
 GitHub API work happen asynchronously after the response.
 
