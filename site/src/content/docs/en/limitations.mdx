@@ -50,14 +50,6 @@ These aren't called out in the design doc itself but are worth knowing:
   not implemented — the only lever today is stopping the server
   process entirely, which pauses every installation at once. See
   [deployment guide](/en/deployment/#incident-procedure).
-- **The `installations` table is not yet maintained.** The schema exists
-  (tracking `active`/`suspended`/`deleted` state), but no code currently
-  writes to it: `installation`/`installation_repositories` webhooks are
-  parsed and acknowledged but not acted on, and a `401` that survives a
-  token re-mint does not yet mark the installation `deleted`. In practice
-  this means a suspended or uninstalled App keeps trying (and failing) its
-  normal token-mint/retry paths rather than recognizing the installation is
-  gone and stopping cleanly.
 - **The §6.4 anti-spam rules are only partially wired up.** The edit-distance
   reply gate (`should_suggest_commands`) is live: an unknown command within
   edit distance 2 of a configured command gets a suggestion reply. But the
