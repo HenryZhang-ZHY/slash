@@ -190,11 +190,7 @@ pub async fn list_test_executions(
             total: page.total,
             limit,
             offset,
-            items: page
-                .items
-                .into_iter()
-                .map(TestExecutionOut::from)
-                .collect(),
+            items: page.items.into_iter().map(TestExecutionOut::from).collect(),
         })),
         Err(error) => {
             tracing::error!(%error, test = %id, "test-engine execution history listing failed");
