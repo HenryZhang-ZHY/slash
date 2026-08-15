@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Check, Copy, Eye, EyeOff, KeyRound, Plus, X } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -28,6 +29,7 @@ export function ManagementDialog({
   const [copied, setCopied] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const { t } = useTranslation()
 
   useEffect(() => {
     if (mode !== 'settings' || !suite) return
@@ -35,9 +37,9 @@ export function ManagementDialog({
       .getToken(suite.id)
       .then((response) => setToken(response.token))
       .catch((requestError) =>
-        setError(requestError instanceof Error ? requestError.message : 'Token 加载失败'),
+        setError(requestError instanceof Error ? requestError.message : t('dialog.tokenLoadFailed')),
       )
-  }, [mode, suite])
+  }, [mode, suite, t])
 
   const createSuite = async (event: React.FormEvent) => {
     event.preventDefault()
@@ -48,7 +50,7 @@ export function ManagementDialog({
       onCreated(result.suite)
       onClose()
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'Suite 创建失败')
+      setError(requestError instanceof Error ? requestError.message : t('dialog.suiteCreateFailed'))
     } finally {
       setBusy(false)
     }
@@ -63,7 +65,7 @@ export function ManagementDialog({
       setToken(result.token)
       setTokenVisible(false)
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : 'Token 生成失败')
+      setError(requestError instanceof Error ? requestError.message : t('dialog.tokenGenerateFailed'))
     } finally {
       setBusy(false)
     }
@@ -85,14 +87,14 @@ export function ManagementDialog({
       <section
         role="dialog"
         aria-modal="true"
-        aria-label={mode === 'create' ? 'Create test suite' : 'Suite settings'}
+        aria-label={mode === 'create' ? t('dialog.createSuiteAria') : t('dialog.settingsAria')}
         className="h-full w-full max-w-lg overflow-y-auto border-l bg-white shadow-2xl"
         onMouseDown={(event) => event.stopPropagation()}
       >
         <div className="flex h-14 items-center justify-between border-b px-5">
           <div>
             <div className="text-sm font-semibold">
-              {mode === 'create' ? 'Create suite' : 'Suite settings'}
+              {mode === 'create' ? t('dialog.createSuite') : t('dialog.suiteSettings')}
             </div>
             {suite && (
               <div className="text-xs text-muted-foreground">
@@ -100,7 +102,7 @@ export function ManagementDialog({
               </div>
             )}
           </div>
-          <Button size="icon" variant="ghost" onClick={onClose} aria-label="Close">
+          <Button size="icon" variant="ghost" onClick={onClose} aria-label={t('dialog.close')}>
             <X />
           </Button>
         </div>
@@ -108,7 +110,7 @@ export function ManagementDialog({
         {mode === 'create' ? (
           <form onSubmit={createSuite} className="space-y-5 p-5">
             <div className="space-y-1.5">
-              <Label htmlFor="create-owner">GitHub owner</Label>
+              <Label htmlFor="create-owner">{t('dialog.githubOwner')}</Label>
               <Input
                 id="create-owner"
                 value={owner}
@@ -118,7 +120,7 @@ export function ManagementDialog({
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="create-repo">Repository</Label>
+              <Label htmlFor="create-repo">{t('dialog.repository')}</Label>
               <Input
                 id="create-repo"
                 value={repo}
@@ -128,7 +130,7 @@ export function ManagementDialog({
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="create-key">Suite key</Label>
+              <Label htmlFor="create-key">{t('dialog.suiteKey')}</Label>
               <Input
                 id="create-key"
                 value={suiteKey}
@@ -140,27 +142,27 @@ export function ManagementDialog({
             {error && <p className="text-sm text-red-600">{error}</p>}
             <div className="flex justify-end gap-2 border-t pt-4">
               <Button type="button" variant="ghost" onClick={onClose}>
-                Cancel
+                {t('dialog.cancel')}
               </Button>
               <Button type="submit" disabled={busy}>
                 <Plus />
-                {busy ? 'Creating…' : 'Create suite'}
+                {busy ? t('dialog.creating') : t('dialog.createSuite')}
               </Button>
             </div>
           </form>
         ) : (
           <div className="p-5">
             <div className="border-b pb-6">
-              <h3 className="text-sm font-semibold">Collection token</h3>
+              <h3 className="text-sm font-semibold">{t('dialog.collectionToken')}</h3>
               <p className="mt-1 text-xs text-muted-foreground">
-                Used by CI collectors to authenticate uploads to this suite.
+                {t('dialog.collectionTokenHint')}
               </p>
               <div className="mt-4 flex items-center gap-2">
                 <Input
                   className="font-mono"
                   type={tokenVisible ? 'text' : 'password'}
                   value={token ?? ''}
-                  placeholder="No recoverable token"
+                  placeholder={t('dialog.noRecoverableToken')}
                   readOnly
                 />
                 <Button
@@ -168,7 +170,7 @@ export function ManagementDialog({
                   variant="outline"
                   onClick={() => setTokenVisible((visible) => !visible)}
                   disabled={!token}
-                  aria-label={tokenVisible ? 'Hide token' : 'Show token'}
+                  aria-label={tokenVisible ? t('dialog.hideToken') : t('dialog.showToken')}
                 >
                   {tokenVisible ? <EyeOff /> : <Eye />}
                 </Button>
@@ -177,26 +179,26 @@ export function ManagementDialog({
                   variant="outline"
                   onClick={copyToken}
                   disabled={!token}
-                  aria-label="Copy token"
+                  aria-label={t('dialog.copyToken')}
                 >
                   {copied ? <Check /> : <Copy />}
                 </Button>
               </div>
               <Button className="mt-3" variant="outline" onClick={issueToken} disabled={busy}>
                 <KeyRound />
-                {busy ? 'Generating…' : 'Generate new token'}
+                {busy ? t('dialog.generating') : t('dialog.generateNewToken')}
               </Button>
             </div>
             <div className="pt-6">
-              <h3 className="text-sm font-semibold">Collector endpoints</h3>
+              <h3 className="text-sm font-semibold">{t('dialog.collectorEndpoints')}</h3>
               <dl className="mt-3 divide-y border-y">
-                <MetadataRow label="Generic">
+                <MetadataRow label={t('dialog.generic')}>
                   <code>/v1/test-engine/upload</code>
                 </MetadataRow>
-                <MetadataRow label="Cargo">
+                <MetadataRow label={t('dialog.cargo')}>
                   <code>/v1/test-engine/upload/cargo</code>
                 </MetadataRow>
-                <MetadataRow label="Vitest">
+                <MetadataRow label={t('dialog.vitest')}>
                   <code>/v1/test-engine/upload/vitest</code>
                 </MetadataRow>
               </dl>

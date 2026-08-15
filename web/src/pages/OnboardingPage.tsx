@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { useTranslation } from 'react-i18next'
 
 import { AuthShell } from '@/components/AuthShell'
 import { Button } from '@/components/ui/button'
@@ -15,6 +16,7 @@ export function OnboardingPage() {
   const [busy, setBusy] = useState(false)
   const [done, setDone] = useState(false)
   const navigate = useNavigate()
+  const { t } = useTranslation()
 
   // Redirect unauthenticated users to login.
   useEffect(() => {
@@ -36,23 +38,23 @@ export function OnboardingPage() {
         const { team } = await api.createTeam(name, slugify(slug || name))
         if (team) setDone(true)
       } catch (err) {
-        setError(err instanceof Error ? err.message : '创建失败')
+        setError(err instanceof Error ? err.message : t('onboard.createFailed'))
       } finally {
         setBusy(false)
       }
     },
-    [name, slug],
+    [name, slug, t],
   )
 
   if (checking) return null
 
   return (
     <AuthShell
-      title={done ? 'Workspace ready' : 'Create your first team'}
+      title={done ? t('onboard.readyTitle') : t('onboard.createTitle')}
       description={
         done
-          ? 'Your organization and team are ready.'
-          : 'Teams define the access boundary for repositories and automation.'
+          ? t('onboard.readyDescription')
+          : t('onboard.createDescription')
       }
     >
       {done ? (
@@ -62,13 +64,13 @@ export function OnboardingPage() {
             <div className="mt-1 text-xs text-muted-foreground">{slugify(slug || name)}</div>
           </div>
           <Button className="w-full" onClick={() => navigate('/')}>
-            Enter workspace
+            {t('onboard.enterWorkspace')}
           </Button>
         </div>
       ) : (
         <form onSubmit={onSubmit} className="space-y-4">
           <div className="space-y-1.5">
-            <Label htmlFor="name">Team name</Label>
+            <Label htmlFor="name">{t('onboard.teamName')}</Label>
             <Input
               id="name"
               value={name}
@@ -78,21 +80,21 @@ export function OnboardingPage() {
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="slug">Team slug</Label>
+            <Label htmlFor="slug">{t('onboard.teamSlug')}</Label>
             <Input
               id="slug"
               value={slug}
               onChange={(event) => setSlug(slugify(event.target.value))}
               placeholder="acme-engineering"
               pattern="[a-z0-9-]{1,32}"
-              title="Lowercase letters, numbers and hyphens; up to 32 characters"
+              title={t('onboard.slugPattern')}
               required
             />
-            <p className="text-xs text-muted-foreground">Lowercase letters, numbers and hyphens.</p>
+            <p className="text-xs text-muted-foreground">{t('onboard.slugHint')}</p>
           </div>
           {error ? <p className="border-l-2 border-red-500 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
           <Button className="w-full" type="submit" disabled={busy}>
-            {busy ? 'Creating…' : 'Create team'}
+            {busy ? t('onboard.creating') : t('onboard.createTeam')}
           </Button>
         </form>
       )}
