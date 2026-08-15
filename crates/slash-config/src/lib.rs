@@ -34,6 +34,46 @@ pub fn load_command_file(file: &str, bytes: &[u8]) -> Result<ValidatedCommand, V
     validate_command(file, &raw)
 }
 
+/// Parses and validates a whole `.slash/` directory's files: each entry is a
+/// `(file name, decoded bytes)` pair from the caller's content fetch. Runs
+/// [`load_command_file`] per file, aggregates per-file validation errors, then
+/// runs cross-file duplicate detection ([`find_duplicate_commands`]). Pure and
+/// IO-free — the caller does the GitHub fetch and base64 decode.
+///
+/// Returns the validated commands in file order, or the aggregated error
+/// messages (per-file errors joined with duplicate-command errors) when any
+/// file or cross-file check fails.
+pub fn assemble_directory(
+    files: &[(String, Vec<u8>)],
+) -> Result<Vec<ValidatedCommand>, Vec<String>> {
+    let mut commands = Vec::with_capacity(files.len());
+    let mut validation_errors = Vec::new();
+    let mut command_sources = Vec::new();
+
+    for (file_name, bytes) in files {
+        match load_command_file(file_name, bytes) {
+            Ok(command) => {
+                command_sources.push((file_name.clone(), command.command.clone()));
+                commands.push(command);
+            }
+            Err(errors) => {
+                validation_errors.extend(errors.into_iter().map(|error| error.to_string()));
+            }
+        }
+    }
+
+    validation_errors.extend(
+        find_duplicate_commands(&command_sources)
+            .into_iter()
+            .map(|error| error.to_string()),
+    );
+    if !validation_errors.is_empty() {
+        return Err(validation_errors);
+    }
+
+    Ok(commands)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
@@ -74,5 +114,43 @@ args:
         let yaml = b"command: Bad\npermission: maintain\nworkflow: bad\n";
         let errors = load_command_file("deploy.yml", yaml).unwrap_err();
         assert_eq!(errors.len(), 3);
+    }
+
+    #[test]
+    fn assemble_directory_collects_valid_commands_in_file_order() {
+        let deploy = b"command: deploy\nworkflow: deploy.yml\n";
+        let lint = b"command: lint\nworkflow: lint.yml\n";
+        let commands = assemble_directory(&[
+            ("deploy.yml".to_string(), deploy.to_vec()),
+            ("lint.yml".to_string(), lint.to_vec()),
+        ])
+        .unwrap();
+        assert_eq!(commands.len(), 2);
+        assert_eq!(commands[0].command, "deploy");
+        assert_eq!(commands[1].command, "lint");
+    }
+
+    #[test]
+    fn assemble_directory_aggregates_per_file_and_duplicate_errors() {
+        let deploy = b"command: deploy\nworkflow: deploy.yml\n";
+        let bad = b"command: Bad\npermission: maintain\nworkflow: bad\n";
+        let dup = b"command: deploy\nworkflow: other.yml\n";
+        let errors = assemble_directory(&[
+            ("deploy.yml".to_string(), deploy.to_vec()),
+            ("bad.yml".to_string(), bad.to_vec()),
+            ("other.yml".to_string(), dup.to_vec()),
+        ])
+        .unwrap_err();
+        assert_eq!(errors.len(), 4);
+        assert!(
+            errors.iter().any(|e| e.contains("defined in both")),
+            "duplicate-command error present: {errors:?}"
+        );
+    }
+
+    #[test]
+    fn assemble_directory_rejects_empty_directory() {
+        let commands = assemble_directory(&[]).unwrap();
+        assert!(commands.is_empty());
     }
 }

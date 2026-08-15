@@ -802,4 +802,57 @@ mod tests {
         // Any password fails against it, but the *cost* is what matters.
         assert!(!crate::auth::verify_password("anything", DUMMY_HASH_FOR_TIMING));
     }
+
+    #[test]
+    fn is_valid_slug_accepts_lowercase_digits_and_dashes() {
+        assert!(is_valid_slug("acme"));
+        assert!(is_valid_slug("acme-123"));
+        assert!(is_valid_slug("a1-b2"));
+    }
+
+    #[test]
+    fn is_valid_slug_rejects_empty_long_uppercase_and_special_chars() {
+        assert!(!is_valid_slug(""));
+        assert!(!is_valid_slug("a".repeat(64).as_str()));
+        assert!(is_valid_slug("a".repeat(63).as_str()));
+        assert!(!is_valid_slug("Acme"));
+        assert!(!is_valid_slug("ac me"));
+        assert!(!is_valid_slug("acme!"));
+        assert!(!is_valid_slug("acme_1"));
+    }
+
+    #[test]
+    fn slugify_lowercases_and_dash_separates_non_alphanumerics() {
+        assert_eq!(slugify("Acme Corp"), "acme-corp");
+        assert_eq!(slugify("  hello  world  "), "hello-world");
+        assert_eq!(slugify("Version 1.2.3"), "version-1-2-3");
+    }
+
+    #[test]
+    fn slugify_collapses_and_trims_trailing_dashes() {
+        assert_eq!(slugify("a---b"), "a-b");
+        assert_eq!(slugify("alpha-"), "alpha");
+        assert_eq!(slugify("---"), "");
+    }
+
+    #[test]
+    fn is_unique_violation_rejects_non_unique_errors() {
+        // The true (unique-violation) branch is covered by the DB-backed
+        // `register_duplicate_email_is_conflict`; PgDatabaseError has no
+        // public constructor, so here we pin the fail-closed half: only a
+        // real PG unique violation must map to true.
+        assert!(!is_unique_violation(&sqlx::Error::RowNotFound));
+        assert!(!is_unique_violation(&sqlx::Error::Io(
+            std::io::Error::other("network down")
+        )));
+    }
+
+    #[test]
+    fn user_view_round_trips_fields() {
+        let id = uuid::Uuid::new_v4();
+        let view = user_view(id, "a@b.com", "Alice");
+        assert_eq!(view.id, id);
+        assert_eq!(view.email, "a@b.com");
+        assert_eq!(view.display_name, "Alice");
+    }
 }
