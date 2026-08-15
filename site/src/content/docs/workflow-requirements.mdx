@@ -30,9 +30,8 @@ on the default checkout ref.
 
 ## Injected inputs
 
-Slash injects these `workflow_dispatch` inputs, but **only if your workflow
-declares them** — declaring an input you don't need costs nothing, and not
-declaring one Slash injects is never a breaking change:
+Slash injects these `workflow_dispatch` inputs on every dispatch, alongside
+whatever arguments your command defines:
 
 | Input             | Value                                                  |
 |-------------------|---------------------------------------------------------|
@@ -42,22 +41,21 @@ declaring one Slash injects is never a breaking change:
 | `slash_actor`     | The verified GitHub login of the comment author |
 | `slash_actor_id`  | The numeric user ID of the comment author (stable across username renames) |
 
-Plus whatever arguments your own command defines in `.slash/*.yml`.
-
-**`slash_actor`/`slash_actor_id` exist because the run executes under the
-App's installation token** — inside the run, `github.actor` is `slash[bot]`,
+`slash_actor`/`slash_actor_id` exist because the run executes under the
+App's installation token — inside the run, `github.actor` is `slash[bot]`,
 not the person who typed the command. Any workflow doing identity-based
 logic (audit logging, approvals, environment gating) **must** key off
 `inputs.slash_actor_id` rather than `github.actor`, or you get an audit trail
 that just says "slash[bot] deployed to production" for every deployment,
 regardless of who actually asked for it.
 
-Slash decides what to send by fetching your workflow file at the PR head ref
-and parsing its declared `workflow_dispatch` inputs — this also lets it catch
-"you configured an arg your workflow never declared" as a precise error
-*before* dispatching, instead of a confusing GitHub 422. If the file can't be
-fetched or parsed for any reason, Slash falls back to sending everything and
-surfaces whatever 422 GitHub returns verbatim.
+Slash currently sends all injected inputs plus every configured argument
+unconditionally, without parsing the workflow file to see which inputs it
+declares. GitHub ignores `workflow_dispatch` inputs your workflow does not
+declare, so undeclared inputs are harmless; conversely, a workflow that
+does not declare one of the injected inputs simply never sees it. This means
+"you configured an argument your workflow never declared" currently surfaces
+as a GitHub 422 at dispatch time rather than a precise pre-dispatch error.
 
 ## The `env:`-not-`${{ }}` rule
 
@@ -127,6 +125,6 @@ Given that, marking `slash/<command>` as a required check makes sense either
 for a command your team expects to run on every PR revision, or as a
 deliberate manual merge gate — it is not something to turn on by default.
 
-See [known limitations](/limitations/) for the related gap: Slash 0.0.1 does
+See [known limitations](/limitations/) for the related gap: Slash does
 not automatically re-trigger a command on `synchronize` the way some CI bots
 do; the Re-run button is the current substitute.

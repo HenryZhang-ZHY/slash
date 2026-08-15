@@ -1,0 +1,128 @@
+---
+title: Test Engine
+description: "Collect test results, detect flaky tests, and quarantine them automatically."
+sidebar:
+  order: 6
+---
+
+The Test Engine turns the slash control plane into a test-governance loop:
+collect your CI's test results, detect flaky tests from their execution
+history, and automatically **quarantine** them so they stop blocking PRs. It
+follows the Buildkite Test Engine model: normalize results → detect flakiness →
+soft-fail or skip quarantined tests on subsequent runs.
+
+Slash stays a control plane — it never runs your tests. Execution happens on
+your own CI; slash collects, normalizes, and disposes.
+
+## The data model
+
+Test results form a four-level hierarchy:
+
+- **Suite** — a named collection of tests, identified by
+  `(owner, repo, suite_key)`. A suite exists once its first upload lands.
+- **Test** — a single named test within a suite. It carries mutable state
+  (`enabled` / `muted` / `skipped`), labels, and owner team references.
+- **Run** — one CI invocation that produced a batch of executions,
+  identified by `(ci_provider, run_ref)`. A run may come from a slash-commanded
+  GitHub Actions workflow or from any other CI system.
+- **Execution** — one observed result of a test within a run: status,
+  duration, stack, and capture time. Executions are append-only once recorded.
+
+### Test state
+
+| State | Meaning |
+| --- | --- |
+| `enabled` | Run normally. Failures fail the PR. |
+| `muted` | **Soft-fail** — the test still runs and records metadata, but failures no longer fail the PR. This is the automatic quarantine disposition. |
+| `skipped` | Not run at all. Reserved for manual or hard cost-control decisions; the detector never auto-skips. |
+
+## Flaky detection
+
+A test is judged **flaky** when, over a rolling **7-day window**, it has:
+
+- at least **3 executions** (a denominator that guards against small-sample
+  false positives), and
+- an observed **fail-then-pass recovery** — a failure or error followed by a
+  later pass within the window.
+
+Detection is a **level-triggered reconcile** over the durable execution record,
+not an event handler: the sweeper runs a bounded cursor sweep over the `tests`
+table on its regular heartbeat. It is idempotent, so a crashed pass is simply
+re-run on the next interval. Transitions are guarded compare-and-swap updates,
+so a manual state edit and an automatic reconcile can never race destructively.
+
+Two transitions happen automatically:
+
+- **enabled → muted** — when a test is flaky. It keeps running (so the detector
+  can keep observing it) but stops failing the PR.
+- **muted → enabled** — when the window has rolled past the failures and the
+  test has been stable (no recent failure). It is never auto-re-muted on a
+  single flake; the 7-day window must show the recovery again.
+
+`skipped` tests are never auto-un-quarantined — skipping produces zero
+execution data and would permanently blind the detector, so it stays a manual
+decision.
+
+## The disposal loop (wiring CI)
+
+The end-to-end loop is: **run tests → upload results → check quarantine →
+skip/soft-fail quarantined tests**. A slash-commanded workflow exercises it
+with three steps:
+
+1. **Check quarantine first.** Call `GET /v1/test-engine/quarantined` with your
+   collection token; it returns the names of tests whose current state is
+   `muted` or `skipped`.
+2. **Run your tests**, uploading the results to `POST /v1/test-engine/upload`
+   (or the `/cargo` / `/vitest` variants) as they finish.
+3. **Apply the disposal.** For any test already in the quarantine list, soft-fail
+   or skip it instead of failing the PR.
+
+The [`fake-ci-test-flaky` command](https://github.com/HenryZhang-ZHY/slash/tree/main/.slash/fake-ci-test-flaky.yml)
+in the slash repository is a ready-to-wire template for exactly this loop. It
+runs a deterministically flaky test (fails on odd run numbers, passes on even),
+uploads the result, consults the quarantine list, and reports a `neutral`
+conclusion once the detector has muted the test. It needs three pieces of
+configuration from your deployment:
+
+| Configuration | Example value |
+| --- | --- |
+| Upload endpoint (`vars`) | `https://slash.example.com/v1/test-engine/upload` |
+| Quarantine endpoint (`vars`) | `https://slash.example.com/v1/test-engine/quarantined` |
+| Collection token (`secrets`) | the per-suite bearer token issued by the management API |
+
+## Collection tokens
+
+Every upload and quarantine lookup is authenticated by a **per-suite
+collection token** — a bearer secret scoped to one suite, not to the whole
+installation:
+
+```http
+Authorization: Bearer collection-token-value
+```
+
+Tokens are issued through the [Test Engine management API](/api/test-engine/).
+The token determines the destination suite; uploads never carry a suite ID in
+the body. A token can be revoked at any time, which immediately stops it
+authenticating ingestion requests.
+
+## Supported result formats
+
+The ingestion endpoint accepts three shapes (see the
+[ingestion API](/api/ingestion/) for full schemas):
+
+| Endpoint | Format |
+| --- | --- |
+| `POST /v1/test-engine/upload` | Normalized JSON, or JUnit XML with an XML `Content-Type` |
+| `POST /v1/test-engine/upload/cargo` | Newline-delimited Cargo libtest JSON events |
+| `POST /v1/test-engine/upload/vitest` | Vitest results (array, or `{ "tests": [...] }`) |
+
+The CI provider is recorded and irrelevant to downstream logic — slash
+normalizes non-Buildkite CI just as easily.
+
+## Where to go next
+
+- [Test Engine management API](/api/test-engine/) — suites, tests, executions,
+  state changes, and tokens
+- [Ingestion API](/api/ingestion/) — upload schemas and the quarantine lookup
+- [Test Engine design](https://github.com/HenryZhang-ZHY/slash/tree/main/docs/design/1.0-test-engine.md)
+  — the full milestone breakdown (M1–M3)

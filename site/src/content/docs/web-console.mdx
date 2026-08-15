@@ -1,0 +1,60 @@
+---
+title: Web console
+description: "Sign in, create teams, and manage the Test Engine from the Slash web UI."
+sidebar:
+  order: 8
+---
+
+Slash serves a web console (a React SPA) from the same origin as its API. It
+covers account onboarding and the Test Engine control panel. No console data
+is client-only — every screen calls the documented HTTP API, so anything the
+console can do is available through the API too.
+
+## Sign in and register
+
+Open the console root (for example `https://slash.example.com/`) — an
+unauthenticated visit redirects to `/login`. The login page toggles between
+**Sign in** and **Create your account**:
+
+- **Create your account** — register with an email and a password of at least
+  8 bytes (`POST /api/auth/register`). Registration immediately signs you in.
+- **Sign in** — log in with an existing account (`POST /api/auth/login`).
+
+Both set an `HttpOnly` session cookie; the console never sees the password.
+
+## Onboarding: create your first team
+
+After signing in, the console redirects to `/onboarding`, which asks for a
+**team name** and a **team slug** (lowercase letters, numbers and hyphens, up
+to 32 characters). Creating the team calls `POST /api/teams` and, in one
+transaction, creates a home organization for you (if you do not have one) and
+makes you the team's maintainer. The team is the access-control boundary for
+repositories and automation — see [Grants](/grants/) for how teams receive
+command authority.
+
+## The dashboard
+
+The workspace home page (`/`) shows an overview: your team count, the number
+of Test Engine suites, test cases, and executions, your teams list, and a
+shortcut into the Test Engine console.
+
+## Test Engine console
+
+The `/tests` page is the Test Engine control panel. It lets you:
+
+- **List and select suites** — choose a suite to see its tests, pass rate, and
+  muted/skipped counts.
+- **Create a suite** — this calls the same create-suite endpoint the API
+  exposes and returns a collection token for ingestion.
+- **Browse tests** — filter by state (`all`, `failing`, `passing`, `muted`,
+  `skipped`), search by name/file/label, and sort by recency, name, slowest,
+  or failure count.
+- **Inspect a test** — see its metadata, aggregate history, and execution
+  rows.
+- **Change a test's state** — mute or skip a test (`PATCH
+  /api/test-engine/tests/{id}/state`), or re-enable it.
+- **Manage collection tokens** — read and revoke the suite's token
+  (`GET`/`POST`/`DELETE` token endpoints).
+
+Every action in the console maps 1:1 to an endpoint in the
+[Test Engine management API](/api/test-engine/).
