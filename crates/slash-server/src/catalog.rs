@@ -144,10 +144,10 @@ pub(crate) async fn load_catalog(
         }
     })?;
 
-    let mut commands = Vec::with_capacity(yaml_files.len());
-    let mut validation_errors = Vec::new();
-    let mut command_sources = Vec::new();
-
+    // Fetch each file, base64-decode, then hand the whole directory to the
+    // pure `slash_config::assemble_directory` (parse + validate + duplicate
+    // detection). Only the fetch/decode stays in the server.
+    let mut files = Vec::with_capacity(yaml_files.len());
     for file in yaml_files {
         let content_items = client
             .get_content(&file.path, sha)
@@ -172,30 +172,15 @@ pub(crate) async fn load_catalog(
             .map_err(|error| CatalogError::Invalid {
                 details: format!("{} has invalid base64 content: {error}", file.name),
             })?;
-
-        match slash_config::load_command_file(&file.name, &bytes) {
-            Ok(command) => {
-                command_sources.push((file.name.clone(), command.command.clone()));
-                commands.push(command);
-            }
-            Err(errors) => {
-                validation_errors.extend(errors.into_iter().map(|error| error.to_string()));
-            }
-        }
+        files.push((file.name.clone(), bytes));
     }
 
-    validation_errors.extend(
-        slash_config::find_duplicate_commands(&command_sources)
-            .into_iter()
-            .map(|error| error.to_string()),
-    );
-    if !validation_errors.is_empty() {
-        return Err(CatalogError::Invalid {
+    match slash_config::assemble_directory(&files) {
+        Ok(commands) => Ok(CatalogOutcome::Loaded(CommandCatalog { commands })),
+        Err(validation_errors) => Err(CatalogError::Invalid {
             details: validation_errors.join("; "),
-        });
+        }),
     }
-
-    Ok(CatalogOutcome::Loaded(CommandCatalog { commands }))
 }
 
 #[cfg(test)]
@@ -440,5 +425,44 @@ mod tests {
         };
         assert_eq!(catalog.find("deploy").unwrap().workflow, "deploy.yml");
         assert_eq!(catalog.names(), vec!["deploy"]);
+    }
+
+    fn catalog_with(names: &[&str]) -> CommandCatalog {
+        let commands = names
+            .iter()
+            .map(|name| ValidatedCommand {
+                command: name.to_string(),
+                description: None,
+                permission: slash_config::Permission::Write,
+                workflow: format!("{name}.yml"),
+                args: Vec::new(),
+            })
+            .collect();
+        CommandCatalog { commands }
+    }
+
+    #[test]
+    fn catalog_find_returns_the_matching_command() {
+        let catalog = catalog_with(&["deploy", "lint"]);
+        assert_eq!(catalog.find("deploy").unwrap().workflow, "deploy.yml");
+        assert_eq!(catalog.find("lint").unwrap().command, "lint");
+    }
+
+    #[test]
+    fn catalog_find_returns_none_for_an_unknown_command() {
+        let catalog = catalog_with(&["deploy"]);
+        assert!(catalog.find("missing").is_none());
+    }
+
+    #[test]
+    fn catalog_names_lists_commands_in_order() {
+        let catalog = catalog_with(&["deploy", "lint", "test"]);
+        assert_eq!(catalog.names(), vec!["deploy", "lint", "test"]);
+    }
+
+    #[test]
+    fn catalog_names_is_empty_for_an_empty_catalog() {
+        let catalog = catalog_with(&[]);
+        assert!(catalog.names().is_empty());
     }
 }
