@@ -11,7 +11,7 @@ Ingestion endpoints use a per-suite collection token:
 Authorization: Bearer collection-token-value
 ```
 
-Tokens are issued through the [Test Engine management API](/api/test-engine/).
+Tokens are issued through the [Test Engine management API](/en/api/test-engine/).
 The token determines the destination suite; clients do not send a suite ID in
 an upload body. Every accepted batch is committed in one database transaction.
 

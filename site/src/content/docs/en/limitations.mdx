@@ -20,7 +20,7 @@ contact with them isn't a surprise.
 - **No automatic re-trigger on push.** After a push, a required
   `slash/<command>` check reverts to `Expected` and must be re-issued — the
   check run's **Re-run** button is the current substitute. See
-  [workflow requirements](/workflow-requirements/#required-status-checks-capability-and-footgun).
+  [workflow requirements](/en/workflow-requirements/#required-status-checks-capability-and-footgun).
 - **Concurrent invocations of the same command mask each other in the PR
   UI.** `/deploy staging` and `/deploy production` in flight together on the
   same PR share one check-run name; the newer one wins and the older is
@@ -49,7 +49,7 @@ These aren't called out in the design doc itself but are worth knowing:
   misbehaving installation could be paused without affecting others. This is
   not implemented — the only lever today is stopping the server
   process entirely, which pauses every installation at once. See
-  [deployment guide](/deployment/#incident-procedure).
+  [deployment guide](/en/deployment/#incident-procedure).
 - **The `installations` table is not yet maintained.** The schema exists
   (tracking `active`/`suspended`/`deleted` state), but no code currently
   writes to it: `installation`/`installation_repositories` webhooks are
@@ -67,7 +67,7 @@ These aren't called out in the design doc itself but are worth knowing:
   comment per event) rather than by an explicit rate limiter.
 - **No `slash_github_api_calls_total`/rate-limit-remaining metric.** Every
   other metric the design calls for is implemented (see
-  [deployment guide](/deployment/#observability)), but per-endpoint GitHub API
+  [deployment guide](/en/deployment/#observability)), but per-endpoint GitHub API
   call counts and remaining rate-limit budget are not yet exposed through
   `/metrics` — the underlying GitHub client discards response headers today,
   and wiring this through cleanly needs more than an incremental change.

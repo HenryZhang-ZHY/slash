@@ -1,0 +1,127 @@
+---
+title: 部署
+description: "用 Postgres 部署和运维 Slash 服务器。"
+sidebar:
+  order: 7
+---
+
+## 参考部署：单副本
+
+参考部署是**一个无状态服务器容器加 Postgres**。单副本时，Postgres 的
+`FOR UPDATE SKIP LOCKED` 上没有跨副本竞争（进程内 worker 池仍会用到它），所以
+以后横向扩展是部署变更，而不是代码变更 —— 每一块协调（claim、受保护的状态转换、
+sweeper）都活在数据库里，绝不活在进程内计时器或队列里（丢失会改变结果）。多副本
+下的无竞争由项目的双 worker 并发测试证明，而不是靠生产环境跑多副本。
+
+## 运行它
+
+构建并运行容器：
+
+```sh
+docker build -t slash-server .
+docker run -p 8080:8080 \
+  -e SLASH_DATABASE_URL=postgres://slash:slash@your-postgres:5432/slash \
+  -e SLASH_WEBHOOK_SECRET=... \
+  -e SLASH_GITHUB_APP_ID=... \
+  -e SLASH_GITHUB_PRIVATE_KEY_PATH=/run/secrets/github-app-key.pem \
+  -v /path/to/your-app-key.pem:/run/secrets/github-app-key.pem:ro \
+  slash-server
+```
+
+或者使用仓库根目录的 `docker-compose.yml`，它把 Postgres 和服务器一起接好供本地
+使用 —— 看它顶部注释里期望的 `.env` 值。
+
+服务器在启动时自己跑 Postgres 迁移（`sqlx::migrate!`，构建时嵌进二进制），失败
+立即退出，所以坏迁移绝不会让进程半启动。
+
+### 环境变量
+
+| 变量 | 必填 | 说明 |
+| ---------------------------------- | ---------- | ------- |
+| `SLASH_DATABASE_URL` | 是 | Postgres 连接串。 |
+| `SLASH_WEBHOOK_SECRET` | 是 | 必须匹配 GitHub App 上配置的 webhook secret。没有它服务器拒绝启动 —— 签名校验绝不省略。 |
+| `SLASH_GITHUB_APP_ID` | 是 | GitHub App 的数字 ID。 |
+| `SLASH_GITHUB_PRIVATE_KEY_PATH` | 是 | App 私钥的**文件**路径（不是内联密钥）—— 只读挂载，平台支持时 mode `0400`。 |
+| `SLASH_AUTH_SECRET` | 是 | 给用户会话 cookie 签名的 HMAC secret（账户/团队控制台）。见下面的双通道说明。 |
+| `SLASH_AUTH_SECRET_PATH` | 否 | 包含 `SLASH_AUTH_SECRET`（会 trim）的文件路径，优先于内联 env 变量读取。 |
+| `SLASH_WEB_DIR` | 否 | 构建好的 web 控制台 SPA 的根目录。默认 `web/dist`（相对服务器工作目录）。 |
+| `RUST_LOG` | 否 | `tracing_subscriber` env-filter 语法，例如 `info` 或 `slash_server=debug`。 |
+
+刻意没有把私钥作为内联环境变量传入的方式 —— 只有文件路径 —— 而且 config 结构体
+没有 `Debug`/`Display` 实现，所以 webhook secret 和数据库 URL（可能内嵌密码）都
+不会通过一行 stray 日志泄漏。
+
+`SLASH_AUTH_SECRET` 与私钥遵循同样的哲学：优先用 `SLASH_AUTH_SECRET_PATH`，让
+会话签名 secret 活在被挂载的文件里而不是环境里。文件设置后优先；内联
+`SLASH_AUTH_SECRET` 是兜底。与 webhook secret 一样，服务器无法解析 auth secret
+就拒绝启动，而且这个 secret 绝不会被记录。
+
+### 端点
+
+| 端点         | 用途 |
+|------------------|---------|
+| `POST /webhook`  | GitHub App 的 webhook URL。 |
+| `GET /healthz`   | 存活检查；进程起来后总是返回 `200 ok`。 |
+| `GET /metrics`   | Prometheus 文本格式指标 —— 见下。 |
+
+## 可观测性
+
+`GET /metrics` 暴露（参见 `crates/slash-server/src/metrics.rs`）：
+
+- `slash_webhook_deliveries_total{event,outcome}` 和
+  `slash_webhook_handler_seconds{outcome}` —— webhook 摄入量与延迟。
+- `slash_deliveries_pending` 和 `slash_deliveries_oldest_pending_age_seconds`
+  —— 收件箱深度与陈旧度；非零且增长表示 worker 池卡住或落后了。
+- `slash_invocations{status}` 和 `slash_invocations_max_dispatched_age_seconds`
+  —— 每种生命周期状态的 invocation 数量，以及最老的等待 run id 的 `dispatched`
+  有多久。`dispatched` 数量或时长持续攀升是卡住 invocation 的警报；sweeper 会在
+  配置的超时内自动解决它们，所以持续攀升指向 GitHub API 错误，而不是逻辑 bug。
+- `slash_correlation_total{path}` —— 每次 dispatch 的 run id 最终如何被解析：
+  `dispatch_response`（常见情况）、`polled`（sweeper 的缺失 run id 恢复）或
+  `timeout`（从未解析）。健康的部署几乎全是 `dispatch_response`。
+- `slash_dispatch_failures_total{class}` —— 以 `dispatch_failed` 结束的 dispatch，
+  按失败类别。
+
+**已知缺口**（参见 [已知限制](/zh/limitations/)）：还没有
+`slash_github_api_calls_total`/rate-limit-remaining 指标 —— GitHub API 调用量和
+剩余 rate-limit 预算目前无法通过 `/metrics` 观测。用应用日志里的 `sweeper: failed
+to mint token` / API 错误告警作为临时信号。
+
+## 密钥轮换
+
+轮换任一凭据不需要代码变更，只需更新配置并重启：
+
+- **Webhook secret**：生成新 secret，在 GitHub App 设置里更新，然后更新
+  `SLASH_WEBHOOK_SECRET` 并重启服务器。在 App 设置保存传播之前会有一个短暂窗口，
+  GitHub 可能用旧 secret 投递 —— 这个窗口里的少量 `401` 是预期且无害的（GitHub
+  会重试投递）。
+- **私钥**：在 GitHub App 设置里生成新私钥（不会立刻让旧的失效），把新 `.pem`
+  文件部署到 `SLASH_GITHUB_PRIVATE_KEY_PATH` 并重启，然后确认新部署能正常 mint
+  token 后，再从 App 设置里删除旧私钥。
+
+两者都要定期做，并总是在任何疑似凭据泄露后做 —— 参见下面的故障处理流程。
+
+## 故障处理流程
+
+如果 App 正在做不该做的事（在某个仓库上行为异常、凭据疑似泄露、或 GitHub 报告
+滥用）：
+
+1. **停止服务器进程。** 目前没有按安装或全局的 kill switch（记录在案，参见
+   [已知限制](/zh/limitations/)）；停止进程是立即暂停*所有*跨安装 dispatch 活动的
+   唯一办法。进行中的 `claimed`/`dispatched` invocation 会持久留在 Postgres 里，
+   服务器重启后通过 sweeper 的正常超时路径自行解决 —— 停止它不会丢任何东西。
+2. **如果凭据疑似泄露**：立即轮换私钥和 webhook secret（见上），并考虑从 GitHub
+   自己的 UI 里暂停或卸载受影响仓库/组织的 GitHub App —— 这会立即使 App 无法为它
+   mint 新的 installation token，与 Slash 自己做的任何事无关。
+3. **调查** —— 用 `invocations` 表（每次 dispatch 尝试的持久、append-mostly 审计
+   记录 —— installation、repo、PR、actor、command、workflow、结果 run id，在
+   dispatch API 调用*之前*写入）和上面的 `/metrics` 计数器。
+4. **恢复** —— 根本问题解决后重启服务器即可。没有单独的"暂停"状态要清除 ——
+   停止的服务器只是不在处理任何东西。
+
+## 多租户说明
+
+Installation token 按仓库 mint，只带单次调用实际需要的权限，并分别按
+`(installation_id, repository_id, permission_set)` 缓存 —— token 泄露被限制在一个
+仓库和一组权限内，而不是 App 安装的每一个仓库。遇到 `401` 时，缓存的 token 失效并
+重新 mint 一次。

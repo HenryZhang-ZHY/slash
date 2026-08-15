@@ -21,10 +21,11 @@ args:
 
 ## Getting started
 
-Read the [Slash documentation](https://henryzhang-zhy.github.io/slash/), or
-copy the working example in [`examples/`](examples/) straight into your
-repository. The documentation source lives in
-[`site/src/content/docs/`](site/src/content/docs/).
+Read the [Slash documentation](https://henryzhang-zhy.github.io/slash/) (in
+English or 简体中文), or copy the working example in
+[`examples/`](examples/) straight into your repository. The documentation
+source lives in [`site/src/content/docs/en/`](site/src/content/docs/en/) and
+[`site/src/content/docs/zh/`](site/src/content/docs/zh/).
 
 ## Status
 
@@ -32,7 +33,7 @@ In development. Command dispatch, permission grants, the web console, and the
 Test Engine (test result collection, flaky detection, and auto-quarantine)
 are implemented. The remaining step is demonstrating the design's success
 criteria end-to-end against a live GitHub App on a real repository (see
-[site/src/content/docs/limitations.mdx](site/src/content/docs/limitations.mdx)).
+[site/src/content/docs/en/limitations.mdx](site/src/content/docs/en/limitations.mdx)).
 
 - [Product & technical spec](docs/design/0.0.1-spec.md)
 - [Implementation plan](docs/design/0.0.1-implementation-plan.md)

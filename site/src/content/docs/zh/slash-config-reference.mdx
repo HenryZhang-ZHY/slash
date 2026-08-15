@@ -1,0 +1,111 @@
+---
+title: ".slash/ 参考"
+description: "定义命令、参数、权限和目标 workflow。"
+sidebar:
+  order: 2
+---
+
+每条命令是仓库根目录 `.slash/` 下的一个 YAML 文件（`.yml` 或 `.yaml`），
+**始终从默认分支读取** —— 绝不从被测的 PR 分支读取。这是刻意为之：防止 PR
+改写谁能调用命令、或它运行哪个 workflow，从而自我提升权限（"pwn request"）。
+配置只有合并到默认分支后才生效。
+
+在你自己 CI 里运行 `slash validate .slash/` 来校验 `.slash/` 文件（`slash`
+二进制由 [`slash-cli`](https://github.com/HenryZhang-ZHY/slash/tree/main/crates/slash-cli) 发布；
+用 `cargo install --path crates/slash-cli` 安装或从 release 下载）。它运行与 Slash
+调用时完全相同的检查，所以错误会在你的 PR 里被发现，而不是在别人第一次运行
+命令时。
+
+## Schema
+
+```yaml
+# .slash/deploy.yml
+command: deploy                  # 必填；每个仓库唯一
+description: Deploy the PR to an environment   # 可选；错误信息中展示
+permission: write                # 可选；默认: write
+                                  # 取值: read | write | admin
+workflow: deploy.yml             # 必填；.github/workflows/ 下的文件名
+                                  # 必须在默认分支上存在并声明
+                                  # `on: workflow_dispatch`
+args:                             # 可选；有序列表
+  - name: env                    # 每项必填
+    description: Target environment
+    required: true                # 默认: false
+    choices: [staging, production]   # 可选枚举
+  - name: timeout
+    default: "15m"                # 可选；未提供时使用
+  - name: reason
+    free_text: true                # 放宽下面的取值字符集限制
+```
+
+文件名无关紧要 —— 匹配的是 `command` 字段。同一仓库内跨文件的重复
+`command` 值是一个配置错误，会在下一次调用其中任一命令时报出（并指出两个文件名）。
+
+## 字段
+
+### 顶层
+
+| 字段         | 必填 | 默认 | 说明 |
+|---------------|----------|---------|-------|
+| `command`     | 是      | —       | `^[a-z][a-z0-9-]*$`，调用时大小写不敏感。`help` 和 `slash` 为未来的内建命令保留，不可使用。 |
+| `description` | 否       | 无    | 仅在错误/用法消息中展示。 |
+| `permission`  | 否       | `write` | 取值为 `read`、`write`、`admin`（默认 `write`）。 |
+| `workflow`    | 是      | —       | `^[A-Za-z0-9._-]{1,100}\.(ya?ml)$` —— `.github/workflows/` 下的文件名，不含 `/`、`\`、`%` 或 `..`。必须在默认分支上存在并声明 `on: workflow_dispatch`。 |
+| `args`        | 否       | `[]`    | 有序的参数定义列表（见下）。 |
+
+### 每个 `args[]` 条目
+
+| 字段         | 必填 | 默认 | 说明 |
+|---------------|----------|---------|-------|
+| `name`        | 是      | —       | `^[a-z][a-z0-9_-]*$`，命令内唯一，不得以 `slash_` 开头（保留前缀 —— 见 [workflow 要求](/zh/workflow-requirements/)）。 |
+| `description` | 否       | 无    | 用法错误时展示。 |
+| `required`    | 否       | `false` | 所有 `required: true` 条目必须排在任意可选条目之前 —— 这个顺序也就是位置参数（非 `--key` 形式的命令行参数）的绑定顺序。 |
+| `choices`     | 否       | 无    | 允许的取值列表；其他取值是用法错误。 |
+| `default`     | 否       | 无    | 参数未提供时使用。在 `required: true` 条目上被拒绝（它永远用不到）。默认值本身必须满足 `choices` 和下面的取值字符集。 |
+| `free_text`   | 否       | `false` | 为此参数放宽取值字符集限制（见下）。 |
+
+任一层的未知键都是配置错误 —— `slash validate` 会立刻发现拼写错误，而不是让它们
+静默地不起作用。
+
+## 取值字符集
+
+除非某个参数设置了 `free_text: true`，否则它的值必须匹配：
+
+```text
+^[A-Za-z0-9._@:/+=,-]{0,256}$
+```
+
+这是因为它会流入 `workflow_dispatch` 的 inputs，而一个直接在 `run:` 步骤里插值
+`${{ inputs.x }}` 的 workflow（而不是通过 `env:` —— 见
+[workflow 要求](/zh/workflow-requirements/)）会被任何通过权限门的人注入脚本。
+只有那些通过 `env:`（而非 `run:` 内联 `${{ }}`）消费参数的参数才设置
+`free_text: true`。
+
+## 目录级限制
+
+`.slash/` 整体是共享多租户进程的受攻击方输入，所以它在任何解析之前就被限制：
+
+- 最多 **50** 个文件。
+- 总计最多 **256 KiB**。
+- YAML 嵌套最多 **32** 层。
+- YAML 别名和锚点（`&anchor`、`*alias`）在真正的 YAML 解析器看到文档之前就被
+  整体拒绝 —— 使用它们的配置是配置错误，而不是卡住。
+
+## 命令语法（供参考）
+
+一条评论的**第一行**才会被解析：
+
+```text
+/deploy staging --force --timeout=30m --reason="hot fix"
+ ^cmd   ^位置参数  ^布尔标志  ^key=value    ^带引号的值
+```
+
+- 命令名：`/[a-z][a-z0-9-]*`，大小写不敏感匹配。
+- 位置参数按顺序绑定到未以 `--key` 给出的 `args` 条目。
+- `--key=value` 或 `--key value`；裸 `--flag` 绑定字符串 `"true"`。
+- 双引号把含空格的 token 分组；`\"` 转义引号。
+- 所有值都是字符串。
+- 以 `slash_` 开头的 key 一律被拒绝 —— 该前缀保留给 Slash 自己注入的 inputs。
+
+出现在评论非第一行的命令**不会**被执行 —— Slash 每 PR 回复一次指出这一点，
+而不是静默忽略你明确想表达的内容。
