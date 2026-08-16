@@ -49,7 +49,7 @@ These aren't called out in the design doc itself but are worth knowing:
   misbehaving installation could be paused without affecting others. This is
   not implemented — the only lever today is stopping the server
   process entirely, which pauses every installation at once. See
-  [deployment guide](/en/deployment/#incident-procedure).
+  [deployment guide](/en/self-host/deployment/#incident-procedure).
 - **The §6.4 anti-spam rules are only partially wired up.** The edit-distance
   reply gate (`should_suggest_commands`) is live: an unknown command within
   edit distance 2 of a configured command gets a suggestion reply. But the
@@ -59,7 +59,7 @@ These aren't called out in the design doc itself but are worth knowing:
   comment per event) rather than by an explicit rate limiter.
 - **No `slash_github_api_calls_total`/rate-limit-remaining metric.** Every
   other metric the design calls for is implemented (see
-  [deployment guide](/en/deployment/#observability)), but per-endpoint GitHub API
+  [deployment guide](/en/self-host/deployment/#observability)), but per-endpoint GitHub API
   call counts and remaining rate-limit budget are not yet exposed through
   `/metrics` — the underlying GitHub client discards response headers today,
   and wiring this through cleanly needs more than an incremental change.

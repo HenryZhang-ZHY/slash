@@ -12,7 +12,7 @@ Slash 是一个 GitHub App：在拉取请求上评论 `/deploy staging`，Slash 
 ## 1. 部署服务器
 
 Slash 是一个无状态容器加 Postgres —— 参见
-[部署](/zh/deployment/) 了解容器镜像、环境变量和单副本参考部署。在创建
+[部署](/zh/self-host/deployment/) 了解容器镜像、环境变量和单副本参考部署。在创建
 GitHub App（第 2 步）之前，你需要一个公网 HTTPS 地址用于 webhook 端点
 （`https://<your-host>/webhook`）。
 
@@ -99,5 +99,5 @@ workflow run 结束后达到终态，附上该 run 的链接。
 - [权限](/zh/permissions/) 与 [Grants](/zh/grants/) —— 谁能调用什么
 - [Web 控制台](/zh/web-console/) —— 登录、创建团队、管理 Test Engine
 - [Test Engine](/zh/test-engine/) —— 收集测试结果并隔离 flaky 测试
-- [部署](/zh/deployment/) —— 运行服务器、密钥轮换、故障处理流程
+- [部署](/zh/self-host/deployment/) —— 运行服务器、密钥轮换、故障处理流程
 - [已知限制](/zh/limitations/) —— Slash 目前刻意不做的事情
