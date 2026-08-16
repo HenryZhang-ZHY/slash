@@ -1,6 +1,6 @@
 ---
 title: 快速开始
-description: "部署 Slash，创建 GitHub App，并运行你的第一条命令。"
+description: "创建账户、连接 GitHub App 并运行你的第一条命令。"
 sidebar:
   order: 1
 ---
@@ -9,20 +9,19 @@ Slash 是一个 GitHub App：在拉取请求上评论 `/deploy staging`，Slash 
 自己的 GitHub Actions 上触发 `workflow_dispatch`，并把它的状态以 check run 的
 形式同步回 PR。
 
-## 1. 部署服务器
+## 1. 创建账户
 
-Slash 是一个无状态容器加 Postgres —— 参见
-[部署](/zh/self-host/deployment/) 了解容器镜像、环境变量和单副本参考部署。在创建
-GitHub App（第 2 步）之前，你需要一个公网 HTTPS 地址用于 webhook 端点
-（`https://<your-host>/webhook`）。
+Slash 以托管服务的形式运行 —— 在 Slash 控制台登录（或注册新账户），按 onboarding
+创建你的第一个团队。登录和 onboarding 流程见
+[Web 控制台](/zh/web-console/)。如果你想在自己的基础设施上运行 Slash，参见
+[自托管](/zh/self-host/)。
 
 ## 2. 创建 GitHub App
 
 在 GitHub 上创建一个 GitHub App（个人账户或组织均可），并配置：
 
-- **Webhook URL**：`https://<your-host>/webhook`
-- **Webhook secret**：一个随机值 —— 它将成为 `SLASH_WEBHOOK_SECRET_PATH`
-  所指向文件的内容
+- **Webhook URL**：你的 Slash 部署提供的 webhook 端点（云服务或自托管）
+- **Webhook secret**：一个随机值
 - **权限**：`checks: write`、`actions: write`、`contents: read`、
   `pull_requests: write`、`issues: write`、`metadata: read`（参见
   [权限](/zh/permissions/) 了解每个权限的用途 —— 尤其是
@@ -30,11 +29,8 @@ GitHub App（第 2 步）之前，你需要一个公网 HTTPS 地址用于 webho
 - **订阅事件**：`issue_comment`、`workflow_run`、`check_run`、
   `pull_request`
 
-为 App 生成私钥并保存为 `.pem` 文件 —— 它将成为
-`SLASH_GITHUB_PRIVATE_KEY_PATH`。记下 App ID —— 它将成为
-`SLASH_GITHUB_APP_ID`。
-
-在你希望运行命令的仓库（或仓库们）上安装这个 App。
+为 App 生成私钥。在你希望运行命令的仓库（或仓库们）上安装这个 App，然后在 Slash
+控制台里连接它，让 Slash 能收到它的 webhook。
 
 ## 3. 配置一条命令
 
@@ -99,5 +95,5 @@ workflow run 结束后达到终态，附上该 run 的链接。
 - [权限](/zh/permissions/) 与 [Grants](/zh/grants/) —— 谁能调用什么
 - [Web 控制台](/zh/web-console/) —— 登录、创建团队、管理 Test Engine
 - [Test Engine](/zh/test-engine/) —— 收集测试结果并隔离 flaky 测试
-- [部署](/zh/self-host/deployment/) —— 运行服务器、密钥轮换、故障处理流程
+- [自托管](/zh/self-host/) —— 在你自己的基础设施上运行 Slash
 - [已知限制](/zh/limitations/) —— Slash 目前刻意不做的事情
