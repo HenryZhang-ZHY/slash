@@ -13,6 +13,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { AppShell, type DashboardContext } from '@/components/AppShell'
 import { testEngineApi, type TestSuiteSummary } from '@/lib/api'
+import { GrantsPage } from '@/pages/GrantsPage'
 import { LoginPage } from '@/pages/LoginPage'
 import { OnboardingPage } from '@/pages/OnboardingPage'
 import { TestEnginePage } from '@/pages/TestEnginePage'
@@ -117,6 +118,7 @@ export default function App() {
         <Route element={<AppShell />}>
           <Route path="/" element={<HomePage />} />
           <Route path="/tests" element={<TestEnginePage />} />
+          <Route path="/grants" element={<GrantsPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
