@@ -468,7 +468,7 @@ fn slugify(name: &str) -> String {
     out
 }
 
-fn api_error(status: StatusCode, msg: &str) -> Response {
+pub(crate) fn api_error(status: StatusCode, msg: &str) -> Response {
     (status, Json(json!({ "error": msg }))).into_response()
 }
 
