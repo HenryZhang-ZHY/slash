@@ -113,12 +113,17 @@ the actor's trust level is unknown, and unknown is deny.
 
 ## Managing grants
 
-Grant rows are managed in the application database (CLI/DB-first; there is no
-management REST API or UI yet). Grant management is not yet exposed through the
-`slash` CLI — rows are added with SQL or a future admin surface.
+Grants are managed through the [grants management API](/en/api/grants/) — and
+in the [web console's `/grants` page](/en/web-console/), which drives those
+endpoints. Both are **org-owner-only** and fail-closed: a non-owner gets `403`
+everywhere. A grant is immutable after creation; to change one, delete it and
+create it again.
 
-To grant the `eng` team `write` on the `deploy` command in repository
-`acme/widgets`:
+The management surface covers everything this page describes: subjects (users
+and teams of the org), scopes (`org`/`repository`/`command`), the `permission`
+tier, and `allow`/`deny` effects. For illustration, the equivalent SQL for
+granting the `eng` team `write` on the `deploy` command in repository
+`acme/widgets` is:
 
 ```sql
 INSERT INTO grants (id, organization_id, subject_type, subject_id, scope,
@@ -127,7 +132,7 @@ VALUES (gen_random_uuid(), '<org_id>', 'team', '<team_id>', 'command',
         'acme/widgets', 'deploy', 'write', 'allow', '<admin_user_id>');
 ```
 
-To block a specific user from `deploy` regardless of team membership:
+And to block a specific user from `deploy` regardless of team membership:
 
 ```sql
 INSERT INTO grants (id, organization_id, subject_type, subject_id, scope,

@@ -97,10 +97,15 @@ command   deny  write  （用户 alice，命令 "deploy"，仓库 acme/widgets�
 
 ## 管理 grants
 
-Grant 行在应用数据库里管理（CLI/DB 优先；目前没有管理 REST API 或 UI）。`slash`
-CLI 尚未暴露 grant 管理 —— 行通过 SQL 或未来的管理面添加。
+Grants 通过 [grants 管理 API](/zh/api/grants/) 管理 —— 以及驱动这些端点的
+[Web 控制台 `/grants` 页面](/zh/web-console/)。两者都**仅限 org owner** 且
+fail-closed：非 owner 在任何地方都会收到 `403`。grant 创建后不可变；要修改，先删除
+再重建。
 
-给 `eng` 团队在仓库 `acme/widgets` 的 `deploy` 命令上授予 `write`：
+管理面覆盖本页描述的全部内容：subject（org 的 users 和 teams）、scope
+（`org`/`repository`/`command`）、`permission` 档位，以及 `allow`/`deny` 效果。
+作为示意，给 `eng` 团队在仓库 `acme/widgets` 的 `deploy` 命令上授予 `write` 的
+等价 SQL 是：
 
 ```sql
 INSERT INTO grants (id, organization_id, subject_type, subject_id, scope,

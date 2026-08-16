@@ -32,6 +32,19 @@ HTTP API，所以控制台能做的任何事通过 API 也都能做。
 工作区首页（`/`）显示概览：你的团队数量、Test Engine 套件/测试用例/执行数量、
 团队列表，以及进入 Test Engine 控制台的快捷方式。
 
+## Grants 页面
+
+`/grants` 页面管理命令授权 grants（参见 [Grants](/zh/grants/)）。它**仅限
+org owner** —— 非 owner 会收到 `403` 且创建按钮被禁用。你可以：
+
+- **列出 grants** —— 查看每条 grant 的 subject、scope、repo/command、permission
+  和 effect；`deny` 行红色高亮（deny 优先）。
+- **创建 grant** —— 选择 subject 类型（用户或团队）、从 org 的 users/teams 里
+  选、选择 scope、按 scope 条件填写 repo/command、设置 permission 和 effect。
+- **删除 grant** —— 带确认提示。
+
+每个动作都一一对应 [grants 管理 API](/zh/api/grants/)。
+
 ## Test Engine 控制台
 
 `/tests` 页面是 Test Engine 控制面板。你可以：

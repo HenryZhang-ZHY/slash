@@ -38,6 +38,21 @@ The workspace home page (`/`) shows an overview: your team count, the number
 of Test Engine suites, test cases, and executions, your teams list, and a
 shortcut into the Test Engine console.
 
+## Grants page
+
+The `/grants` page manages command-authorization grants (see
+[Grants](/en/grants/)). It is **org-owner-only** — a non-owner gets `403` and
+the create button is disabled. It lets you:
+
+- **List grants** — see each grant's subject, scope, repo/command, permission,
+  and effect; `deny` rows are highlighted red (deny wins).
+- **Create a grant** — pick the subject type (user or team), choose from the
+  org's users/teams, select the scope, fill in the scope-conditional
+  repo/command, and set the permission and effect.
+- **Delete a grant** — with a confirmation prompt.
+
+Every action maps 1:1 to the [grants management API](/en/api/grants/).
+
 ## Test Engine console
 
 The `/tests` page is the Test Engine control panel. It lets you:
