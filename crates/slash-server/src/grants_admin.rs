@@ -56,8 +56,6 @@ pub async fn list_grants(State(state): State<crate::AppState>, auth_user: UserId
     let rows = sqlx::query_as::<_, (Uuid, String, Uuid, String, Option<String>, Option<String>, String, String, Option<Uuid>)>(
         "SELECT g.id, g.subject_type, g.subject_id, g.scope, g.repository, g.command, g.permission, g.effect, g.granted_by
          FROM grants g
-         LEFT JOIN users u ON u.id = g.subject_id AND g.subject_type = 'user'
-         LEFT JOIN teams t ON t.id = g.subject_id AND g.subject_type = 'team'
          WHERE g.organization_id = $1
          ORDER BY g.created_at",
     )
@@ -107,7 +105,7 @@ pub async fn list_grants(State(state): State<crate::AppState>, auth_user: UserId
 
 /// `POST /api/grants` — create a grant. Owner-only; scope-conditional required
 /// fields are validated, and the permission tier is normalized to the
-/// write|admin form the schema stores.
+/// read|write|admin form the schema stores.
 pub async fn create_grant(
     State(state): State<crate::AppState>,
     auth_user: UserId,
@@ -589,5 +587,37 @@ mod tests {
         let st = state(pool);
         let resp = org_members(State(st), UserId(member)).await;
         assert_eq!(status(&resp), StatusCode::FORBIDDEN);
+    }
+
+    #[serial_test::serial(db)]
+    #[tokio::test]
+    async fn duplicate_org_scope_grant_returns_conflict() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        let (_org, owner, member, _team) = seeded(&pool).await;
+        let st = state(pool.clone());
+        let body = || {
+            Json(CreateGrantRequest {
+                subject_type: "user".into(),
+                subject_id: member,
+                scope: "org".into(),
+                repository: None,
+                command: None,
+                permission: "read".into(),
+                effect: Some("allow".into()),
+            })
+        };
+        let first = create_grant(State(st.clone()), UserId(owner), body()).await;
+        assert_eq!(status(&first), StatusCode::OK);
+        // Same org-scope grant again: NULLs are NOT DISTINCT now, so the
+        // unique constraint fires and the API reports 409.
+        let second = create_grant(State(st), UserId(owner), body()).await;
+        assert_eq!(status(&second), StatusCode::CONFLICT);
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM grants")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
     }
 }
