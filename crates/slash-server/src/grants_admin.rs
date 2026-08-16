@@ -33,6 +33,7 @@ pub struct GrantView {
     pub permission: String,
     pub effect: String,
     pub granted_by: Option<Uuid>,
+    pub granted_by_name: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -53,9 +54,10 @@ pub async fn list_grants(State(state): State<crate::AppState>, auth_user: UserId
         return api_error(StatusCode::FORBIDDEN, "only an org owner can manage grants");
     };
 
-    let rows = sqlx::query_as::<_, (Uuid, String, Uuid, String, Option<String>, Option<String>, String, String, Option<Uuid>)>(
-        "SELECT g.id, g.subject_type, g.subject_id, g.scope, g.repository, g.command, g.permission, g.effect, g.granted_by
+    let rows = sqlx::query_as::<_, (Uuid, String, Uuid, String, Option<String>, Option<String>, String, String, Option<Uuid>, Option<String>)>(
+        "SELECT g.id, g.subject_type, g.subject_id, g.scope, g.repository, g.command, g.permission, g.effect, g.granted_by, granter.display_name
          FROM grants g
+         LEFT JOIN users granter ON granter.id = g.granted_by
          WHERE g.organization_id = $1
          ORDER BY g.created_at",
     )
@@ -81,7 +83,7 @@ pub async fn list_grants(State(state): State<crate::AppState>, auth_user: UserId
     let views = rows
         .into_iter()
         .map(
-            |(id, st, sid, scope, repo, cmd, perm, eff, granted_by)| GrantView {
+            |(id, st, sid, scope, repo, cmd, perm, eff, granted_by, granted_by_name)| GrantView {
                 id,
                 subject_name: if st == "user" {
                     users.get(&sid).cloned().unwrap_or_else(|| sid.to_string())
@@ -96,6 +98,7 @@ pub async fn list_grants(State(state): State<crate::AppState>, auth_user: UserId
                 permission: perm,
                 effect: eff,
                 granted_by,
+                granted_by_name,
             },
         )
         .collect::<Vec<_>>();
@@ -494,6 +497,7 @@ mod tests {
         assert_eq!(views[0].command.as_deref(), Some("deploy"));
         assert_eq!(views[0].permission, "write");
         assert_eq!(views[0].effect, "deny");
+        assert_eq!(views[0].granted_by_name.as_deref(), Some("Owner"));
 
         let resp = delete_grant(State(st.clone()), UserId(owner), Path(views[0].id)).await;
         assert_eq!(status(&resp), StatusCode::NO_CONTENT);

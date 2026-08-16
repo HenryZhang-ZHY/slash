@@ -87,6 +87,7 @@ export interface Grant {
   permission: 'read' | 'write' | 'admin'
   effect: 'allow' | 'deny'
   grantedBy: string | null
+  grantedByName: string | null
 }
 
 export interface OrgMember {

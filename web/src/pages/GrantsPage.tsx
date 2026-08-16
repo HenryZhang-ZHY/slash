@@ -97,7 +97,7 @@ export function GrantsPage() {
                     </span>
                   </td>
                   <td className="px-4 py-2.5 text-xs text-muted-foreground">
-                    {grant.grantedBy ? grant.subjectName : '—'}
+                    {grant.grantedByName ?? '—'}
                   </td>
                   <td className="px-4 py-2.5 text-right">
                     <Button size="icon" variant="ghost" onClick={() => remove(grant)} aria-label={t('grants.delete')}>
@@ -191,6 +191,7 @@ function CreateGrantDialog({
         permission,
         effect,
         grantedBy: null,
+        grantedByName: null,
       })
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : t('grants.createFailed'))
