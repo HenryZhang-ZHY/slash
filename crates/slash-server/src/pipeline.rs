@@ -17,7 +17,7 @@
 //! introspected).
 
 use serde_json::{Map, Value as Json};
-use slash_core::{ResolvedRole, messages};
+use slash_core::{ResolvedRole, TrustGate, messages};
 use slash_github::octocrab_types::ReactionContent;
 use slash_github::{GithubApp, RepoClient, WebhookEventPayload};
 use sqlx::PgPool;
@@ -100,10 +100,14 @@ pub async fn handle_issue_comment(
         return Ok(());
     };
 
-    let token = ctx
-        .app
-        .installation_token(ctx.installation_id, ctx.repository_id, TOKEN_PERMISSIONS)
-        .await?;
+    let token = crate::installations::mint_installation_token(
+        ctx.pool,
+        ctx.app,
+        ctx.installation_id,
+        ctx.repository_id,
+        TOKEN_PERMISSIONS,
+    )
+    .await?;
     let client =
         RepoClient::with_base_uri(&token, ctx.owner.clone(), ctx.repo.clone(), ctx.base_uri)?;
 
@@ -268,11 +272,38 @@ pub async fn handle_issue_comment(
         return Ok(());
     };
 
-    if !slash_core::meets(role, validated.permission) {
+    // Command authorization now runs through the R2 TrustGate (org/user M2-4
+    // + #23): async preload of the actor's grants, then the sync grants
+    // decision. Fail-closed: any load/decision error or a missing grant that
+    // reaches the required tier denies. This replaces the GitHub-
+    // collaborator-role comparison for dispatch.
+    let github_user_id = payload.comment.user.id.0 as i64;
+    let grants = crate::grants_loader::preload_grants(
+        ctx.pool,
+        github_user_id,
+        ctx.installation_id as i64,
+        &ctx.owner,
+        &ctx.repo,
+    )
+    .await;
+    let actor = slash_core::pipeline::Actor {
+        login: payload.comment.user.login.clone(),
+        github_user_id: payload.comment.user.id.0,
+    };
+    let outcome = match grants {
+        Ok(grants) => {
+            let gate = crate::grants_trust_gate::GrantsTrustGate;
+            gate.check(&grants, &actor, &parsed.name, validated.permission)
+        }
+        // Fail closed: a preload DB/parse error is a deny (TrustOutcome::Error).
+        Err(e) => slash_core::pipeline::TrustOutcome::Error(e.to_string()),
+    };
+    let authorized = outcome.is_granted();
+    if !authorized {
         if can_comment {
             let required = match validated.permission {
+                slash_config::Permission::Read => "read",
                 slash_config::Permission::Write => "write",
-                slash_config::Permission::Maintain => "maintain",
                 slash_config::Permission::Admin => "admin",
             };
             let _ = client
@@ -475,13 +506,15 @@ fn log_permission_api_failure(
     );
 }
 
-async fn report_catalog_error(
+/// Records a failed command-catalog load: bumps the `command_catalog_loads_total`
+/// counter and logs the failure. Shared by the pipeline's user-facing
+/// [`report_catalog_error`] (which additionally posts a comment/reaction) and
+/// the correlation module's re-run path, which has no comment surface (spec
+/// §6.5). Pure observability — never raises, never writes to GitHub.
+pub(crate) fn record_catalog_load_metrics(
     ctx: &PipelineContext<'_>,
-    client: &RepoClient,
-    issue_number: u64,
-    comment_id: u64,
-    can_comment: bool,
     error: &CatalogError,
+    message: &'static str,
 ) {
     let outcome = match error {
         CatalogError::Invalid { .. } => "invalid",
@@ -498,8 +531,19 @@ async fn report_catalog_error(
         path = ?error.path(),
         status = ?error.status_code(),
         error = %error,
-        "command catalog load failed"
+        "{message}"
     );
+}
+
+async fn report_catalog_error(
+    ctx: &PipelineContext<'_>,
+    client: &RepoClient,
+    issue_number: u64,
+    comment_id: u64,
+    can_comment: bool,
+    error: &CatalogError,
+) {
+    record_catalog_load_metrics(ctx, error, "command catalog load failed");
 
     if can_comment {
         let body = match error {
@@ -633,11 +677,39 @@ mod tests {
         let url = crate::test_support::test_database_url()?;
         let pool = db::connect(&url).await.unwrap();
         db::migrate(&pool).await.unwrap();
-        sqlx::query("TRUNCATE invocations")
+        sqlx::query("TRUNCATE invocations, grants, org_members, team_members, teams, organizations, users CASCADE")
             .execute(&pool)
             .await
             .unwrap();
         Some(pool)
+    }
+
+    /// Seed the DB so `authorize_command_grants` (grants M2-4, strict
+    /// deny-by-default) lets the GitHub actor invoke a write-tier command.
+    async fn seed_dispatch_grant(pool: &PgPool, installation_id: i64, github_user_id: i64) {
+        let org = uuid::Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO organizations (id, slug, name, installation_id, state)
+             VALUES ($1, 'test-org', 'Test', $2, 'active')",
+        )
+        .bind(org)
+        .bind(installation_id)
+        .execute(pool).await.unwrap();
+        let uid = uuid::Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO users (id, email, password_hash, display_name, status, github_user_id)
+             VALUES ($1, 'alice@example.com', 'x', 'Alice', 'active', $2)",
+        )
+        .bind(uid)
+        .bind(github_user_id)
+        .execute(pool).await.unwrap();
+        // org-scope write allow so any write-tier command in this install/new repo dispatches.
+        sqlx::query(
+            "INSERT INTO grants (id, organization_id, subject_type, subject_id, scope, repository, command, permission, effect)
+             VALUES ($1, $2, 'user', $3, 'org', NULL, NULL, 'write', 'allow')",
+        )
+        .bind(uuid::Uuid::new_v4()).bind(org).bind(uid)
+        .execute(pool).await.unwrap();
     }
 
     fn author_json(login: &str, id: u64) -> serde_json::Value {
@@ -850,6 +922,10 @@ mod tests {
         let Some(pool) = test_pool().await else {
             return;
         };
+        // Grants M2-4: dispatch now requires a grant for the actor at the
+        // command's tier (strict deny-by-default). Seed one for alice(1)
+        // in install 1 so the write-tier echo command is allowed.
+        seed_dispatch_grant(&pool, 1, 1).await;
         let server = MockServer::start().await;
         mount_common(&server, "deadbeef").await;
 
@@ -1039,6 +1115,8 @@ mod tests {
         let Some(pool) = test_pool().await else {
             return;
         };
+        // Grants M2-4: seed a write-tier grant so both dispatches are allowed.
+        seed_dispatch_grant(&pool, 1, 1).await;
         let server = MockServer::start().await;
         mount_common(&server, "deadbeef").await;
         Mock::given(method("POST"))

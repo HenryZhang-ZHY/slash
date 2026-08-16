@@ -1,0 +1,8 @@
+---
+// Root redirect to the default locale (en). See i18n in astro.config.ts.
+import { withBasePath } from "@/lib/urls";
+const target = withBasePath("/en/");
+---
+
+<meta http-equiv="refresh" content={`0; url=${target}`} />
+<a href={target}>Redirecting to {target}…</a>

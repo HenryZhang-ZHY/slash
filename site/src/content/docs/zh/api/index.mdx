@@ -1,0 +1,90 @@
+---
+title: API 参考
+description: "slash-server 暴露的 HTTP 端点。"
+sidebar:
+  order: 10
+---
+
+Slash 从同一来源提供 HTTP API 和 Web 控制台。把示例里的 `https://slash.example.com`
+替换为你 Slash 部署的 origin。控制台（见 [Web 控制台指南](/zh/web-console/)）是这些
+端点的薄客户端。
+
+所有请求体共享一个 **5 MiB 限制**。UUID 路径参数使用标准连字符 UUID 表示。
+JSON 响应里的时间戳是 RFC 3339 字符串。
+
+## 认证方式
+
+| 表面 | 认证 |
+| --- | --- |
+| 账户、团队和 Test Engine 管理 | register 或 login 签发的 `slash_session` cookie |
+| 测试结果 ingestion 与隔离查询 | `Authorization: Bearer <collection-token>` |
+| GitHub webhook | `X-Hub-Signature-256` HMAC 签名 |
+| 健康与指标 | 无 |
+
+## 端点清单
+
+下面这些表列出 `slash-server` 注册的每条路由。
+
+### [认证与团队](/zh/api/authentication/)
+
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| `POST` | `/api/auth/register` | 创建账户和会话 |
+| `POST` | `/api/auth/login` | 创建会话 |
+| `POST` | `/api/auth/logout` | 清除当前会话 |
+| `GET` | `/api/auth/me` | 读取当前用户和团队 |
+| `POST` | `/api/teams` | 创建团队 |
+
+### [Grants 管理](/zh/api/grants/)
+
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| `GET` | `/api/grants` | 列出当前 org 的 grants（仅 owner） |
+| `POST` | `/api/grants` | 创建 grant（仅 owner） |
+| `DELETE` | `/api/grants/{id}` | 删除 grant（仅 owner） |
+| `GET` | `/api/org/members` | 列出 org 的 users + teams 供 grant subject 选择（仅 owner） |
+
+### [Test Engine 管理](/zh/api/test-engine/)
+
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| `GET` | `/api/test-engine/suites` | 列出拥有的套件 |
+| `POST` | `/api/test-engine/suites` | 创建或复用套件 |
+| `GET` | `/api/test-engine/suites/{id}/tests` | 列出套件里的测试 |
+| `GET` | `/api/test-engine/tests/{id}/executions` | 列出执行历史 |
+| `PATCH` | `/api/test-engine/tests/{id}/state` | 改变测试的处置状态 |
+| `GET` | `/api/test-engine/suites/{id}/tokens` | 读取最新有效 token |
+| `POST` | `/api/test-engine/suites/{id}/tokens` | 签发 collection token |
+| `POST` | `/api/test-engine/suites/{id}/tokens/revoke` | 吊销 collection token |
+
+### [测试结果 ingestion](/zh/api/ingestion/)
+
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| `POST` | `/v1/test-engine/upload` | 上传归一化 JSON 或 JUnit XML |
+| `POST` | `/v1/test-engine/upload/cargo` | 上传 Cargo libtest JSON 事件 |
+| `POST` | `/v1/test-engine/upload/vitest` | 上传 Vitest 结果 |
+| `GET` | `/v1/test-engine/quarantined` | 列出 muted 或 skipped 的测试名 |
+
+### [Webhook 与运维](/zh/api/platform/)
+
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| `POST` | `/webhook` | 接收签名后的 GitHub webhook 投递 |
+| `GET` | `/healthz` | 存活探针 |
+| `GET` | `/metrics` | Prometheus 指标 |
+
+## 错误约定
+
+账户和团队端点返回这种形状的 JSON 错误：
+
+```json
+{
+  "error": "invalid email"
+}
+```
+
+创建套件端点用 `{ "message": "..." }` 表示校验和所有权冲突。其他 Test Engine 管理和
+ingestion 失败可能返回空 body，带文档里描述的 HTTP 状态码。
+
+未知的 `/api/*` 路由返回 `404` 与 `{ "error": "not found" }`。

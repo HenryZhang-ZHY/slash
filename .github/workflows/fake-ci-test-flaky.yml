@@ -1,0 +1,127 @@
+name: Fake CI Test Flaky
+
+# Dogfood the M1 Test Engine closed loop (docs/design/1.0-test-engine.md §5) as
+# a "ready to wire" template. The jobs in this workflow:
+#
+#   1. Run a fake test that is *deterministically flaky*: it fails on odd
+#      `github.run_number`s and passes on even ones. Over repeated invocations
+#      this produces the fail→pass recovery that the flaky detector (§8 Q4:
+#      >=3 executions in a rolling 7-day window) uses to mute the test.
+#   2. Upload the result to the server's ingestion endpoint
+#      (`/v1/test-engine/upload`, server-side collector form per §8 Q2),
+#      authenticated by a per-suite collection token.
+#   3. Consult the disposal endpoint (`/v1/test-engine/quarantined`) and, once
+#      the fake test has been muted/skipped, stop letting it fail the PR — the
+#      bktec "skip/mute flaky" behavior, server-side.
+#
+# To wire it up, a deployment must provide three bits of configuration to this
+# workflow (e.g. GitHub Actions vars/secrets on the slash repo):
+#   vars   TEST_ENGINE_UPLOAD_URL         the ingestion endpoint
+#   vars   TEST_ENGINE_QUARANTINED_URL    the disposal endpoint
+#   vars   TEST_ENGINE_SUITE_KEY          the dogfood suite's key
+#   secret TEST_ENGINE_SUITE_TOKEN        the per-suite bearer token
+#
+# Until a deployment exists this file is a template: it will not be triggered
+# (the command lives on the slash repo, which is only deployed later) and needs
+# no registry secret to be committed.
+
+on:
+  workflow_dispatch:
+    inputs:
+      slash_run_id: { required: false }
+      slash_pr_number: { required: false }
+      slash_head_sha: { required: false }
+      slash_actor: { required: false }
+      slash_actor_id: { required: false }
+
+jobs:
+  fake-flaky-ci:
+    runs-on: ubuntu-slim
+    steps:
+      - name: Detect quarantined tests (disposal hook)
+        id: disposal
+        env:
+          QUARANTINED_URL: ${{ vars.TEST_ENGINE_QUARANTINED_URL }}
+          SUITE_TOKEN: ${{ secrets.TEST_ENGINE_SUITE_TOKEN }}
+        run: |
+          # Swallow failures: if the Test Engine isn't wired yet, behave as if
+          # nothing is quarantined so this dogfood step still runs.
+          quarantined=""
+          if [ -n "${QUARANTINED_URL}" ] && [ -n "${SUITE_TOKEN}" ]; then
+            quarantined="$(
+              curl -sf -H "Authorization: Bearer ${SUITE_TOKEN}" "${QUARANTINED_URL}" || true
+            )"
+          fi
+          case "${quarantined}" in
+            *"tests::demo_flaky"*) echo "test_quarantined=true" >> "$GITHUB_ENV" ;;
+            *) echo "test_quarantined=false" >> "$GITHUB_ENV" ;;
+          esac
+
+      - name: Run the fake flaky test
+        id: test
+        env:
+          ACTOR: ${{ inputs.slash_actor }}
+          PR_NUMBER: ${{ inputs.slash_pr_number }}
+        run: |
+          echo "Starting fake flaky CI for PR #${PR_NUMBER} requested by ${ACTOR}"
+          # Deterministic flakiness keyed on the build number: odd -> fail,
+          # even -> pass. Over repeated invocations this yields a fail→pass
+          # recovery for the detector.
+          run_number=${{ github.run_number }}
+          if [ $(( run_number % 2 )) -eq 1 ]; then
+            echo "tests::demo_flaky FAILED (run ${run_number})"
+            status=failed
+            exit_code=1
+          else
+            echo "tests::demo_flaky passed (run ${run_number})"
+            status=passed
+            exit_code=0
+          fi
+          # A healthy control test never flakes; the detector must not mute it.
+          echo "tests::demo_steady passed"
+          echo "status=${status}" >> "$GITHUB_OUTPUT"
+          echo "exit_code=${exit_code}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload results to Test Engine (ingestion hook)
+        id: upload
+        if: ${{ env.test_quarantined == 'false' }}
+        env:
+          UPLOAD_URL: ${{ vars.TEST_ENGINE_UPLOAD_URL }}
+          SUITE_TOKEN: ${{ secrets.TEST_ENGINE_SUITE_TOKEN }}
+          STATUS: ${{ steps.test.outputs.status }}
+          # `${{ github.* }}` expressions are substituted by the Actions
+          # expression engine into the step *environment*, never into the shell
+          # string, so they don't disturb the JSON payload's quoting.
+          CI_REPO: ${{ github.repository }}
+          CI_RUN_ID: ${{ github.run_id }}
+        run: |
+          if [ -z "${UPLOAD_URL}" ] || [ -z "${SUITE_TOKEN}" ]; then
+            echo "::warning::Test Engine not wired (no TEST_ENGINE_UPLOAD_URL / token); skipping upload"
+            exit 0
+          fi
+          payload="{\"ci_provider\":\"github_actions\",\"run_ref\":\"${CI_REPO}/${CI_RUN_ID}\",\"executions\":[{\"name\":\"tests::demo_flaky\",\"status\":\"${STATUS}\",\"duration_ms\":5},{\"name\":\"tests::demo_steady\",\"status\":\"passed\",\"duration_ms\":3}]}"
+          curl -sf -X POST \
+            -H "Authorization: Bearer ${SUITE_TOKEN}" \
+            -H "Content-Type: application/json" \
+            --data "$payload" \
+            "${UPLOAD_URL}" \
+            -o /dev/null
+
+      - name: Decide the PR outcome (disposal / bktec skip)
+        id: outcome
+        run: |
+          if [ "${{ env.test_quarantined }}" = "true" ]; then
+            echo "Test quarantined; marking soft-fail (does not block the PR)."
+            echo "conclusion=neutral" >> "$GITHUB_OUTPUT"
+          elif [ "${{ steps.test.outputs.exit_code }}" = "1" ]; then
+            echo "Flaky test failed this run; block the PR (expect re-run + quarantine)."
+            echo "conclusion=failure" >> "$GITHUB_OUTPUT"
+          else
+            echo "Tests passed."
+            echo "conclusion=success" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Report the outcome to the PR
+        run: |
+          echo "fake-flaky-ci conclusion: ${{ steps.outcome.outputs.conclusion }}"
+          if [ "${{ steps.outcome.outputs.conclusion }}" = "failure" ]; then exit 1; fi

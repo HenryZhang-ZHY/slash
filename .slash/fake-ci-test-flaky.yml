@@ -1,0 +1,11 @@
+command: fake-ci-test-flaky
+description: >-
+  Run a lightweight fake CI workflow that simulates a *flaky* test, to exercise
+  the Test Engine dogfood loop (docs/design/1.0-test-engine.md §5). Emits a
+  deterministically-flaky result, uploads it to /v1/test-engine/upload, then
+  consults /v1/test-engine/quarantined so the fake test is skipped/soft-failed
+  once the flaky detector has muted it. "Ready to wire": a deployment must
+  supply the ingestion endpoint URL + per-suite collection token (see the
+  workflow file). Intended for dogfooding on the slash repo itself.
+permission: write
+workflow: fake-ci-test-flaky.yml

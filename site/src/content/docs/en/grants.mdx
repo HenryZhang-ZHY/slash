@@ -1,0 +1,172 @@
+---
+title: Grants
+description: "Authorize users and teams to invoke commands with an offline, deny-by-default grant model."
+sidebar:
+  order: 5
+---
+
+Slash authorizes command dispatch through an **offline grant model**: who may
+invoke a command is decided locally from the `grants` table, never by a live
+GitHub API lookup. The model is **deny-by-default and fail-closed** — a missing
+grant, a database error, or a grant that does not reach the required tier all
+mean **denied**.
+
+This page documents the grant model. It replaces the historical
+GitHub-collaborator-role gate described on the [permissions](/en/permissions/)
+page.
+
+## How authorization works
+
+Every command declares a `permission` tier in its `.slash/*.yml` file — `read`,
+`write`, or `admin` (default `write`). A grant says *who* may operate at *which
+tier* on *what*: a user or team, scoped to an organization, a repository, or a
+single command.
+
+The two pieces combine at dispatch time:
+
+```text
+granted tier ≥ command's required tier  →  allow
+otherwise (explicit deny / resolution failure / no matching row)  →  deny
+```
+
+Authorization is a two-step, offline path:
+
+1. **Preload** (`preload_grants`): the server resolves the actor's Slash user
+   (by GitHub id) and the repository's organization (by installation id), then
+   loads every grant row that applies to the actor — direct user grants plus
+   grants of the teams the actor belongs to — scoped to that organization.
+2. **Decide** (`GrantsTrustGate` → `decide`): a pure, IO-free function takes
+   those rows plus the repository and command context, and returns a single
+   `Allow` or `Denied` verdict.
+
+The `TrustGate` stage in the dispatch pipeline is where this is wired in: the
+grants are loaded asynchronously at the pipeline entry point, and the sync
+decision stage consumes them. See
+[`slash-core`'s pipeline](https://github.com/HenryZhang-ZHY/slash/tree/main/crates/slash-core/src/pipeline.rs)
+and
+[`grants` module](https://github.com/HenryZhang-ZHY/slash/tree/main/crates/slash-core/src/grants.rs).
+
+## Grant rows
+
+A grant row lives in the `grants` table and is uniquely identified by:
+
+| Field | Meaning |
+| --- | --- |
+| `organization_id` | The tenant organization the grant belongs to. |
+| `subject_type` / `subject_id` | Who it grants to: a `user` (`users.id`) or a `team` (`teams.id`). |
+| `scope` | How wide it applies: `org`, `repository`, or `command`. |
+| `repository` | `owner/repo` — required when scope is `repository` or `command`. |
+| `command` | Command name — required when scope is `command`. |
+| `permission` | The tier granted: `read`, `write`, or `admin`. |
+| `effect` | `allow` or `deny` — **deny wins**. |
+| `granted_by` | Audit link to the user who created the grant. |
+
+There is at most one grant per `(organization_id, subject_type, subject_id,
+scope, repository, command)`.
+
+## Scope resolution
+
+A grant applies to a `(repo, command)` context based on its scope, from most to
+least specific:
+
+| Scope | Applies when |
+| --- | --- |
+| `command` | The invocation's command matches the grant's `command` (its `repository` must also match the repo). |
+| `repository` | The invocation's `owner/repo` matches the grant's `repository`. |
+| `org` | Always, within the organization. |
+
+More specific grants are not "required" to exist — every matching row is
+considered, and the **highest allowed tier across all matching rows** (user and
+team grants combined) is the tier the actor operates at.
+
+## Deny wins
+
+An explicit `deny` row for the matching context overrides every `allow`, no
+matter how high the allowed tier:
+
+```text
+org-scope  allow admin  (team "eng")
+command    deny  write  (user alice, command "deploy", repo acme/widgets)
+→ alice invoking /deploy on acme/widgets is DENIED
+```
+
+The `deny` applies only to its own context — in the example above, alice can
+still invoke `release` on `acme/widgets` (nothing denies it), just not `deploy`.
+
+## Fail-closed and deny-by-default
+
+Every ambiguity resolves to **denied**:
+
+- **No matching grant row at all** → denied. There is no fallback to the
+  GitHub collaborator API and no compatibility shim — all repositories use the
+  same grant path.
+- **The highest allowed tier is below the command's required tier** → denied.
+- **The actor is not a Slash user** (no `users` row for the GitHub id) →
+  denied.
+- **The repository's organization cannot be resolved** (no `organizations` row
+  for the installation) → denied.
+- **A database error or parse failure anywhere in the path** → denied. A
+  failure can never become an allow.
+
+This is a deliberate hardening of the model: a grant-resolution failure means
+the actor's trust level is unknown, and unknown is deny.
+
+## Managing grants
+
+Grants are managed through the [grants management API](/en/api/grants/) — and
+in the [web console's `/grants` page](/en/web-console/), which drives those
+endpoints. Both are **org-owner-only** and fail-closed: a non-owner gets `403`
+everywhere. A grant is immutable after creation; to change one, delete it and
+create it again.
+
+The management surface covers everything this page describes: subjects (users
+and teams of the org), scopes (`org`/`repository`/`command`), the `permission`
+tier, and `allow`/`deny` effects. For illustration, the equivalent SQL for
+granting the `eng` team `write` on the `deploy` command in repository
+`acme/widgets` is:
+
+```sql
+INSERT INTO grants (id, organization_id, subject_type, subject_id, scope,
+                    repository, command, permission, effect, granted_by)
+VALUES (gen_random_uuid(), '<org_id>', 'team', '<team_id>', 'command',
+        'acme/widgets', 'deploy', 'write', 'allow', '<admin_user_id>');
+```
+
+And to block a specific user from `deploy` regardless of team membership:
+
+```sql
+INSERT INTO grants (id, organization_id, subject_type, subject_id, scope,
+                    repository, command, permission, effect, granted_by)
+VALUES (gen_random_uuid(), '<org_id>', 'user', '<user_id>', 'command',
+        'acme/widgets', 'deploy', 'write', 'deny', '<admin_user_id>');
+```
+
+Practical guidance:
+
+- **Prefer team grants over per-user grants.** Teams are the access-control
+  center; a grant to a team covers everyone in it and updates as membership
+  changes.
+- **Grant the narrowest scope you need.** Use `command` for per-command
+  authority, `repository` for everything in one repo, `org` for org-wide
+  policy. Narrower scopes give a finer deny surface.
+- **Use `deny` for carve-outs.** A broad `org` or `repository` allow for a team
+  plus a specific `command` or `repository` deny for a user is the supported
+  way to subtract access.
+- **Remember the tier semantics.** The granted tier is the *maximum* tier the
+  subject reaches; a command requiring `admin` needs an `admin` grant, not a
+  `write` one.
+
+## Interaction with re-runs
+
+The check-run **Re-run** button re-authorizes the *rerequester* — not the
+original invoker — through the same grant path, against the command's *current*
+required tier. A user whose grant has been removed or downgraded since the
+original invocation is denied on the re-run, so re-running is never a way to
+bypass the gate.
+
+## See also
+
+- [Permissions](/en/permissions/) — the authorization model and its history
+- [`.slash/` reference](/en/slash-config-reference/) — the `permission` field on
+  commands
+- [Deployment](/en/self-host/deployment/) — running the server that hosts the `grants` table

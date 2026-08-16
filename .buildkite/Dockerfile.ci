@@ -14,7 +14,11 @@ FROM rust:slim-bookworm
 
 ENV CARGO_TERM_COLOR=always
 
+# buildkite-test-collector is baked into the image rather than installed
+# per-run — it's a compiled crate with its own build time, and the `test`
+# step image is rebuilt (not reused) whenever this file changes anyway.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends build-essential pkg-config \
     && rm -rf /var/lib/apt/lists/* \
-    && rustup component add rustfmt clippy
+    && rustup component add rustfmt clippy \
+    && cargo install buildkite-test-collector

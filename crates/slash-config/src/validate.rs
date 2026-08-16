@@ -17,16 +17,16 @@ pub const RESERVED_COMMAND_NAMES: &[&str] = &["help", "slash"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Permission {
+    Read,
     Write,
-    Maintain,
     Admin,
 }
 
 impl Permission {
     pub fn parse(value: &str) -> Option<Self> {
         match value {
+            "read" => Some(Self::Read),
             "write" => Some(Self::Write),
-            "maintain" => Some(Self::Maintain),
             "admin" => Some(Self::Admin),
             _ => None,
         }
@@ -279,7 +279,7 @@ args:
 
     #[test]
     fn rejects_bad_permission_values() {
-        for bad in ["read", "triage", "Write", "owner"] {
+        for bad in ["maintain", "triage", "Write", "owner"] {
             let mut raw = valid_raw();
             raw.permission = bad.to_string();
             let errors = validate_command("deploy.yml", &raw).unwrap_err();
@@ -293,7 +293,7 @@ args:
 
     #[test]
     fn accepts_all_valid_permissions() {
-        for good in ["write", "maintain", "admin"] {
+        for good in ["read", "write", "admin"] {
             let mut raw = valid_raw();
             raw.permission = good.to_string();
             assert!(validate_command("deploy.yml", &raw).is_ok());
@@ -445,7 +445,7 @@ args:
     fn collects_every_error_instead_of_stopping_at_the_first() {
         let mut raw = valid_raw();
         raw.command = "Bad".to_string();
-        raw.permission = "read".to_string();
+        raw.permission = "maintain".to_string();
         raw.workflow = "bad".to_string();
         let errors = validate_command("deploy.yml", &raw).unwrap_err();
         assert!(

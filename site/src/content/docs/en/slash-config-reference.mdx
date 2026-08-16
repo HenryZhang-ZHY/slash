@@ -1,0 +1,121 @@
+---
+title: ".slash/ reference"
+description: "Define commands, arguments, permissions, and target workflows."
+sidebar:
+  order: 2
+---
+
+Each command is one YAML file under `.slash/` (`.yml` or `.yaml`) at your
+repository root, **always read from the default branch** — never from the PR
+branch under test. This is deliberate: it stops a PR from rewriting who may
+invoke a command, or which workflow it runs, to escalate its own permissions
+(a "pwn request"). Config changes only take effect once merged to the default
+branch.
+
+Validate your `.slash/` files in your own CI with `slash validate .slash/`
+(the `slash` binary ships from [`slash-cli`](https://github.com/HenryZhang-ZHY/slash/tree/main/crates/slash-cli); install
+it with `cargo install --path crates/slash-cli` or grab it from a release).
+It runs the exact same checks Slash itself enforces at invocation time, so
+mistakes are caught in your PR instead of the first time someone runs the
+command.
+
+## Schema
+
+```yaml
+# .slash/deploy.yml
+command: deploy                  # required; unique per repo
+description: Deploy the PR to an environment   # optional; shown in errors
+permission: write                # optional; default: write
+                                  # one of: read | write | admin
+workflow: deploy.yml             # required; file under .github/workflows/
+                                  # must exist on the DEFAULT branch and
+                                  # declare `on: workflow_dispatch`
+args:                             # optional; ordered list
+  - name: env                    # required per entry
+    description: Target environment
+    required: true                # default: false
+    choices: [staging, production]   # optional enum
+  - name: timeout
+    default: "15m"                # optional; used when not provided
+  - name: reason
+    free_text: true                # relaxes the value charset below
+```
+
+The filename is not significant — the `command` field is what's matched.
+Duplicate `command` values across files in the same repository are a
+configuration error, reported (naming both files) the next time either
+command is invoked.
+
+## Fields
+
+### Top level
+
+| Field         | Required | Default | Notes |
+|---------------|----------|---------|-------|
+| `command`     | yes      | —       | `^[a-z][a-z0-9-]*$`, case-insensitive at invocation. `help` and `slash` are reserved for future built-ins and cannot be used. |
+| `description` | no       | none    | Shown in error/usage messages only. |
+| `permission`  | no       | `write` | One of `read`, `write`, `admin` (default `write`). |
+| `workflow`    | yes      | —       | `^[A-Za-z0-9._-]{1,100}\.(ya?ml)$` — a filename under `.github/workflows/`, no `/`, `\`, `%`, or `..`. Must exist on the default branch with `on: workflow_dispatch`. |
+| `args`        | no       | `[]`    | Ordered list of argument definitions (below). |
+
+### Each `args[]` entry
+
+| Field         | Required | Default | Notes |
+|---------------|----------|---------|-------|
+| `name`        | yes      | —       | `^[a-z][a-z0-9_-]*$`, unique within the command, must not start with `slash_` (reserved — see [workflow requirements](/en/workflow-requirements/)). |
+| `description` | no       | none    | Shown in usage errors. |
+| `required`    | no       | `false` | All `required: true` entries must come before any optional entry in the list — that order is also the order positional (non-`--key`) command-line arguments bind to. |
+| `choices`     | no       | none    | A list of allowed values; anything else is a usage error. |
+| `default`     | no       | none    | Used when the argument isn't supplied. Rejected on a `required: true` entry (it could never be used). Must itself satisfy `choices` and the value charset below. |
+| `free_text`   | no       | `false` | Relaxes the value charset restriction (below) for this argument. |
+
+Unknown keys at either level are a configuration error — `slash validate`
+catches typos immediately instead of them silently doing nothing.
+
+## Value charset
+
+Unless an argument sets `free_text: true`, its value must match:
+
+```text
+^[A-Za-z0-9._@:/+=,-]{0,256}$
+```
+
+This exists because argument values flow into `workflow_dispatch` inputs, and
+a workflow that interpolates `${{ inputs.x }}` directly inside a `run:` step
+(instead of via `env:` — see [workflow requirements](/en/workflow-requirements/))
+would otherwise be script-injectable by anyone who can pass the permission
+gate. Set `free_text: true` only on arguments whose workflow consumes them
+through `env:`, never through inline `${{ }}` interpolation in `run:`.
+
+## Directory-wide limits
+
+`.slash/` as a whole is attacker-influenced input to a shared, multi-tenant
+process, so it is bounded before anything is parsed:
+
+- At most **50** files.
+- At most **256 KiB** total.
+- At most **32** levels of YAML nesting.
+- YAML aliases and anchors (`&anchor`, `*alias`) are rejected outright, before
+  the real YAML parser ever sees the document — a config using them is a
+  configuration error, not a hang.
+
+## Command grammar (for reference)
+
+Only the **first line** of a comment is parsed:
+
+```text
+/deploy staging --force --timeout=30m --reason="hot fix"
+ ^cmd   ^positional  ^bool flag  ^key=value    ^quoted value
+```
+
+- Command name: `/[a-z][a-z0-9-]*`, matched case-insensitively.
+- Positional arguments bind, in order, to `args` entries not given as `--key`.
+- `--key=value` or `--key value`; a bare `--flag` binds the string `"true"`.
+- Double quotes group tokens containing spaces; `\"` escapes a quote.
+- All values are strings.
+- Keys starting with `slash_` are always rejected — that prefix is reserved
+  for Slash's own injected inputs.
+
+A command anywhere but the first line of a comment is **not** executed —
+Slash replies once per PR pointing this out, rather than silently ignoring
+what you clearly meant.

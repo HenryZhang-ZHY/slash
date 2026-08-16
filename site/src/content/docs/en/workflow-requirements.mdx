@@ -1,0 +1,130 @@
+---
+title: Workflow requirements
+description: "Prepare safe workflow_dispatch workflows for Slash commands."
+sidebar:
+  order: 3
+---
+
+## Where the workflow must exist, and where it runs from
+
+The workflow file must exist **on the default branch** with an
+`on: workflow_dispatch` trigger — GitHub resolves the target of a
+`workflow_dispatch` call against workflows registered from the default
+branch, and a workflow introduced only by a PR cannot be dispatched at all
+(404). This is a GitHub platform behavior, not a Slash restriction.
+
+What actually **runs**, though, is the **PR head branch's** version of that
+workflow file — "test this PR" semantics. A PR is free to change what
+`/deploy` *does* (as long as the file itself already exists on the default
+branch), but not *who may invoke it* or *what permission it requires* — that
+policy always comes from the default branch's `.slash/`.
+
+`workflow_dispatch` accepts a branch ref, not a commit SHA, so what actually
+executes is the branch tip **at dispatch time**, which can differ slightly
+from the SHA that was under review when the comment was posted. Slash
+minimizes this window (re-reading the tip immediately before dispatch, and
+aborting if it already moved) and notes any resulting mismatch in the check
+run's summary. If your workflow needs to be pinned to an exact commit
+regardless, check out `inputs.slash_head_sha` explicitly rather than relying
+on the default checkout ref.
+
+## Injected inputs
+
+Slash injects these `workflow_dispatch` inputs on every dispatch, alongside
+whatever arguments your command defines:
+
+| Input             | Value                                                  |
+|-------------------|---------------------------------------------------------|
+| `slash_run_id`    | UUID v4 generated per invocation (for your own logging/correlation) |
+| `slash_pr_number` | The PR number |
+| `slash_head_sha`  | The PR's head SHA at the moment the command was invoked |
+| `slash_actor`     | The verified GitHub login of the comment author |
+| `slash_actor_id`  | The numeric user ID of the comment author (stable across username renames) |
+
+`slash_actor`/`slash_actor_id` exist because the run executes under the
+App's installation token — inside the run, `github.actor` is `slash[bot]`,
+not the person who typed the command. Any workflow doing identity-based
+logic (audit logging, approvals, environment gating) **must** key off
+`inputs.slash_actor_id` rather than `github.actor`, or you get an audit trail
+that just says "slash[bot] deployed to production" for every deployment,
+regardless of who actually asked for it.
+
+Slash currently sends all injected inputs plus every configured argument
+unconditionally, without parsing the workflow file to see which inputs it
+declares. GitHub ignores `workflow_dispatch` inputs your workflow does not
+declare, so undeclared inputs are harmless; conversely, a workflow that
+does not declare one of the injected inputs simply never sees it. This means
+"you configured an argument your workflow never declared" currently surfaces
+as a GitHub 422 at dispatch time rather than a precise pre-dispatch error.
+
+## The `env:`-not-`${{ }}` rule
+
+Inputs must reach `run:` steps via `env:`, **never** through direct `${{ }}`
+interpolation inside the `run:` block:
+
+```yaml
+# .github/workflows/deploy.yml
+name: deploy
+on:
+  workflow_dispatch:
+    inputs:
+      slash_head_sha: { required: false }
+      slash_actor: { required: false }
+      env: { required: true }
+      timeout: { required: false, default: "15m" }
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.slash_head_sha }}   # the SHA the check run reports on
+      - name: Deploy
+        env:
+          TARGET: ${{ inputs.env }}           # via env, NOT inline in run:
+          ACTOR: ${{ inputs.slash_actor }}
+        run: ./deploy.sh "$TARGET" "$ACTOR"
+```
+
+```yaml
+# DON'T do this — a shell-injectable command line:
+      - run: ./deploy.sh "${{ inputs.env }}"
+```
+
+Argument values are restricted to a safe charset precisely so that
+`env:`-passed values can never break out of a shell command (see
+the [`.slash/` reference](/en/slash-config-reference/#value-charset)). Inline
+`${{ }}` interpolation in `run:` bypasses that protection entirely — GitHub
+substitutes the raw string into the shell script text before it runs, so
+anyone who can pass your command's permission gate could inject arbitrary
+shell. Only opt an argument out of the safe charset (`free_text: true`) if
+its workflow consumes it exclusively through `env:`.
+
+No `run-name:` is required or used for correlation — Slash correlates a
+dispatch to its resulting run by the run's own id from the dispatch response
+(or, if that's lost, a `triggering_actor`-scoped poll), never by matching on
+any text a workflow itself displays.
+
+## Required status checks: capability and footgun
+
+`slash/<command>` is a stable check-run name, so branch protection **can**
+require it. Before doing that, understand two consequences:
+
+- **A PR where nobody runs the command never becomes mergeable.** The
+  required check just stays `Expected` forever — there is no auto-run.
+- **Every push resets it.** Required checks are evaluated against the head
+  commit, and Slash only ever creates a check run on the SHA that was current
+  when the command was invoked. After any push, the command must be
+  re-issued. The check run's **Re-run** button (right-click on the check run
+  or the "Re-run" link in the PR checks list) reissues it in one click,
+  re-validating the *current* invoker's permission against the *current*
+  `.slash/` configuration — it does not just replay the original command
+  as-is.
+
+Given that, marking `slash/<command>` as a required check makes sense either
+for a command your team expects to run on every PR revision, or as a
+deliberate manual merge gate — it is not something to turn on by default.
+
+See [known limitations](/en/limitations/) for the related gap: Slash does
+not automatically re-trigger a command on `synchronize` the way some CI bots
+do; the Re-run button is the current substitute.

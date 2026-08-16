@@ -1,0 +1,108 @@
+---
+title: Getting started
+description: "Create an account, connect a GitHub App, and run your first command."
+sidebar:
+  order: 1
+---
+
+Slash is a GitHub App: comment `/deploy staging` on a pull request, and Slash
+triggers a `workflow_dispatch` on your own GitHub Actions and syncs its status
+back to the PR as a check run.
+
+## 1. Create an account
+
+Slash runs as a hosted service — sign in at the Slash console (or register a
+new account) and follow the onboarding to create your first team. See the
+[web console](/en/web-console/) for the sign-in and onboarding flow. If you
+prefer to run Slash on your own infrastructure, see
+[Self Hosting](/en/self-host/).
+
+## 2. Create the GitHub App
+
+Create a GitHub App (either on your personal account or an organization)
+with:
+
+- **Webhook URL**: the webhook endpoint provided by your Slash deployment
+  (cloud or self-hosted)
+- **Webhook secret**: a random value
+- **Permissions**: `checks: write`, `actions: write`, `contents: read`,
+  `pull_requests: write`, `issues: write`, `metadata: read` (see
+  [permissions](/en/permissions/) for why each one is needed —
+  `issues: write` in particular is easy to under-scope and silently breaks
+  everything)
+- **Subscribe to events**: `issue_comment`, `workflow_run`, `check_run`,
+  `pull_request`
+
+Generate a private key for the App. Install the App on the repository (or
+repositories) you want it to run commands in, then connect it in the Slash
+console so Slash can receive its webhooks.
+
+## 3. Configure a command
+
+Add `.slash/echo.yml` to your repository's **default branch**:
+
+```yaml
+command: echo
+permission: write
+workflow: echo.yml
+args:
+  - name: message
+    free_text: true
+```
+
+See the [`.slash/` reference](/en/slash-config-reference/) for the full
+schema, and run `slash validate .slash/` in your own CI to catch mistakes
+before they reach the default branch (see
+[known limitations](/en/limitations/) — Slash does not validate `.slash/` on
+push itself).
+
+## 4. Add the workflow
+
+Add `.github/workflows/echo.yml`, also on the default branch (GitHub only
+resolves `workflow_dispatch` targets registered there — see
+[workflow requirements](/en/workflow-requirements/)):
+
+```yaml
+name: echo
+on:
+  workflow_dispatch:
+    inputs:
+      message: { required: false }
+      slash_actor: { required: false }
+jobs:
+  echo:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Echo
+        env:
+          MESSAGE: ${{ inputs.message }}
+          ACTOR: ${{ inputs.slash_actor }}
+        run: echo "$ACTOR says: $MESSAGE"
+```
+
+A complete, copy-pasteable version of both files lives in the
+[`examples/` directory](https://github.com/HenryZhang-ZHY/slash/tree/main/examples).
+
+## 5. Try it
+
+Open a pull request and comment:
+
+```text
+/echo hello world
+```
+
+You should see a 🚀 reaction on the comment within a couple of seconds, a
+`slash/echo` check run appear on the PR, and it reach a terminal conclusion
+once the workflow run finishes, with a link to that run.
+
+## Next steps
+
+- [`.slash/` reference](/en/slash-config-reference/) — the full
+  `.slash/*.yml` schema
+- [Workflow requirements](/en/workflow-requirements/) — injected inputs,
+  the `env:`-not-`${{ }}` rule, required-status-check caveats
+- [Permissions](/en/permissions/) and [Grants](/en/grants/) — who can invoke what
+- [Web console](/en/web-console/) — sign in, create teams, manage the Test Engine
+- [Test Engine](/en/test-engine/) — collect results and quarantine flaky tests
+- [Self Hosting](/en/self-host/) — run Slash on your own infrastructure
+- [Known limitations](/en/limitations/) — what Slash deliberately does not do yet

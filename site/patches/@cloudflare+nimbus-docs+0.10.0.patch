@@ -1,0 +1,51 @@
+diff --git a/node_modules/@cloudflare/nimbus-docs/dist/index.js b/node_modules/@cloudflare/nimbus-docs/dist/index.js
+index 2523eb2..4ec6a44 100644
+--- a/node_modules/@cloudflare/nimbus-docs/dist/index.js
++++ b/node_modules/@cloudflare/nimbus-docs/dist/index.js
+@@ -2789,9 +2789,11 @@ async function writeShikiStyleSheet({ distDir, logger }) {
+ 	}
+ }
+ function runPagefind(siteDir) {
+-	const bin = process.platform === "win32" ? "pagefind.cmd" : "pagefind";
++	const isWindows = process.platform === "win32";
++	const bin = isWindows ? process.env.ComSpec || "cmd.exe" : "pagefind";
++	const args = isWindows ? ["/d", "/s", "/c", "pagefind.cmd", "--site", siteDir] : ["--site", siteDir];
+ 	return new Promise((resolve) => {
+-		execFile(bin, ["--site", siteDir], (error, stdout, stderr) => {
++		execFile(bin, args, (error, stdout, stderr) => {
+ 			if (stdout) process.stdout.write(stdout);
+ 			if (stderr) process.stderr.write(stderr);
+ 			if (error) console.warn(`[nimbus-docs] Pagefind did not run. Install pagefind as a devDependency or set search: false in your Nimbus config.\n${error.message}`);
+diff --git a/node_modules/@cloudflare/nimbus-docs/src/components/NimbusHead.astro b/node_modules/@cloudflare/nimbus-docs/src/components/NimbusHead.astro
+index f798eb8..f622f3f 100644
+--- a/node_modules/@cloudflare/nimbus-docs/src/components/NimbusHead.astro
++++ b/node_modules/@cloudflare/nimbus-docs/src/components/NimbusHead.astro
+@@ -149,7 +149,9 @@ const fullTitle = title !== config.title ? `${title} | ${config.title}` : title;
+ const resolvedDescription = description ?? config.description;
+ const lang = config.locale ?? "en";
+ 
+-const isHomePage = Astro.url.pathname === "/";
++const normalizedBase = baseUrl.replace(/\/$/, "");
++const normalizedPathname = Astro.url.pathname.replace(/\/$/, "");
++const isHomePage = normalizedPathname === normalizedBase;
+ const ogType = isHomePage ? "website" : "article";
+ 
+ // `process.cwd()` resolves to the consumer's project root at build time.
+@@ -168,7 +170,7 @@ const faviconCandidates: ReadonlyArray<{ file: string; type: string }> = [
+ const matchedFavicon =
+   faviconCandidates.find((c) => existsSync(join(publicDir, c.file))) ??
+   faviconCandidates[0];
+-const faviconHref = `${import.meta.env.BASE_URL}${matchedFavicon.file}`;
++const faviconHref = withBase(matchedFavicon.file);
+ const faviconType = matchedFavicon.type;
+ 
+ // Social image precedence: page prop > config > `public/opengraph.png` >
+@@ -213,7 +215,7 @@ const structuredData = canonical
+ // Per-HTML last-element-wins semantics: page extras come after config
+ // extras so per-page overrides win for any duplicated single-value tag.
+ const mergedHead = [...(config.head ?? []), ...pageHead];
+-const shikiCssHref = `${import.meta.env.BASE_URL}_nimbus/shiki.css${import.meta.env.DEV ? `?v=${Date.now()}` : ""}`;
++const shikiCssHref = `${withBase("/_nimbus/shiki.css")}${import.meta.env.DEV ? `?v=${Date.now()}` : ""}`;
+ ---
+ 
+ <title>{fullTitle}</title>

@@ -7,16 +7,24 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lib]
+name = "slash_server"
+path = "src/lib.rs"
+
 [[bin]]
 name = "slash-server"
 path = "src/main.rs"
 
 [dependencies]
+argon2 = "0.5"
 axum = "0.8.9"
 base64 = "0.23.1"
 chrono = "0.4.45"
+hmac = "0.13.0"
 octocrab = "0.54.1"
+sha2 = "0.11.0"
 prometheus = "0.14.0"
+quick-xml = "0.37"
 serde.workspace = true
 serde_json.workspace = true
 slash-command.workspace = true
@@ -25,8 +33,8 @@ slash-core.workspace = true
 slash-github.workspace = true
 sqlx = { version = "0.8.6", features = ["postgres", "runtime-tokio-rustls", "uuid", "chrono", "migrate", "macros"] }
 thiserror.workspace = true
-tokio = { version = "1.53.1", features = ["full"] }
-tower-http = { version = "0.7.0", features = ["catch-panic", "limit", "trace"] }
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "net", "signal", "time", "fs"] }
+tower-http = { version = "0.7.0", features = ["catch-panic", "limit", "trace", "fs"] }
 tracing.workspace = true
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 uuid = { workspace = true, features = ["v4", "serde"] }
@@ -38,5 +46,4 @@ workspace = true
 hmac = "0.13.0"
 reqwest = { version = "0.13.4", features = ["json"] }
 serial_test = "3.5.0"
-sha2 = "0.11.0"
 wiremock = "0.6.5"

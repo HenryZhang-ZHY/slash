@@ -25,6 +25,12 @@ pub enum AppAuthError {
     ClientBuild(String),
     #[error("failed to mint installation token: {0}")]
     Mint(String),
+    /// The GitHub API answered `401 Unauthorized` while minting an
+    /// installation token — the installation has been uninstalled or lost
+    /// access. Callers should mark it `deleted` and stop retrying instead of
+    /// looping on mint failures (spec §7.5).
+    #[error("installation {installation_id} is gone (401 on token mint)")]
+    InstallationGone { installation_id: u64 },
 }
 
 /// A minted, per-repository, least-permission installation token. Carries no
@@ -222,7 +228,10 @@ impl GithubApp {
                 Some(&body),
             )
             .await
-            .map_err(|e| AppAuthError::Mint(e.to_string()))?;
+            .map_err(|error| match unauthorized_status(&error) {
+                Some(401) => AppAuthError::InstallationGone { installation_id },
+                _ => AppAuthError::Mint(error.to_string()),
+            })?;
 
         let token = InstallationToken {
             value: response.token,
@@ -233,6 +242,15 @@ impl GithubApp {
         let mut cache = self.tokens.lock().await;
         cache.insert(key, token);
         Ok(value)
+    }
+}
+
+/// The HTTP status code of an octocrab API error, when it is a GitHub API
+/// response. Mirrors `crate::client::ClientError::from_octocrab`.
+fn unauthorized_status(error: &octocrab::Error) -> Option<u16> {
+    match error {
+        octocrab::Error::GitHub { source, .. } => Some(source.status_code.as_u16()),
+        _ => None,
     }
 }
 
@@ -373,6 +391,31 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(third, "tok_second");
+    }
+
+    #[tokio::test]
+    async fn mint_401_is_reported_as_installation_gone() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/app/installations/42/access_tokens"))
+            .respond_with(ResponseTemplate::new(401).set_body_json(serde_json::json!({
+                "message": "Bad credentials",
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let app = app_against(&server).await;
+        let error = app
+            .installation_token(42, 99, &[("checks", "write")])
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            error,
+            AppAuthError::InstallationGone {
+                installation_id: 42
+            }
+        ));
     }
 
     fn app_response_json(slug: &str) -> serde_json::Value {

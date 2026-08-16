@@ -1,0 +1,172 @@
+---
+title: Test result ingestion
+description: "Upload normalized, JUnit, Cargo, or Vitest results and query quarantine state."
+sidebar:
+  order: 4
+---
+
+Ingestion endpoints use a per-suite collection token:
+
+```http
+Authorization: Bearer collection-token-value
+```
+
+Tokens are issued through the [Test Engine management API](/en/api/test-engine/).
+The token determines the destination suite; clients do not send a suite ID in
+an upload body. Every accepted batch is committed in one database transaction.
+
+Successful uploads return `200 OK` with an empty body. Missing, malformed,
+unknown, or revoked tokens return `401 Unauthorized`. Invalid payloads return
+`400 Bad Request`, and storage or token lookup failures return `500`.
+
+## POST `/v1/test-engine/upload`
+
+Accepts normalized JSON by default, or JUnit XML when `Content-Type` is
+`application/xml`, `application/junit+xml`, or `text/xml`.
+
+### Normalized JSON
+
+```sh
+curl -X POST \
+  -H "Authorization: Bearer $SLASH_COLLECTION_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data-binary @results.json \
+  https://slash.example.com/v1/test-engine/upload
+```
+
+```json
+{
+  "ci_provider": "buildkite",
+  "run_ref": "build/1842",
+  "invocation_id": "6df850c6-f25e-49bf-8529-1edc665d476c",
+  "executions": [
+    {
+      "name": "checkout::completes_order",
+      "status": "passed",
+      "duration_ms": 87,
+      "stack": null,
+      "file": "tests/checkout.rs",
+      "line_no": 42
+    }
+  ]
+}
+```
+
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `ci_provider` | string | yes | CI system identity |
+| `run_ref` | string | yes | Caller-defined identity for the CI run |
+| `invocation_id` | UUID or null | no | Slash invocation that triggered the run |
+| `executions` | array | yes | One entry per observed test |
+| `executions[].name` | string | yes | Stable test identity within the suite |
+| `executions[].status` | string | yes | `passed`, `failed`, `skipped`, or `errored` |
+| `executions[].duration_ms` | integer | no | Defaults to `0` |
+| `executions[].stack` | string or null | no | Failure details |
+| `executions[].file` | string or null | no | Source file |
+| `executions[].line_no` | integer or null | no | Source line |
+
+An unsupported execution status rejects the whole batch with `400` before any
+database write.
+
+### JUnit XML
+
+```sh
+curl -X POST \
+  -H "Authorization: Bearer $SLASH_COLLECTION_TOKEN" \
+  -H "Content-Type: application/junit+xml" \
+  --data-binary @junit.xml \
+  https://slash.example.com/v1/test-engine/upload
+```
+
+JUnit test cases are normalized into the same execution model. Slash assigns
+`ci_provider: "junit"` and a generated `junit/<uuid>` run reference. JUnit does
+not populate source file or line fields.
+
+## POST `/v1/test-engine/upload/cargo`
+
+Accepts the newline-delimited event stream emitted by unstable Cargo libtest
+JSON output.
+
+```sh
+cargo test -- -Z unstable-options --format json \
+  | curl -X POST \
+      -H "Authorization: Bearer $SLASH_COLLECTION_TOKEN" \
+      -H "Content-Type: application/x-ndjson" \
+      --data-binary @- \
+      https://slash.example.com/v1/test-engine/upload/cargo
+```
+
+Example input:
+
+```jsonl
+{"type":"test","name":"tests::it_works","status":"passed","exec_time":0.012}
+{"type":"test","name":"tests::it_breaks","status":"failed","exec_time":0.5}
+```
+
+Only records with `type: "test"` and a non-empty `name` are ingested. Status
+mapping is:
+
+| Cargo status | Slash status |
+| --- | --- |
+| `failed` | `failed` |
+| `ignored` | `skipped` |
+| Any other or missing value | `passed` |
+
+`exec_time` is interpreted as seconds and rounded to milliseconds. Slash uses
+`ci_provider: "cargo"` and generates a `cargo/<uuid>` run reference.
+
+## POST `/v1/test-engine/upload/vitest`
+
+Accepts either a JSON array of tests or an object whose `tests` field is that
+array.
+
+```sh
+curl -X POST \
+  -H "Authorization: Bearer $SLASH_COLLECTION_TOKEN" \
+  -H "Content-Type: application/json" \
+  --data-binary @vitest-results.json \
+  https://slash.example.com/v1/test-engine/upload/vitest
+```
+
+```json
+{
+  "tests": [
+    {
+      "name": "src/cart.test.ts > adds an item",
+      "status": "passed",
+      "duration": 51,
+      "location": {
+        "file": "src/cart.test.ts",
+        "line": 7
+      }
+    }
+  ]
+}
+```
+
+`duration` or `duration_ms` is read as milliseconds. `failed`, `skipped`, and
+`errored` map directly; any other or missing status maps to `passed`. Entries
+without a non-empty `name` are ignored. Slash uses `ci_provider: "vitest"` and
+generates a `vitest/<uuid>` run reference.
+
+## GET `/v1/test-engine/quarantined`
+
+Returns names of tests in the token's suite whose current state is `muted` or
+`skipped`.
+
+```sh
+curl -H "Authorization: Bearer $SLASH_COLLECTION_TOKEN" \
+  https://slash.example.com/v1/test-engine/quarantined
+```
+
+Success: `200 OK` with a JSON array.
+
+```json
+[
+  "checkout::intermittent_gateway",
+  "payments::legacy_processor"
+]
+```
+
+Use this endpoint before running a suite when the CI workflow needs to skip or
+soft-fail tests already quarantined by Slash.

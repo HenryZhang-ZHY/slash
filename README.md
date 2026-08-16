@@ -21,19 +21,22 @@ args:
 
 ## Getting started
 
-See [docs/user/getting-started.md](docs/user/getting-started.md), or copy the
-working example in [`examples/`](examples/) straight into your repository.
+Read the [Slash documentation](https://henryzhang-zhy.github.io/slash/), or
+copy the working example in [`examples/`](examples/) straight into your
+repository. The documentation source lives in
+[`site/src/content/docs/`](site/src/content/docs/).
 
 ## Status
 
-Pre-release. Version 0.0.1 is implemented; the remaining step before tagging
-a release is demonstrating the design's success criteria end-to-end against
-a live GitHub App on a real repository (see
-[docs/user/limitations.md](docs/user/limitations.md)).
+In development. Command dispatch, permission grants, the web console, and the
+Test Engine (test result collection, flaky detection, and auto-quarantine)
+are implemented. The remaining step is demonstrating the design's success
+criteria end-to-end against a live GitHub App on a real repository (see
+[site/src/content/docs/limitations.mdx](site/src/content/docs/limitations.mdx)).
 
 - [Product & technical spec](docs/design/0.0.1-spec.md)
 - [Implementation plan](docs/design/0.0.1-implementation-plan.md)
-- [User documentation](docs/user/)
+- [User documentation](site/src/content/docs/)
 
 ## License
 
