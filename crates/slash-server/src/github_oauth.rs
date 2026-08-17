@@ -20,8 +20,8 @@ use axum::http::StatusCode;
 use axum::http::header::{HeaderValue, SET_COOKIE};
 use axum::response::{IntoResponse, Response};
 use base64::Engine;
-use hmac::{Hmac, Mac};
 use hmac::digest::KeyInit;
+use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use uuid::Uuid;
@@ -180,7 +180,10 @@ pub async fn handle_github_callback(
     // Fetch the authenticated user's GitHub profile.
     let gh_user_resp = http
         .get(GITHUB_USERINFO_URL)
-        .header("authorization", format!("Bearer {}", token_data.access_token))
+        .header(
+            "authorization",
+            format!("Bearer {}", token_data.access_token),
+        )
         .header("user-agent", "slash-server")
         .send()
         .await;
@@ -195,12 +198,6 @@ pub async fn handle_github_callback(
     let github_id = gh_user.id;
     let github_login = gh_user.login;
 
-    let redirect_to = if state_claims.redirect.is_empty() {
-        "/onboarding".to_string()
-    } else {
-        state_claims.redirect
-    };
-
     // Branch on mode.
     match state_claims.mode.as_str() {
         "link" => {
@@ -209,11 +206,22 @@ pub async fn handle_github_callback(
                 Some(id) => id,
                 None => return api_error(StatusCode::UNAUTHORIZED, "missing user context"),
             };
-            if link_github_user(&state.pool, user_id, github_id, &github_login).await.is_err() {
-                return api_error(StatusCode::INTERNAL_SERVER_ERROR, "could not link github account");
+            if link_github_user(&state.pool, user_id, github_id, &github_login)
+                .await
+                .is_err()
+            {
+                return api_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "could not link github account",
+                );
             }
             // Redirect without issuing a new session cookie (user is already
             // authenticated in the browser).
+            let redirect_to = if state_claims.redirect.is_empty() {
+                "/settings?github=linked".to_string()
+            } else {
+                state_claims.redirect
+            };
             let mut resp = axum::response::Redirect::to(&redirect_to).into_response();
             clear_state_cookie(&mut resp);
             resp
@@ -225,14 +233,40 @@ pub async fn handle_github_callback(
                 .email
                 .unwrap_or_else(|| format!("{github_id}+{github_login}@users.noreply.github.com"));
 
-            let user_id = match upsert_github_user(&state.pool, github_id, &github_login, &email, &display_name).await {
+            let user_id = match upsert_github_user(
+                &state.pool,
+                github_id,
+                &github_login,
+                &email,
+                &display_name,
+            )
+            .await
+            {
                 Ok(id) => id,
-                Err(_) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, "could not create account"),
+                Err(_) => {
+                    return api_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "could not create account",
+                    );
+                }
             };
 
             let token = match auth::sign_token(&state.auth_secret, user_id) {
                 Ok(t) => t,
-                Err(_) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, "could not create session"),
+                Err(_) => {
+                    return api_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "could not create session",
+                    );
+                }
+            };
+
+            // Existing users with teams go to the dashboard; new users
+            // without any team are sent to onboarding.
+            let redirect_to = if user_has_teams(&state.pool, user_id).await {
+                "/".to_string()
+            } else {
+                "/onboarding".to_string()
             };
 
             let mut resp = axum::response::Redirect::to(&redirect_to).into_response();
@@ -257,7 +291,9 @@ async fn start_github_oauth(
         None => return api_error(StatusCode::NOT_FOUND, "github login is not configured"),
     };
 
-    let axum::http::request::Parts { uri: _, headers, .. } = parts;
+    let axum::http::request::Parts {
+        uri: _, headers, ..
+    } = parts;
 
     // Determine the callback base URL: prefer the configured value, fall
     // back to the request's Host header.
@@ -314,21 +350,14 @@ fn sign_state(
         redirect: redirect.to_string(),
         user_id,
     };
-    let payload_json =
-        serde_json::to_string(&claims).map_err(|_| auth::AuthError::Encode)?;
-    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .encode(payload_json.as_bytes());
+    let payload_json = serde_json::to_string(&claims).map_err(|_| auth::AuthError::Encode)?;
+    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload_json.as_bytes());
     let mac = hmac(secret, payload.as_bytes());
     Ok(format!("{payload}.{mac}"))
 }
 
-fn verify_state(
-    secret: &AuthSecret,
-    token: &str,
-) -> Result<StateClaims, auth::AuthError> {
-    let (payload, mac_str) = token
-        .split_once('.')
-        .ok_or(auth::AuthError::InvalidToken)?;
+fn verify_state(secret: &AuthSecret, token: &str) -> Result<StateClaims, auth::AuthError> {
+    let (payload, mac_str) = token.split_once('.').ok_or(auth::AuthError::InvalidToken)?;
     let expected = hmac(secret, payload.as_bytes());
     let actual_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(mac_str)
@@ -342,8 +371,8 @@ fn verify_state(
     let payload_json = base64::engine::general_purpose::URL_SAFE_NO_PAD
         .decode(payload)
         .map_err(|_| auth::AuthError::InvalidToken)?;
-    let claims: StateClaims = serde_json::from_slice(&payload_json)
-        .map_err(|_| auth::AuthError::InvalidToken)?;
+    let claims: StateClaims =
+        serde_json::from_slice(&payload_json).map_err(|_| auth::AuthError::InvalidToken)?;
     if claims.exp < now_secs() {
         return Err(auth::AuthError::ExpiredToken);
     }
@@ -352,8 +381,7 @@ fn verify_state(
 
 fn hmac(secret: &AuthSecret, data: &[u8]) -> String {
     #[allow(clippy::expect_used)]
-    let mut mac =
-        HmacSha256::new_from_slice(secret.0.as_bytes()).expect("HMAC accepts any key");
+    let mut mac = HmacSha256::new_from_slice(secret.0.as_bytes()).expect("HMAC accepts any key");
     mac.update(data);
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
 }
@@ -369,9 +397,7 @@ fn now_secs() -> u64 {
 
 fn set_session_and_clear_state_cookie(resp: &mut Response, token: &str) {
     let session_str = auth::set_cookie_value(token);
-    let state_str = format!(
-        "{STATE_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"
-    );
+    let state_str = format!("{STATE_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0");
     #[allow(clippy::expect_used)]
     let combined = HeaderValue::from_str(&format!("{session_str}, {state_str}"))
         .expect("Set-Cookie value is ASCII");
@@ -399,12 +425,11 @@ async fn upsert_github_user(
     display_name: &str,
 ) -> Result<Uuid, sqlx::Error> {
     // 1. Existing user linked to this GitHub account.
-    if let Some(id) = sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM users WHERE github_user_id = $1",
-    )
-    .bind(github_id)
-    .fetch_optional(pool)
-    .await?
+    if let Some(id) =
+        sqlx::query_scalar::<_, Uuid>("SELECT id FROM users WHERE github_user_id = $1")
+            .bind(github_id)
+            .fetch_optional(pool)
+            .await?
     {
         sqlx::query("UPDATE users SET github_login = $1, updated_at = now() WHERE id = $2")
             .bind(github_login)
@@ -415,12 +440,10 @@ async fn upsert_github_user(
     }
 
     // 2. Existing user with a matching email — link GitHub identity.
-    if let Some(id) = sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM users WHERE email = $1",
-    )
-    .bind(email)
-    .fetch_optional(pool)
-    .await?
+    if let Some(id) = sqlx::query_scalar::<_, Uuid>("SELECT id FROM users WHERE email = $1")
+        .bind(email)
+        .fetch_optional(pool)
+        .await?
     {
         sqlx::query(
             "UPDATE users SET github_user_id = $1, github_login = $2, updated_at = now()
@@ -459,13 +482,12 @@ async fn link_github_user(
     github_login: &str,
 ) -> Result<(), sqlx::Error> {
     // Check that this GitHub account isn't already linked to someone else.
-    let existing: Option<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM users WHERE github_user_id = $1 AND id != $2",
-    )
-    .bind(github_id)
-    .bind(user_id)
-    .fetch_optional(pool)
-    .await?;
+    let existing: Option<Uuid> =
+        sqlx::query_scalar("SELECT id FROM users WHERE github_user_id = $1 AND id != $2")
+            .bind(github_id)
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await?;
     if existing.is_some() {
         // Return a unique-violation-like error; the caller maps it to 409.
         return Err(sqlx::Error::RowNotFound); // sentinel
@@ -481,6 +503,15 @@ async fn link_github_user(
     .execute(pool)
     .await?;
     Ok(())
+}
+
+/// Returns `true` when the user belongs to at least one team.
+async fn user_has_teams(pool: &sqlx::PgPool, user_id: Uuid) -> bool {
+    sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM team_members WHERE user_id = $1)")
+        .bind(user_id)
+        .fetch_one(pool)
+        .await
+        .unwrap_or(false)
 }
 
 // ---- Helpers ----------------------------------------------------------------
@@ -517,7 +548,14 @@ mod tests {
     #[test]
     fn state_link_sign_and_verify_roundtrip() {
         let uid = Uuid::new_v4();
-        let token = sign_state(&secret(), "link", "csrf-456", "/settings?github=linked", Some(uid)).unwrap();
+        let token = sign_state(
+            &secret(),
+            "link",
+            "csrf-456",
+            "/settings?github=linked",
+            Some(uid),
+        )
+        .unwrap();
         let claims = verify_state(&secret(), &token).unwrap();
         assert_eq!(claims.mode, "link");
         assert_eq!(claims.csrf, "csrf-456");
@@ -568,10 +606,7 @@ mod tests {
     #[test]
     fn extract_state_cookie_parses_correctly() {
         let header = "other=1; slash_github_state=thetoken; x=2";
-        assert_eq!(
-            extract_state_cookie(header).as_deref(),
-            Some("thetoken")
-        );
+        assert_eq!(extract_state_cookie(header).as_deref(), Some("thetoken"));
         assert_eq!(extract_state_cookie(""), None);
         assert_eq!(extract_state_cookie("no_state_here"), None);
     }
