@@ -145,11 +145,15 @@ pub async fn handle_github_callback(
         Some(t) => t,
         None => return api_error(StatusCode::UNAUTHORIZED, "missing state cookie"),
     };
+    // Verify the cookie's state token is valid (signature + expiry).
     let state_claims = match verify_state(&oauth.auth_secret, &state_token) {
         Ok(c) => c,
         Err(_) => return api_error(StatusCode::UNAUTHORIZED, "invalid or expired state"),
     };
-    if state_claims.csrf != params.state {
+    // GitHub returns the exact state parameter we sent — compare the full
+    // signed tokens, not the inner csrf UUID (which would never match the
+    // base64-encoded token GitHub echoes back).
+    if state_token != params.state {
         return api_error(StatusCode::UNAUTHORIZED, "state mismatch");
     }
 
