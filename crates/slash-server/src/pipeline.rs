@@ -694,7 +694,9 @@ mod tests {
         )
         .bind(org)
         .bind(installation_id)
-        .execute(pool).await.unwrap();
+        .execute(pool)
+        .await
+        .unwrap();
         let uid = uuid::Uuid::new_v4();
         sqlx::query(
             "INSERT INTO users (id, email, password_hash, display_name, status, github_user_id)
@@ -702,7 +704,9 @@ mod tests {
         )
         .bind(uid)
         .bind(github_user_id)
-        .execute(pool).await.unwrap();
+        .execute(pool)
+        .await
+        .unwrap();
         // org-scope write allow so any write-tier command in this install/new repo dispatches.
         sqlx::query(
             "INSERT INTO grants (id, organization_id, subject_type, subject_id, scope, repository, command, permission, effect)

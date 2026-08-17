@@ -116,14 +116,15 @@ pub async fn run() {
 
     let web_dir = std::env::var("SLASH_WEB_DIR").unwrap_or_else(|_| DEFAULT_WEB_DIR.to_string());
     let base_url = std::env::var("SLASH_BASE_URL").ok().map(Arc::from);
-    let github_oauth = config.github_client_id.as_ref().map(|client_id| {
-        github_oauth::OauthState {
+    let github_oauth = config
+        .github_client_id
+        .as_ref()
+        .map(|client_id| github_oauth::OauthState {
             client_id: Arc::from(client_id.as_str()),
             client_secret: Arc::from(config.github_client_secret.as_deref().unwrap_or_default()),
             base_url: base_url.clone(),
             auth_secret: auth::AuthSecret(Arc::from(config.auth_secret.as_str())),
-        }
-    });
+        });
     let state = AppState {
         pool: pool.clone(),
         metrics: metrics.clone(),

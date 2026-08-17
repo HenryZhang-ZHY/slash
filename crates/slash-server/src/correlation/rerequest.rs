@@ -7,7 +7,9 @@ use slash_github::{CheckRunUpdate, RepoClient, WebhookEvent};
 
 use crate::catalog::{CatalogError, CatalogOutcome, load_catalog, resolve_default_branch};
 use crate::invocations::{self, NewInvocation};
-use crate::pipeline::{PipelineContext, PipelineError, TOKEN_PERMISSIONS, record_catalog_load_metrics};
+use crate::pipeline::{
+    PipelineContext, PipelineError, TOKEN_PERMISSIONS, record_catalog_load_metrics,
+};
 
 /// Handles `check_run.rerequested` (spec §6.5): re-resolve the
 /// *rerequester's* permission — never the original invoker's — against the

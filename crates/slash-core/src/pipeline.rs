@@ -211,8 +211,7 @@ mod tests {
 
     #[test]
     fn stage_output_terminal_carries_reason() {
-        let output: StageOutput<()> =
-            StageOutput::Terminal(TerminalReason::PermissionDenied);
+        let output: StageOutput<()> = StageOutput::Terminal(TerminalReason::PermissionDenied);
         assert_eq!(
             output,
             StageOutput::Terminal(TerminalReason::PermissionDenied)
@@ -259,8 +258,14 @@ mod tests {
             login: "alice".into(),
             github_user_id: 1,
         };
-        assert!(gate.check(&[], &actor, "deploy", Permission::Write).is_granted());
-        assert!(gate.check(&[], &actor, "deploy", Permission::Admin).is_granted());
+        assert!(
+            gate.check(&[], &actor, "deploy", Permission::Write)
+                .is_granted()
+        );
+        assert!(
+            gate.check(&[], &actor, "deploy", Permission::Admin)
+                .is_granted()
+        );
     }
 
     /// A deny-all TrustGate (simulates an empty grants table).
@@ -285,7 +290,11 @@ mod tests {
             login: "alice".into(),
             github_user_id: 1,
         };
-        assert!(!gate.check(&[], &actor, "deploy", Permission::Write).is_granted());
+        assert!(
+            !gate
+                .check(&[], &actor, "deploy", Permission::Write)
+                .is_granted()
+        );
     }
 
     /// A failing TrustGate (simulates a DB error).

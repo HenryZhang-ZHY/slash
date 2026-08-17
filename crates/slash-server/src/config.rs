@@ -62,7 +62,11 @@ impl ServerConfig {
         // alone. Both client ID and secret must be present for OAuth to activate.
         let github_client_id = lookup("SLASH_GITHUB_CLIENT_ID");
         let github_client_secret = match github_client_id {
-            Some(_) => Some(resolve_secret(lookup, &mut read_file, "SLASH_GITHUB_CLIENT_SECRET_PATH")?),
+            Some(_) => Some(resolve_secret(
+                lookup,
+                &mut read_file,
+                "SLASH_GITHUB_CLIENT_SECRET_PATH",
+            )?),
             None => None,
         };
 
