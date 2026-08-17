@@ -13,6 +13,7 @@ pub mod correlation;
 pub mod db;
 pub mod deliveries;
 pub mod flaky;
+pub mod github_oauth;
 pub mod grants_admin;
 pub mod grants_loader;
 pub mod grants_trust_gate;
@@ -62,6 +63,8 @@ pub struct AppState {
     pub auth_secret: auth::AuthSecret,
     /// Root directory of the built SPA (`web/dist`).
     pub web_dir: Arc<str>,
+    /// GitHub OAuth config. `None` when OAuth login is not configured.
+    pub github_oauth: Option<github_oauth::OauthState>,
 }
 
 /// Boots the server: configuration, database, metrics, GitHub App, then the
@@ -112,12 +115,22 @@ pub async fn run() {
     };
 
     let web_dir = std::env::var("SLASH_WEB_DIR").unwrap_or_else(|_| DEFAULT_WEB_DIR.to_string());
+    let base_url = std::env::var("SLASH_BASE_URL").ok().map(Arc::from);
+    let github_oauth = config.github_client_id.as_ref().map(|client_id| {
+        github_oauth::OauthState {
+            client_id: Arc::from(client_id.as_str()),
+            client_secret: Arc::from(config.github_client_secret.as_deref().unwrap_or_default()),
+            base_url: base_url.clone(),
+            auth_secret: auth::AuthSecret(Arc::from(config.auth_secret.as_str())),
+        }
+    });
     let state = AppState {
         pool: pool.clone(),
         metrics: metrics.clone(),
         webhook_secret: Arc::from(config.webhook_secret.as_str()),
         auth_secret: auth::AuthSecret(Arc::from(config.auth_secret.as_str())),
         web_dir: Arc::from(web_dir.as_str()),
+        github_oauth,
     };
 
     tokio::spawn(worker::run(
@@ -155,6 +168,15 @@ pub async fn run() {
         .route("/api/auth/login", post(userapi::login))
         .route("/api/auth/logout", post(userapi::logout))
         .route("/api/auth/me", get(userapi::me))
+        .route("/api/auth/github", get(github_oauth::start_github_login))
+        .route(
+            "/api/auth/github/callback",
+            get(github_oauth::handle_github_callback),
+        )
+        .route(
+            "/api/auth/github/link",
+            post(github_oauth::start_github_link),
+        )
         .route("/api/teams", post(userapi::create_team))
         .route(
             "/api/grants",

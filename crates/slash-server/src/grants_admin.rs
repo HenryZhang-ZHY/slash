@@ -425,6 +425,7 @@ mod tests {
             webhook_secret: std::sync::Arc::from("test-webhook-secret"),
             auth_secret: crate::auth::AuthSecret(std::sync::Arc::from("test-auth-secret")),
             web_dir: std::sync::Arc::from(""),
+            github_oauth: None,
         }
     }
 

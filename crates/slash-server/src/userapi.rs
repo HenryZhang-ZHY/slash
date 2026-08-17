@@ -85,7 +85,7 @@ pub struct AuthPayload {
 
 // ---- response helpers -----------------------------------------------------
 
-fn set_token_cookie(resp: &mut axum::response::Response, token: &str) {
+pub fn set_token_cookie(resp: &mut axum::response::Response, token: &str) {
     // Our Set-Cookie values are fixed, ASCII, attacker-non-influenced.
     #[allow(clippy::expect_used)]
     let value = HeaderValue::from_str(&auth::set_cookie_value(token))
@@ -500,6 +500,7 @@ mod tests {
             webhook_secret: std::sync::Arc::from("test-webhook-secret"),
             auth_secret: crate::auth::AuthSecret(std::sync::Arc::from("test-auth-secret")),
             web_dir: std::sync::Arc::from(""),
+            github_oauth: None,
         }
     }
 

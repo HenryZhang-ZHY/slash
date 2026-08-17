@@ -119,6 +119,7 @@ mod tests {
             webhook_secret: Arc::from(SECRET),
             auth_secret: crate::auth::AuthSecret(Arc::from(SECRET)),
             web_dir: Arc::from("."),
+            github_oauth: None,
         })
     }
 
