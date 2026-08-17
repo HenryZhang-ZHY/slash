@@ -38,7 +38,10 @@ const headerPath = Astro.url.pathname;
 <header class="sticky top-0 z-30 border-b border-border bg-card/80 backdrop-blur-lg">
   <div class="mx-auto flex items-center justify-between h-14 px-4 lg:px-6">
     <div class="flex items-center gap-3">
-      <a href={homeHref} class="group">
+      <a href={homeHref} class="group flex items-center gap-2">
+        <svg class="w-6 h-6 shrink-0" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <polygon class="fill-foreground" points="148,20 198,20 108,236 58,236" />
+        </svg>
         <span class="font-semibold text-sm text-foreground group-hover:text-primary transition-colors">
           {config.title}
         </span>

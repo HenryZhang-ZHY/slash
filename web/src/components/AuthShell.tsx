@@ -1,5 +1,4 @@
 import { useTranslation } from 'react-i18next'
-import { Slash } from 'lucide-react'
 
 import { LanguageSwitcher } from '@/components/LanguageSwitcher'
 
@@ -18,9 +17,9 @@ export function AuthShell({
     <div className="grid min-h-screen bg-white lg:grid-cols-[minmax(320px,0.75fr)_minmax(520px,1.25fr)]">
       <aside className="hidden flex-col justify-between border-r bg-[#f3f3f3] p-10 lg:flex">
         <div className="flex items-center gap-3">
-          <div className="flex size-9 items-center justify-center bg-black text-white">
-            <Slash className="size-5" strokeWidth={2.4} />
-          </div>
+          <svg className="size-9" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <polygon fill="white" points="148,20 198,20 108,236 58,236" />
+          </svg>
           <div>
             <div className="text-sm font-semibold">{t('app.slash')}</div>
             <div className="text-xs text-muted-foreground">{t('auth.controlPlane')}</div>
@@ -45,9 +44,9 @@ export function AuthShell({
         <div className="w-full max-w-sm">
           <div className="mb-10 flex items-center justify-between lg:flex-col lg:items-start lg:gap-3">
             <div className="flex items-center gap-2">
-              <div className="flex size-8 items-center justify-center bg-black text-white lg:hidden">
-                <Slash className="size-4" />
-              </div>
+            <svg className="size-8 lg:hidden" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <polygon fill="white" points="148,20 198,20 108,236 58,236" />
+            </svg>
               <span className="text-sm font-semibold">{t('app.slash')}</span>
             </div>
             <LanguageSwitcher />
