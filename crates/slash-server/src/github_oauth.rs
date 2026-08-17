@@ -236,11 +236,6 @@ pub async fn handle_github_callback(
     let github_id = gh_user.id;
     let github_login = gh_user.login;
 
-    let redirect_to = if state_claims.redirect.is_empty() {
-        "/onboarding".to_string()
-    } else {
-        state_claims.redirect
-    };
 
     // Branch on mode.
     match state_claims.mode.as_str() {
@@ -255,6 +250,11 @@ pub async fn handle_github_callback(
             }
             // Redirect without issuing a new session cookie (user is already
             // authenticated in the browser).
+            let redirect_to = if state_claims.redirect.is_empty() {
+                "/settings?github=linked".to_string()
+            } else {
+                state_claims.redirect
+            };
             let mut resp = axum::response::Redirect::to(&redirect_to).into_response();
             clear_state_cookie(&mut resp);
             resp
@@ -274,6 +274,14 @@ pub async fn handle_github_callback(
             let token = match auth::sign_token(&state.auth_secret, user_id) {
                 Ok(t) => t,
                 Err(_) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, "could not create session"),
+            };
+
+            // Existing users with teams go to the dashboard; new users
+            // without any team are sent to onboarding.
+            let redirect_to = if user_has_teams(&state.pool, user_id).await {
+                "/".to_string()
+            } else {
+                "/onboarding".to_string()
             };
 
             let mut resp = axum::response::Redirect::to(&redirect_to).into_response();
@@ -523,6 +531,18 @@ async fn link_github_user(
     .await?;
     Ok(())
 }
+
+/// Returns `true` when the user belongs to at least one team.
+async fn user_has_teams(pool: &sqlx::PgPool, user_id: Uuid) -> bool {
+    sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM team_members WHERE user_id = $1)",
+    )
+    .bind(user_id)
+    .fetch_one(pool)
+    .await
+    .unwrap_or(false)
+}
+
 
 // ---- Helpers ----------------------------------------------------------------
 
