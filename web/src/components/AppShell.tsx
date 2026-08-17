@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { FlaskConical, LayoutDashboard, LogOut, Settings, Shield, Slash, Users } from 'lucide-react'
+import { FlaskConical, LayoutDashboard, LogOut, Settings, Shield, Users } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 
@@ -80,9 +80,9 @@ export function AppShell() {
     <div className="min-h-screen bg-[#f7f7f7] md:grid md:grid-cols-[232px_minmax(0,1fr)]">
       <aside className="sticky top-0 hidden h-screen flex-col border-r bg-[#f3f3f3] md:flex">
         <div className="flex h-14 items-center gap-2.5 border-b px-4">
-          <div className="flex size-7 items-center justify-center bg-black text-white">
-            <Slash className="size-4" strokeWidth={2.4} />
-          </div>
+          <svg className="size-7" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <polygon fill="white" points="148,20 198,20 108,236 58,236" />
+          </svg>
           <span className="text-sm font-semibold">{t('app.slash')}</span>
         </div>
 
@@ -137,9 +137,9 @@ export function AppShell() {
       <div className="min-w-0 bg-white">
         <header className="sticky top-0 z-20 flex h-14 items-center justify-between border-b bg-white/95 px-4 backdrop-blur md:px-6">
           <div className="flex items-center gap-2 text-sm">
-            <div className="flex size-7 items-center justify-center bg-black text-white md:hidden">
-              <Slash className="size-4" />
-            </div>
+            <svg className="size-7 md:hidden" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <polygon fill="white" points="148,20 198,20 108,236 58,236" />
+            </svg>
             <span className="text-muted-foreground">{t('app.slash')}</span>
             <span className="text-border">/</span>
             <span className="font-medium">{activeLabel}</span>
