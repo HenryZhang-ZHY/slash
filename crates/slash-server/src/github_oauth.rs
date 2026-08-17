@@ -143,19 +143,32 @@ pub async fn handle_github_callback(
         .and_then(extract_state_cookie);
     let state_token = match state_token {
         Some(t) => t,
-        None => return api_error(StatusCode::UNAUTHORIZED, "missing state cookie"),
+        None => {
+            tracing::error!("github oauth: missing state cookie");
+            return api_error(StatusCode::UNAUTHORIZED, "missing state cookie");
+        }
     };
     // Verify the cookie's state token is valid (signature + expiry).
     let state_claims = match verify_state(&oauth.auth_secret, &state_token) {
         Ok(c) => c,
-        Err(_) => return api_error(StatusCode::UNAUTHORIZED, "invalid or expired state"),
+        Err(e) => {
+            tracing::error!(?e, "github oauth: invalid or expired state");
+            return api_error(StatusCode::UNAUTHORIZED, "invalid or expired state");
+        }
     };
     // GitHub returns the exact state parameter we sent — compare the full
     // signed tokens, not the inner csrf UUID (which would never match the
     // base64-encoded token GitHub echoes back).
     if state_token != params.state {
+        tracing::error!(
+            cookie_len = state_token.len(),
+            query_len = params.state.len(),
+            "github oauth: state mismatch"
+        );
         return api_error(StatusCode::UNAUTHORIZED, "state mismatch");
     }
+
+    tracing::info!(mode = %state_claims.mode, "github oauth: state verified, exchanging code");
 
     // Exchange authorization code for access token.
     let http = reqwest::Client::new();
@@ -171,15 +184,26 @@ pub async fn handle_github_callback(
         .await;
     let token_resp = match token_resp {
         Ok(r) => r,
-        Err(_) => return api_error(StatusCode::BAD_GATEWAY, "failed to reach github"),
+        Err(e) => {
+            tracing::error!(?e, "github oauth: failed to send token exchange request");
+            return api_error(StatusCode::BAD_GATEWAY, "failed to reach github");
+        }
     };
-    if !token_resp.status().is_success() {
+    let token_status = token_resp.status();
+    if !token_status.is_success() {
+        let body = token_resp.text().await.unwrap_or_default();
+        tracing::error!(status = %token_status, body = %body, "github oauth: token exchange failed");
         return api_error(StatusCode::BAD_GATEWAY, "github token exchange failed");
     }
     let token_data: GithubTokenResponse = match token_resp.json().await {
         Ok(d) => d,
-        Err(_) => return api_error(StatusCode::BAD_GATEWAY, "invalid github token response"),
+        Err(e) => {
+            tracing::error!(?e, "github oauth: failed to parse token response");
+            return api_error(StatusCode::BAD_GATEWAY, "invalid github token response");
+        }
     };
+
+    tracing::info!("github oauth: token received, fetching user info");
 
     // Fetch the authenticated user's GitHub profile.
     let gh_user_resp = http
@@ -189,12 +213,23 @@ pub async fn handle_github_callback(
         .send()
         .await;
     let gh_user: GithubUser = match gh_user_resp {
-        Ok(r) => match r.json().await {
-            Ok(u) => u,
-            Err(_) => return api_error(StatusCode::BAD_GATEWAY, "invalid github user response"),
-        },
-        Err(_) => return api_error(StatusCode::BAD_GATEWAY, "failed to reach github"),
+        Ok(r) => {
+            let user_status = r.status();
+            match r.json().await {
+                Ok(u) => u,
+                Err(e) => {
+                    tracing::error!(?e, status = %user_status, "github oauth: failed to parse user info");
+                    return api_error(StatusCode::BAD_GATEWAY, "invalid github user response");
+                }
+            }
+        }
+        Err(e) => {
+            tracing::error!(?e, "github oauth: failed to send user info request");
+            return api_error(StatusCode::BAD_GATEWAY, "failed to reach github");
+        }
     };
+
+    tracing::info!(github_id = gh_user.id, login = %gh_user.login, "github oauth: user info fetched");
 
     let github_id = gh_user.id;
     let github_login = gh_user.login;
