@@ -198,7 +198,9 @@ pub async fn handle_github_callback(
     let token_data: GithubTokenResponse = match token_resp.json().await {
         Ok(d) => d,
         Err(e) => {
-            tracing::error!(?e, "github oauth: failed to parse token response");
+            // GitHub may return 200 with an error body — re-fetch won't work
+            // since the body is consumed, but the error message is enough.
+            tracing::error!(?e, "github oauth: failed to parse token response (GitHub may have returned an error)");
             return api_error(StatusCode::BAD_GATEWAY, "invalid github token response");
         }
     };
