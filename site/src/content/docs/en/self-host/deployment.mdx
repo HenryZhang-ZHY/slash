@@ -51,6 +51,9 @@ a bad migration never leaves the process half-started.
 | `SLASH_GITHUB_APP_ID` | yes | The GitHub App's numeric ID. |
 | `SLASH_GITHUB_PRIVATE_KEY_PATH` | yes | Path to the App's private key **file** (not the key inline) — mount it read-only, mode `0400` if your platform supports setting it. |
 | `SLASH_AUTH_SECRET_PATH` | yes | Path to a file containing the HMAC session-signing secret, read byte-for-byte. File-only, like the other secrets. |
+| `SLASH_GITHUB_CLIENT_ID` | no | GitHub OAuth App client ID. Enables "Sign in with GitHub" on the login page. |
+| `SLASH_GITHUB_CLIENT_SECRET_PATH` | no | Path to a file containing the GitHub OAuth App client secret (file-only, same convention as other secrets). Required when `SLASH_GITHUB_CLIENT_ID` is set. |
+| `SLASH_BASE_URL` | no | Public base URL of the server (e.g. `https://slash.example.com`). Used to construct the OAuth redirect URI. Falls back to the request's `Host` header when unset. |
 | `SLASH_WEB_DIR` | no | Root directory of the built web console SPA. Defaults to `web/dist` (relative to the server's working directory). |
 | `RUST_LOG` | no | `tracing_subscriber` env-filter syntax, e.g. `info` or `slash_server=debug`. |
 
@@ -70,13 +73,59 @@ environment variable — only a file path — and the config struct has no
 `Debug`/`Display` implementation, so neither the webhook secret nor the
 database URL (which may embed a password) can leak via a stray log line.
 
+### GitHub OAuth login (optional)
+
+Slash supports "Sign in with GitHub" via the OAuth 2.0 Authorization Code
+flow. When configured, a GitHub button appears on the login page; existing
+email/password accounts can link their GitHub identity from **Settings**.
+
+**Setup steps:**
+
+1. **Create a GitHub OAuth App** in your GitHub organization's
+   [Developer settings](https://github.com/organizations/YOUR_ORG/settings/applications/new):
+   - **Application name**: anything (e.g. `Slash`)
+   - **Homepage URL**: your Slash base URL (e.g. `https://slash.example.com`)
+   - **Authorization callback URL**: `{base_url}/api/auth/github/callback`
+     (must match exactly)
+2. Note the **Client ID** and generate a **Client Secret**.
+3. Set the environment variables:
+   ```sh
+   SLASH_GITHUB_CLIENT_ID=<client_id>
+   SLASH_GITHUB_CLIENT_SECRET_PATH=/run/secrets/github-oauth-secret
+   SLASH_BASE_URL=https://slash.example.com   # recommended
+   ```
+4. Store the client secret in the file (same byte-for-byte convention as
+   other secrets):
+   ```sh
+   echo -n 'ghp_xxxxxxxxxxxx' > /run/secrets/github-oauth-secret
+   chmod 0400 /run/secrets/github-oauth-secret
+   ```
+
+The login flow:
+
+- **New users**: clicking "Sign in with GitHub" creates a Slash account
+  linked to their GitHub identity. If the GitHub email matches an existing
+  account, the accounts are merged.
+- **Existing users**: sign in with email/password, then go to **Settings →
+  Connect GitHub** to bind their GitHub identity to their account.
+
+Both flows use a short-lived, HMAC-signed CSRF state token (10-minute TTL)
+stored in an HttpOnly cookie.
+
 ### Endpoints
 
-| Endpoint         | Purpose |
-|------------------|---------|
-| `POST /webhook`  | The GitHub App's webhook URL. |
-| `GET /healthz`   | Liveness check; always returns `200 ok` once the process is up. |
-| `GET /metrics`   | Prometheus text-format metrics — see below. |
+| Endpoint                       | Purpose |
+|--------------------------------|---------|
+| `POST /webhook`                | The GitHub App's webhook URL. |
+| `POST /api/auth/register`      | Create a new email/password account. |
+| `POST /api/auth/login`         | Sign in with email/password. |
+| `POST /api/auth/logout`        | Clear the session cookie. |
+| `GET /api/auth/me`             | Return the authenticated user and teams. |
+| `GET /api/auth/github`         | Initiate GitHub OAuth login (unauthenticated). |
+| `POST /api/auth/github/link`   | Initiate GitHub OAuth for account linking (authenticated). |
+| `GET /api/auth/github/callback`| GitHub OAuth callback (handles both login and link). |
+| `GET /healthz`                 | Liveness check; always returns `200 ok` once the process is up. |
+| `GET /metrics`                 | Prometheus text-format metrics — see below. |
 
 ## Observability
 

@@ -86,6 +86,19 @@ export default {
   'auth.status': '状态',
   'auth.operational': '正常运行',
   'auth.secureAccess': '安全工作区访问',
+  'auth.signInWithGitHub': '使用 GitHub 登录',
+  'auth.or': '或',
+
+  // Settings
+  'app.settings': '设置',
+  'settings.title': '设置',
+  'settings.subtitle': '管理你的账户和已连接的服务。',
+  'settings.profile': '个人资料',
+  'settings.displayName': '显示名称',
+  'settings.connectedAccounts': '已连接的账户',
+  'settings.githubDescription': '关联你的 GitHub 账户以使用单点登录。',
+  'settings.connectGitHub': '关联 GitHub',
+  'settings.githubLinkedSuccess': 'GitHub 账户已成功关联。',
 
   // Onboarding
   'onboard.readyTitle': '工作区已就绪',

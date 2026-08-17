@@ -16,6 +16,7 @@ import { testEngineApi, type TestSuiteSummary } from '@/lib/api'
 import { GrantsPage } from '@/pages/GrantsPage'
 import { LoginPage } from '@/pages/LoginPage'
 import { OnboardingPage } from '@/pages/OnboardingPage'
+import { SettingsPage } from '@/pages/SettingsPage'
 import { TestEnginePage } from '@/pages/TestEnginePage'
 
 function HomePage() {
@@ -119,6 +120,7 @@ export default function App() {
           <Route path="/" element={<HomePage />} />
           <Route path="/tests" element={<TestEnginePage />} />
           <Route path="/grants" element={<GrantsPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

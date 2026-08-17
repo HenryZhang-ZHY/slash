@@ -86,6 +86,19 @@ export default {
   'auth.status': 'Status',
   'auth.operational': 'Operational',
   'auth.secureAccess': 'Secure workspace access',
+  'auth.signInWithGitHub': 'Sign in with GitHub',
+  'auth.or': 'or',
+
+  // Settings
+  'app.settings': 'Settings',
+  'settings.title': 'Settings',
+  'settings.subtitle': 'Manage your account and connected services.',
+  'settings.profile': 'Profile',
+  'settings.displayName': 'Display name',
+  'settings.connectedAccounts': 'Connected accounts',
+  'settings.githubDescription': 'Link your GitHub account for single sign-on.',
+  'settings.connectGitHub': 'Connect GitHub',
+  'settings.githubLinkedSuccess': 'GitHub account linked successfully.',
 
   // Onboarding
   'onboard.readyTitle': 'Workspace ready',
