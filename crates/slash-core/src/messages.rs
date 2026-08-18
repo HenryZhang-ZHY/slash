@@ -66,7 +66,7 @@ pub fn config_error(details: &str) -> String {
 
 pub fn permission_denied(command: &str, required: &str) -> String {
     format!(
-        "You need at least `{required}` access to run `/{}`.",
+        "You need at least `{required}` GitHub repository access to run `/{}`.",
         escape_user_text(command).trim_matches('`')
     )
 }
@@ -116,7 +116,15 @@ pub fn check_run_summary(
 /// could not be resolved has no comment surface — this is used only for the
 /// check run itself when the stale/unknown case applies.
 pub fn rerequest_permission_denied(command: &str, required: &str) -> String {
-    format!("Re-run denied: requires at least `{required}` access to run `/{command}`.")
+    format!(
+        "Re-run denied: requires at least `{required}` GitHub repository access to run `/{command}`."
+    )
+}
+
+pub fn rerequest_private_collaborator_denied(command: &str) -> String {
+    format!(
+        "Re-run denied: only current collaborators may run `/{command}` in a private repository."
+    )
 }
 
 pub fn superseded() -> String {

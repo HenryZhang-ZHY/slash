@@ -8,6 +8,8 @@ increasing sequence** shared by every lane (org/user, test-engine):
 - `0005_test_engine.sql` — Test Engine.
 - `0006_org_users.sql` — org/user onboarding (users/organizations/teams/team_members).
 - `0007_org_grants.sql` — org/user grants (subject→scope→permission tier).
+- `0008`–`0014` — identity, repository, and Test Engine evolution.
+- `0015_drop_command_grants.sql` — remove Slash-local command authorization.
 
 ## Naming convention
 

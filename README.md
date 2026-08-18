@@ -28,7 +28,7 @@ repository. The documentation source lives in
 
 ## Status
 
-In development. Command dispatch, permission grants, the web console, and the
+In development. Command dispatch, GitHub-backed authorization, the web console, and the
 Test Engine (test result collection, flaky detection, and auto-quarantine)
 are implemented. The remaining step is demonstrating the design's success
 criteria end-to-end against a live GitHub App on a real repository (see

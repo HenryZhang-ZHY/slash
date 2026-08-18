@@ -5,84 +5,47 @@ sidebar:
   order: 4
 ---
 
-Command dispatch authorization runs through Slash's offline
-[grants](/en/grants/) model: who may invoke a command is decided locally from the
-`grants` table, deny-by-default, never by a live GitHub API lookup. This page
-describes the model, the tier semantics, and the remaining gates around it.
+GitHub repository access is the only source of truth for command authorization.
+Invoking a command does not require a Slash account, team, or separate grant.
+Slash checks the actor's current collaborator role for every invocation and
+every check-run re-request.
 
-## The two pieces
+## Private repositories
 
-Every command declares a `permission` in its `.slash/*.yml` file: one of
-`read`, `write`, or `admin` (default `write` if omitted). A grant (in the
-application database) says who — a user or a team — may operate at which tier
-on which command, repository, or organization.
+Any current collaborator with `read` access or higher may run every configured
+command. Slash ignores the command's `permission` field for private repositories:
+access to the repository itself is the trust boundary.
 
-At invocation time, Slash:
+Removing a collaborator in GitHub immediately removes their command access.
+There is no corresponding setting in the Slash web console.
 
-1. resolves the commenter to a Slash user and the repository to its
-   organization,
-2. loads the actor's grants (direct user grants plus their team grants),
-3. and allows the dispatch only if the **highest allowed tier across matching
-   grants is at or above** the command's declared `permission`.
+## Public repositories
 
-See [Grants](/en/grants/) for the full model: scopes, deny-first semantics, and
-fail-closed behavior.
+For public repositories, each `.slash/*.yml` command declares a minimum
+`permission`: `read`, `write`, or `admin`. The default is `write`.
 
-## Why `read` exists but is rarely the floor
+| Command permission | Accepted GitHub roles |
+| --- | --- |
+| `read` | read, triage, write, maintain, admin |
+| `write` | write, maintain, admin |
+| `admin` | admin |
 
-The `permission` tiers are `read`, `write`, and `admin`. A command that
-dispatches a workflow runs code from the PR's head branch with your
-repository's own secrets, so most commands are `write` or higher: only users
-with push access can create branches in the repository at all, and allowing a
-sub-write tier to invoke a command would silently undermine that trust
-boundary — someone without push access could get their own branch's code
-executed with your production credentials.
-
-A `read`-tier command is meaningful only when it does *not* run head-branch
-code with repository secrets. Choose the floor for each command deliberately:
-the grant model makes the effective requirement explicit at a glance.
+Slash reads GitHub's `role_name` and falls back to the detailed permission
+booleans for custom roles. It does not authorize from the webhook's
+`author_association` field.
 
 ## Fail closed
 
-If anything in the grant path doesn't cleanly resolve — a database error, an
-unparseable grant row, a non-onboarded actor, or an unresolvable
-organization — the command is **denied**, unconditionally. There is no
-fallback to any other authorization source: missing grant, error, and explicit
-deny are all the same verdict.
-
-## What forks change
-
-Fork PRs are not supported (see [known limitations](/en/limitations/)):
-`workflow_dispatch` cannot target a ref on a fork, so there is nothing to
-dispatch even if grant resolution succeeds. Slash detects this and comments
-once per PR rather than silently doing nothing.
+If repository visibility or collaborator access cannot be verified, Slash
+denies the command. A failed GitHub lookup gets at most a 😕 reaction and no
+comment because the actor's ability to participate in the repository is unknown.
 
 ## Re-running
 
-Clicking **Re-run** on a check run re-resolves the *rerequester's* current
-grant — not the original invoker's — against the command's *current*
-configuration. A user whose grant has since been downgraded or removed gets a
-denial on the check run itself, with no new comment; a re-run is never a way
-to bypass the original gate.
+Clicking **Re-run** checks the re-requester's current GitHub role—not the
+original invoker's—against the repository's current visibility and the
+command's current configuration. It cannot preserve access that GitHub has
+since removed.
 
-## History: the pre-grant collaborator-role model
-
-Before grants, authorization compared the commenter's GitHub repository role
-against the command's `permission`. It is retained here only for context.
-
-The old gate resolved the commenter's role via
-`GET /repos/{owner}/{repo}/collaborators/{username}/permission`, reading the
-response's `role_name` field specifically — not the top-level `permission`
-field, which collapses `maintain` into `write` and `triage` into `read` and
-would otherwise make a `maintain`-gated command passable by plain write access.
-The gate then dispatched only if the actual role was **at or above** the
-command's declared level. The old tiers were `write | maintain | admin`;
-`read` and `triage` were rejected entirely, because a dispatching command runs
-head-branch workflow code with repository secrets. In this model, `write` was
-the floor — the current `read` tier did not exist.
-
-The old model also failed closed: any non-success outcome — a 5xx, 403, 404,
-timeout, or unparseable role — was a **deny**, with at most a best-effort 😕
-reaction and never a comment, since a resolution failure meant the commenter's
-trust level was genuinely unknown. That fail-closed principle carries forward
-unchanged into the grants model.
+Fork pull requests remain unsupported; Slash cannot dispatch a workflow to a
+ref owned by another repository.

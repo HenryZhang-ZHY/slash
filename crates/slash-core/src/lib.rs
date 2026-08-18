@@ -7,7 +7,6 @@
 
 mod antispam;
 mod checks;
-mod grants;
 mod invocation;
 pub mod messages;
 mod permission;
@@ -17,15 +16,9 @@ mod test_token;
 
 pub use antispam::{TokenBucket, edit_distance, should_suggest_commands};
 pub use checks::{CheckConclusion, map_conclusion};
-pub use grants::{
-    Decision, GrantEffect, GrantRow, GrantScope, decide, resolve_grant_rows, tier_meets,
-};
 pub use invocation::InvocationStatus;
-pub use permission::{ResolvedRole, meets};
-pub use pipeline::{
-    Actor, PipelineContext, PipelineStage, ResolvedGrant, StageOutput, TerminalReason, TrustGate,
-    TrustOutcome,
-};
+pub use permission::{ResolvedRole, authorizes_command, meets};
+pub use pipeline::{PipelineContext, PipelineStage, StageOutput, TerminalReason};
 pub use test_flaky::{
     FLAKY_MIN_EXECUTIONS, ObservedStatus, has_fail_then_pass, is_flaky, recent_contains_failure,
 };

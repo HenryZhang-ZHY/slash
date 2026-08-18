@@ -1,19 +1,13 @@
-//! Pipeline stage decomposition (spec §5 guard order, redesign R2).
+//! Pipeline stage decomposition (spec §5 guard order).
 //!
 //! Each stage matches one guard in spec §5's ordering:
-//! `SyntacticGuard → TrustGate → PRStateGuard → CatalogLoad →
+//! `SyntacticGuard → CollaboratorLookup → PRStateGuard → CatalogLoad →
 //! CommandMatch → PermissionGate → ArgBind → ClaimGate → Dispatch`.
 //!
 //! Stages are pure types — the trait and its output types live here in
 //! `slash-core` (IO-free). The actual IO (GitHub API, Postgres) is
 //! injected by `slash-server` through the context and trait impls.
 //!
-//! The `TrustGate` stage is the grants injection point (§5.2 redesign):
-//! it resolves `(actor, repo, command_permission) → Granted | Denied`,
-//! with fail-closed semantics (any error = Denied).
-
-use slash_config::Permission;
-
 // ---------------------------------------------------------------------------
 // Pipeline context
 // ---------------------------------------------------------------------------
@@ -26,6 +20,8 @@ pub struct PipelineContext {
     pub installation_id: u64,
     /// The repository's numeric id.
     pub repository_id: u64,
+    /// Whether GitHub reports the repository as private.
+    pub repository_is_private: bool,
     /// The repository owner (org or user).
     pub owner: String,
     /// The repository name.
@@ -71,8 +67,6 @@ pub enum TerminalReason {
     UsageError,
     /// The PR head moved between comment capture and dispatch.
     HeadMoved,
-    /// Grants say no — the actor has no matching grant for this repo+command.
-    DeniedByGrants,
     /// An internal error (DB, API) that should be surfaced as a check-run
     /// failure, not a user comment.
     InternalError,
@@ -103,87 +97,6 @@ pub trait PipelineStage<Input, Output> {
 }
 
 // ---------------------------------------------------------------------------
-// TrustGate: the grants injection point  (R2 key deliverable)
-// ---------------------------------------------------------------------------
-
-/// The actor identity that `TrustGate` authorizes.
-#[derive(Debug, Clone)]
-pub struct Actor {
-    /// The GitHub login of the comment author.
-    pub login: String,
-    /// Numeric GitHub user id, for identity mapping.
-    pub github_user_id: u64,
-}
-
-/// A pre-loaded grant row (IO resolved before the pipeline runs).
-/// The async `load_for_repo` in `slash-server` produces these; the
-/// sync `TrustGate::check` consumes them via `slash_core::grants::decide`.
-#[derive(Debug, Clone)]
-pub struct ResolvedGrant {
-    pub scope: crate::grants::GrantScope,
-    pub effect: crate::grants::GrantEffect,
-    pub permission: Permission,
-    /// Command name for command-scoped grants.
-    /// `None` means org or repository scope.
-    pub command: Option<String>,
-}
-
-/// Outcome of a `TrustGate` check.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TrustOutcome {
-    /// The actor is authorized at the given tier for this repo+command.
-    Granted,
-    /// The actor does not have a matching grant.
-    Denied,
-    /// An error occurred during resolution — must be treated as Denied
-    /// (fail-closed, spec §5.2).
-    Error(String),
-}
-
-impl TrustOutcome {
-    /// fail-closed: an error during resolution is a deny.
-    pub fn is_granted(&self) -> bool {
-        matches!(self, Self::Granted)
-    }
-}
-
-/// The `TrustGate` stage: receives **pre-loaded** grants (loaded async
-/// by the server before the pipeline runs) and performs a **pure, sync**
-/// authorization decision via `slash_core::grants::decide`.
-///
-/// # Design (R2, Option B)
-///
-/// TrustGate is sync and IO-free. The async `load_for_repo` happens at
-/// the pipeline entry point in `slash-server`; the resolved grants are
-/// passed into `check` as `&[ResolvedGrant]`. This keeps the stage
-/// testable without a database and follows spec §7.1 "pure core, IO
-/// at edges".
-///
-/// # Fail-closed contract
-///
-/// Any `TrustOutcome::Error` must be treated as `Denied` by the caller.
-/// The trait doc encodes this invariant.
-pub trait TrustGate {
-    /// Check whether `actor` is authorized to invoke `command` (which
-    /// requires `command_permission`) given the pre-loaded `grants`.
-    ///
-    /// The implementation delegates to `slash_core::grants::decide`.
-    ///
-    /// # Errors
-    ///
-    /// Returns `TrustOutcome::Error(msg)` on any infrastructure failure
-    /// during the pure decision (invalid grant data, etc.). Callers must
-    /// treat `Error` identically to `Denied` — spec §5.2 fail-closed.
-    fn check(
-        &self,
-        grants: &[ResolvedGrant],
-        actor: &Actor,
-        command: &str,
-        command_permission: Permission,
-    ) -> TrustOutcome;
-}
-
-// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -198,7 +111,7 @@ mod tests {
         let reasons = [
             TerminalReason::NotACommand,
             TerminalReason::UnknownAuthor,
-            TerminalReason::DeniedByGrants,
+            TerminalReason::PermissionDenied,
         ];
         assert_eq!(reasons.len(), 3);
     }
@@ -219,108 +132,14 @@ mod tests {
     }
 
     #[test]
-    fn trust_outcome_fail_closed() {
-        assert!(TrustOutcome::Granted.is_granted());
-        assert!(!TrustOutcome::Denied.is_granted());
-        assert!(!TrustOutcome::Error("db down".into()).is_granted());
-    }
-
-    #[test]
     fn context_is_cloneable() {
         let ctx = PipelineContext {
             installation_id: 1,
             repository_id: 100,
+            repository_is_private: true,
             owner: "acme".into(),
             repo: "widgets".into(),
         };
         let _clone = ctx.clone();
-    }
-
-    /// A trivial no-op TrustGate for use in tests that don't need grants.
-    struct AllowAllTrustGate;
-
-    impl TrustGate for AllowAllTrustGate {
-        fn check(
-            &self,
-            _grants: &[ResolvedGrant],
-            _actor: &Actor,
-            _command: &str,
-            _command_permission: Permission,
-        ) -> TrustOutcome {
-            TrustOutcome::Granted
-        }
-    }
-
-    #[test]
-    fn allow_all_trust_gate_grants_everyone() {
-        let gate = AllowAllTrustGate;
-        let actor = Actor {
-            login: "alice".into(),
-            github_user_id: 1,
-        };
-        assert!(
-            gate.check(&[], &actor, "deploy", Permission::Write)
-                .is_granted()
-        );
-        assert!(
-            gate.check(&[], &actor, "deploy", Permission::Admin)
-                .is_granted()
-        );
-    }
-
-    /// A deny-all TrustGate (simulates an empty grants table).
-    struct DenyAllTrustGate;
-
-    impl TrustGate for DenyAllTrustGate {
-        fn check(
-            &self,
-            _grants: &[ResolvedGrant],
-            _actor: &Actor,
-            _command: &str,
-            _command_permission: Permission,
-        ) -> TrustOutcome {
-            TrustOutcome::Denied
-        }
-    }
-
-    #[test]
-    fn deny_all_trust_gate_denies_everyone() {
-        let gate = DenyAllTrustGate;
-        let actor = Actor {
-            login: "alice".into(),
-            github_user_id: 1,
-        };
-        assert!(
-            !gate
-                .check(&[], &actor, "deploy", Permission::Write)
-                .is_granted()
-        );
-    }
-
-    /// A failing TrustGate (simulates a DB error).
-    struct FailingTrustGate;
-
-    impl TrustGate for FailingTrustGate {
-        fn check(
-            &self,
-            _grants: &[ResolvedGrant],
-            _actor: &Actor,
-            _command: &str,
-            _command_permission: Permission,
-        ) -> TrustOutcome {
-            TrustOutcome::Error("database unreachable".into())
-        }
-    }
-
-    #[test]
-    fn failing_trust_gate_is_fail_closed() {
-        let gate = FailingTrustGate;
-        let actor = Actor {
-            login: "alice".into(),
-            github_user_id: 1,
-        };
-        let outcome = gate.check(&[], &actor, "deploy", Permission::Write);
-        assert!(matches!(outcome, TrustOutcome::Error(_)));
-        assert!(!outcome.is_granted(), "fail-closed: errors must deny");
     }
 }

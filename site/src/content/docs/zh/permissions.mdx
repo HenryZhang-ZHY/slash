@@ -1,71 +1,43 @@
 ---
 title: 权限
-description: "了解谁能调用命令，以及 Slash 如何授权他们。"
+description: "了解谁可以调用命令，以及 Slash 如何授权。"
 sidebar:
   order: 4
 ---
 
-命令 dispatch 的授权走 Slash 的离线 [grants](/zh/grants/) 模型：谁能调用命令由
-本地的 `grants` 表决定，deny-by-default，绝不通过实时的 GitHub API 查询。本页描述
-这个模型、档位语义以及它周围的剩余门禁。
+GitHub 仓库权限是命令授权的唯一事实来源。调用命令不需要 Slash 账户、团队或额外授权。
+每次命令调用和 check run 重跑时，Slash 都会查询操作者当前的 GitHub collaborator 角色。
 
-## 两块拼图
+## 私有仓库
 
-每条命令在 `.slash/*.yml` 里声明一个 `permission`：`read`、`write` 或 `admin`
-（缺省为 `write`）。grant（在应用数据库里）说明谁 —— 一个用户或一个团队 —— 能在
-哪条命令、哪个仓库或哪个组织上以哪个档位操作。
+任何拥有 `read` 或更高权限的当前 collaborator 都可以运行全部已配置命令。对于私有
+仓库，Slash 会忽略命令的 `permission` 字段：能否访问仓库本身就是信任边界。
 
-调用时，Slash：
+从 GitHub 仓库移除 collaborator 后，对方会立即失去命令权限。Slash Web 控制台中
+没有另一套对应配置。
 
-1. 把评论者解析为 Slash 用户、把仓库解析为它所属的组织，
-2. 加载该 actor 的 grants（直接的用户 grants 加上其所在团队的 grants），
-3. 只有当**匹配 grants 中允许的最高档位 ≥ 命令声明的** `permission` 时，才允许
-   dispatch。
+## 公共仓库
 
-完整的模型 —— scope、deny-first 语义、fail-closed 行为 —— 参见
-[Grants](/zh/grants/)。
+对于公共仓库，每个 `.slash/*.yml` 命令通过 `permission` 声明最低权限：`read`、
+`write` 或 `admin`，默认是 `write`。
 
-## 为什么存在 `read`，但它很少是底线
+| 命令权限 | 可调用的 GitHub 角色 |
+| --- | --- |
+| `read` | read、triage、write、maintain、admin |
+| `write` | write、maintain、admin |
+| `admin` | admin |
 
-`permission` 档位是 `read`、`write`、`admin`。dispatch 命令会用仓库自己的 secrets
-运行 PR head 分支的代码，所以大多数命令是 `write` 或更高：只有拥有 push 权限的用户
-才能在仓库里创建分支，而允许 sub-write 档位调用命令会悄悄破坏那个信任边界 ——
-没有 push 权限的人就能让 head 分支上的代码带上你的生产凭据执行。
+Slash 读取 GitHub 的 `role_name`；遇到自定义角色时回退到详细 permission 布尔值。
+Webhook 中的 `author_association` 不能作为放行依据。
 
-`read` 档位的命令只有在不运行 head 分支代码、不接触仓库 secrets 时才有意义。
-为每条命令刻意选择底线：grant 模型让有效要求一目了然。
+## 失败时拒绝
 
-## 故障时关闭（fail closed）
+如果无法确认仓库可见性或 collaborator 权限，Slash 会拒绝命令。GitHub 查询失败时
+最多添加 😕 reaction，不发表评论，因为此时无法确认操作者是否有权参与仓库。
 
-grant 路径上任何一环没有干净地解析 —— 数据库错误、无法解析的 grant 行、未
-onboarding 的 actor、无法解析的组织 —— 命令都被**无条件拒绝**。没有任何其他
-授权源兜底：缺失 grant、错误和显式 deny 都是同一个判定。
+## 重跑
 
-## fork 会带来什么变化
+点击 **Re-run** 时，Slash 会检查重新请求者当前的 GitHub 角色，而不是原调用者的
+角色，并使用仓库当前可见性和命令当前配置。GitHub 已撤销的权限不会被保留。
 
-不支持 fork PR（参见 [已知限制](/zh/limitations/)）：`workflow_dispatch` 无法
-以 fork 上的 ref 为目标，所以即使 grant 解析成功也无从 dispatch。Slash 会检测到
-这种情况，每 PR 评论一次，而不是静默什么都不做。
-
-## 重新运行
-
-点击 check run 的 **Re-run** 会重新解析*重新请求者*当前的 grant —— 不是原始
-调用者的 —— 并对照命令的*当前*配置。grant 自上次调用后已被降级或移除的用户会在
-check run 本身上被拒绝，且没有新评论；re-run 绝不是绕过原始门禁的途径。
-
-## 历史：grant 之前的 collaborator-role 模型
-
-在 grants 之前，授权是把评论者的 GitHub 仓库角色与命令的 `permission` 比较。这里
-保留它仅为提供上下文。
-
-旧门禁通过 `GET /repos/{owner}/{repo}/collaborators/{username}/permission` 解析
-评论者的角色，特别读取响应的 `role_name` 字段 —— 而不是顶层 `permission` 字段，
-后者会把 `maintain` 折叠为 `write`、把 `triage` 折叠为 `read`，否则会让 `maintain`
-门禁的命令被普通 write 权限放行。然后只有实际角色**达到或超过**命令声明的档位时
-才 dispatch。旧档位是 `write | maintain | admin`；`read` 和 `triage` 被完全拒绝，
-因为 dispatch 命令会用仓库 secrets 运行 head 分支的 workflow 代码。在这个模型里，
-`write` 是底线 —— 当前的 `read` 档位并不存在。
-
-旧模型同样故障时关闭：任何非成功结果 —— 5xx、403、404、超时、无法解析的角色 ——
-都是**拒绝**，最多给一个尽力而为的 😕 反应，绝不评论，因为解析失败意味着评论者的
-信任等级确实未知。这条 fail-closed 原则原封不动地延续到了 grants 模型里。
+Fork PR 仍不受支持；Slash 无法向另一个仓库拥有的 ref dispatch workflow。

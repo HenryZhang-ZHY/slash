@@ -75,53 +75,13 @@ mod tests {
         let url = crate::test_support::test_database_url()?;
         let pool = db::connect(&url).await.unwrap();
         db::migrate(&pool).await.unwrap();
-        sqlx::query("TRUNCATE invocations, grants, org_members, team_members, teams, organizations, users CASCADE")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "TRUNCATE invocations, org_members, team_members, teams, organizations, users CASCADE",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         Some(pool)
-    }
-
-    /// Seed the DB so `preload_grants` + `GrantsTrustGate` let the
-    /// rerequester (GitHub user id `github_user_id`) re-run a write-tier
-    /// command in `installation_id`'s org (grants M2-4 strict deny-by-default).
-    async fn seed_rerequest_grant(pool: &PgPool, installation_id: i64, github_user_id: i64) {
-        let org = Uuid::new_v4();
-        sqlx::query(
-            "INSERT INTO organizations (id, slug, name, installation_id, state)
-             VALUES ($1, 'test-org', 'Test', $2, 'active')",
-        )
-        .bind(org)
-        .bind(installation_id)
-        .execute(pool)
-        .await
-        .unwrap();
-        let uid = Uuid::new_v4();
-        sqlx::query(
-            "INSERT INTO users (id, email, password_hash, display_name, status)
-             VALUES ($1, 'bob@example.com', 'x', 'Bob', 'active')",
-        )
-        .bind(uid)
-        .execute(pool)
-        .await
-        .unwrap();
-        sqlx::query(
-            "INSERT INTO user_identities
-                (id, user_id, provider, provider_subject, provider_login, provider_email)
-             VALUES ($1, $2, 'github', $3::TEXT, 'bob', 'bob@example.com')",
-        )
-        .bind(Uuid::new_v4())
-        .bind(uid)
-        .bind(github_user_id)
-        .execute(pool)
-        .await
-        .unwrap();
-        sqlx::query(
-            "INSERT INTO grants (id, organization_id, subject_type, subject_id, scope, repository, command, permission, effect)
-             VALUES ($1, $2, 'user', $3, 'org', NULL, NULL, 'write', 'allow')",
-        )
-        .bind(Uuid::new_v4()).bind(org).bind(uid)
-        .execute(pool).await.unwrap();
     }
 
     fn author_json(login: &str, id: u64) -> serde_json::Value {
@@ -194,6 +154,7 @@ mod tests {
             pool,
             installation_id: 1,
             repository_id: 100,
+            repository_is_private: false,
             owner: "acme".to_string(),
             repo: "widgets".to_string(),
             base_uri: Some(server.uri().leak()),
@@ -543,6 +504,29 @@ mod tests {
         mount_token(server).await;
 
         Mock::given(method("GET"))
+            .and(path("/repos/acme/widgets/collaborators/bob/permission"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "permission": "push", "role_name": "write",
+                "user": {
+                    "login": "bob", "id": 9, "node_id": "n", "avatar_url": "https://avatars.githubusercontent.com/u/9",
+                    "gravatar_id": "", "url": "https://api.github.com/users/bob", "html_url": "https://github.com/bob",
+                    "followers_url": "https://api.github.com/users/bob/followers",
+                    "following_url": "https://api.github.com/users/bob/following{/other_user}",
+                    "gists_url": "https://api.github.com/users/bob/gists{/gist_id}",
+                    "starred_url": "https://api.github.com/users/bob/starred{/owner}{/repo}",
+                    "subscriptions_url": "https://api.github.com/users/bob/subscriptions",
+                    "organizations_url": "https://api.github.com/users/bob/orgs",
+                    "repos_url": "https://api.github.com/users/bob/repos",
+                    "events_url": "https://api.github.com/users/bob/events{/privacy}",
+                    "received_events_url": "https://api.github.com/users/bob/received_events",
+                    "type": "User", "site_admin": false,
+                    "permissions": {"admin": false, "maintain": false, "push": true, "triage": false, "pull": true}
+                }
+            })))
+            .mount(server)
+            .await;
+
+        Mock::given(method("GET"))
             .and(path("/repos/acme/widgets/pulls/7"))
             .respond_with(ResponseTemplate::new(200).set_body_json(pull_request_json("deadbeef")))
             .mount(server)
@@ -609,9 +593,6 @@ mod tests {
         let Some(pool) = test_pool().await else {
             return;
         };
-        // Grants-backed authorization (M3 #23): the rerequester needs an org
-        // write grant, not a GitHub collaborator role.
-        seed_rerequest_grant(&pool, 1, 9).await;
         let id = Uuid::new_v4();
         invocations::claim(&pool, &sample(id)).await.unwrap();
         invocations::set_check_run_id(&pool, id, 55).await.unwrap();
@@ -724,20 +705,22 @@ mod tests {
 
     #[serial_test::serial(db)]
     #[tokio::test]
-    async fn check_run_rerequested_is_denied_for_a_rerequester_without_a_grant() {
+    async fn check_run_rerequested_fails_closed_when_github_access_cannot_be_verified() {
         let Some(pool) = test_pool().await else {
             return;
         };
-        // No grant is seeded: grants-backed authorization denies by default
-        // (fail-closed, spec §5.2). This also pins the fix for the previous
-        // collaborator-role check, which would have allowed a read-only
-        // collaborator with no grant to re-run.
         let id = Uuid::new_v4();
         invocations::claim(&pool, &sample(id)).await.unwrap();
         invocations::set_check_run_id(&pool, id, 55).await.unwrap();
 
         let server = MockServer::start().await;
         mount_rerequest_common(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/repos/acme/widgets/collaborators/bob/permission"))
+            .respond_with(ResponseTemplate::new(503))
+            .with_priority(1)
+            .mount(&server)
+            .await;
         Mock::given(method("PATCH"))
             .and(path("/repos/acme/widgets/check-runs/55"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
@@ -772,16 +755,10 @@ mod tests {
 
     #[serial_test::serial(db)]
     #[tokio::test]
-    async fn check_run_rerequested_allows_a_granted_rerequester_without_a_collaborator_role() {
+    async fn check_run_rerequested_allows_a_write_collaborator() {
         let Some(pool) = test_pool().await else {
             return;
         };
-        // The rerequester has an org write grant but is NOT a repo
-        // collaborator. The grants-backed decision (M3 #23) allows the re-run;
-        // the old collaborator-role check would have denied it. No
-        // collaborators/:permission mock is mounted, proving the decision no
-        // longer consults the GitHub collaborator role at all.
-        seed_rerequest_grant(&pool, 1, 9).await;
         let id = Uuid::new_v4();
         invocations::claim(&pool, &sample(id)).await.unwrap();
         invocations::set_check_run_id(&pool, id, 55).await.unwrap();
@@ -835,14 +812,10 @@ mod tests {
 
     #[serial_test::serial(db)]
     #[tokio::test]
-    async fn check_run_rerequested_denies_a_collaborator_without_a_grant() {
+    async fn check_run_rerequested_denies_a_public_read_collaborator() {
         let Some(pool) = test_pool().await else {
             return;
         };
-        // The rerequester is a repo collaborator but has no grant. The
-        // grants-backed decision denies (fail-closed); the old
-        // collaborator-role check would have allowed this re-run (fail-open,
-        // violating deny-by-default, spec §5.2).
         let id = Uuid::new_v4();
         invocations::claim(&pool, &sample(id)).await.unwrap();
         invocations::set_check_run_id(&pool, id, 55).await.unwrap();
@@ -852,7 +825,7 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/repos/acme/widgets/collaborators/bob/permission"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "permission": "push", "role_name": "write",
+                "permission": "pull", "role_name": "read",
                 "user": {
                     "login": "bob", "id": 9, "node_id": "n", "avatar_url": "https://avatars.githubusercontent.com/u/9",
                     "gravatar_id": "", "url": "https://api.github.com/users/bob", "html_url": "https://github.com/bob",
@@ -866,9 +839,10 @@ mod tests {
                     "events_url": "https://api.github.com/users/bob/events{/privacy}",
                     "received_events_url": "https://api.github.com/users/bob/received_events",
                     "type": "User", "site_admin": false,
-                    "permissions": {"admin": false, "push": true, "pull": true}
+                    "permissions": {"admin": false, "maintain": false, "push": false, "triage": false, "pull": true}
                 },
             })))
+            .with_priority(1)
             .mount(&server)
             .await;
         Mock::given(method("PATCH"))
@@ -899,7 +873,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             count, 1,
-            "a collaborator without a grant must be denied (fail-closed)"
+            "a public read collaborator must not pass a write command gate"
         );
     }
 

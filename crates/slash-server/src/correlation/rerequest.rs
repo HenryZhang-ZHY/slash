@@ -2,13 +2,14 @@ use octocrab::models::webhook_events::payload::{
     CheckRunWebhookEventAction, CheckRunWebhookEventPayload,
 };
 use octocrab::params::checks::{CheckRunConclusion, CheckRunStatus};
-use slash_core::{InvocationStatus, TrustGate, messages};
+use slash_core::{InvocationStatus, ResolvedRole, messages};
 use slash_github::{CheckRunUpdate, RepoClient, WebhookEvent};
 
 use crate::catalog::{CatalogError, CatalogOutcome, load_catalog, resolve_default_branch};
 use crate::invocations::{self, NewInvocation};
 use crate::pipeline::{
-    PipelineContext, PipelineError, TOKEN_PERMISSIONS, record_catalog_load_metrics,
+    PipelineContext, PipelineError, TOKEN_PERMISSIONS, log_permission_api_failure, permission_name,
+    record_catalog_load_metrics,
 };
 
 /// Handles `check_run.rerequested` (spec §6.5): re-resolve the
@@ -69,6 +70,44 @@ pub async fn handle_check_run_rerequested(
     .await?;
     let client =
         RepoClient::with_base_uri(&token, ctx.owner.clone(), ctx.repo.clone(), ctx.base_uri)?;
+
+    let permission = match client.get_collaborator_permission(&rerequester.login).await {
+        Ok(permission) => permission,
+        Err(error) => {
+            log_permission_api_failure(
+                "rerequest_lookup",
+                &ctx.owner,
+                &ctx.repo,
+                &rerequester.login,
+                original.comment_id as u64,
+                &error,
+            );
+            let _ = client
+                .update_check_run(
+                    check_run.id,
+                    CheckRunUpdate {
+                        status: Some(CheckRunStatus::Completed),
+                        conclusion: Some(CheckRunConclusion::ActionRequired),
+                        details_url: None,
+                        output: Some((
+                            "Re-run denied",
+                            "Slash could not verify the re-requester's current repository access.",
+                        )),
+                    },
+                )
+                .await;
+            return Ok(());
+        }
+    };
+    let role = ResolvedRole::from_role_name(&permission.role_name).unwrap_or_else(|| {
+        ResolvedRole::from_permission_booleans(
+            permission.user.permissions.admin,
+            permission.user.permissions.maintain,
+            permission.user.permissions.push,
+            permission.user.permissions.triage,
+            permission.user.permissions.pull,
+        )
+    });
 
     // Re-capture the PR head and re-check the command's *current*
     // permission requirement (config may have changed since the original
@@ -161,40 +200,28 @@ pub async fn handle_check_run_rerequested(
         return Ok(());
     };
 
-    // Re-authorize the rerequester against the same grants-backed decision
-    // source as the main pipeline (R2 TrustGate, org/user #23): async preload
-    // of the rerequester's grants, then the sync grants decision. Fail-closed:
-    // a load/decision error or a missing grant that reaches the required tier
-    // denies. This replaces the old GitHub-collaborator-role comparison, which
-    // let a collaborator without a grant re-run (fail-open) and blocked a
-    // granted non-collaborator.
-    let grants = crate::grants_loader::preload_grants(
-        ctx.pool,
-        rerequester.id.0 as i64,
-        ctx.installation_id as i64,
-        &ctx.owner,
-        &ctx.repo,
-    )
-    .await;
-    let actor = slash_core::pipeline::Actor {
-        login: rerequester.login.clone(),
-        github_user_id: rerequester.id.0,
-    };
-    let outcome = match grants {
-        Ok(grants) => {
-            let gate = crate::grants_trust_gate::GrantsTrustGate;
-            gate.check(&grants, &actor, &original.command, validated.permission)
-        }
-        // Fail closed: a preload DB/parse error is a deny (TrustOutcome::Error).
-        Err(error) => slash_core::pipeline::TrustOutcome::Error(error.to_string()),
-    };
-    if !outcome.is_granted() {
+    let authorized =
+        slash_core::authorizes_command(ctx.repository_is_private, role, validated.permission);
+    let required = permission_name(validated.permission);
+    tracing::info!(
+        owner = %ctx.owner,
+        repo = %ctx.repo,
+        repository_private = ctx.repository_is_private,
+        policy = if ctx.repository_is_private { "private_collaborators" } else { "public_role" },
+        actor = %rerequester.login,
+        resolved_role = ?role,
+        required_permission = required,
+        command = %original.command,
+        authorized,
+        "evaluated command rerequest authorization"
+    );
+    if !authorized {
         // No comment surface for a denied re-run (spec §6.5); the check
         // run itself communicates the denial.
-        let required = match validated.permission {
-            slash_config::Permission::Read => "read",
-            slash_config::Permission::Write => "write",
-            slash_config::Permission::Admin => "admin",
+        let denial = if ctx.repository_is_private {
+            messages::rerequest_private_collaborator_denied(&original.command)
+        } else {
+            messages::rerequest_permission_denied(&original.command, required)
         };
         let _ = client
             .update_check_run(
@@ -203,10 +230,7 @@ pub async fn handle_check_run_rerequested(
                     status: Some(CheckRunStatus::Completed),
                     conclusion: Some(CheckRunConclusion::ActionRequired),
                     details_url: None,
-                    output: Some((
-                        "Re-run denied",
-                        &messages::rerequest_permission_denied(&original.command, required),
-                    )),
+                    output: Some(("Re-run denied", &denial)),
                 },
             )
             .await;

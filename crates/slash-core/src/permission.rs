@@ -67,6 +67,23 @@ pub fn meets(role: ResolvedRole, required: Permission) -> bool {
     role >= required_role
 }
 
+/// Authorize a command against the repository's GitHub trust boundary.
+///
+/// Every private-repository collaborator is trusted equally once GitHub
+/// resolves them to at least `read`. Public repositories retain the command's
+/// configured role floor. Both modes deny `none`, so a failed or stale
+/// collaborator lookup can never become an allow.
+pub fn authorizes_command(
+    repository_is_private: bool,
+    role: ResolvedRole,
+    required: Permission,
+) -> bool {
+    if role < ResolvedRole::Read {
+        return false;
+    }
+    repository_is_private || meets(role, required)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
@@ -168,5 +185,46 @@ mod tests {
         for role in [ResolvedRole::None, ResolvedRole::Triage] {
             assert!(!meets(role, Permission::Write));
         }
+    }
+
+    #[test]
+    fn private_repository_allows_every_read_collaborator() {
+        for role in [
+            ResolvedRole::Read,
+            ResolvedRole::Triage,
+            ResolvedRole::Write,
+            ResolvedRole::Maintain,
+            ResolvedRole::Admin,
+        ] {
+            assert!(authorizes_command(true, role, Permission::Admin));
+        }
+    }
+
+    #[test]
+    fn private_repository_still_denies_a_non_collaborator() {
+        assert!(!authorizes_command(
+            true,
+            ResolvedRole::None,
+            Permission::Read
+        ));
+    }
+
+    #[test]
+    fn public_repository_uses_the_commands_required_role() {
+        assert!(!authorizes_command(
+            false,
+            ResolvedRole::Read,
+            Permission::Write
+        ));
+        assert!(authorizes_command(
+            false,
+            ResolvedRole::Write,
+            Permission::Write
+        ));
+        assert!(!authorizes_command(
+            false,
+            ResolvedRole::Maintain,
+            Permission::Admin
+        ));
     }
 }

@@ -120,6 +120,7 @@ fn build_context<'a>(
     let installation_id = event.installation.as_ref()?.id().0;
     let repository = event.repository.as_ref()?;
     let repository_id = repository.id.0;
+    let repository_is_private = repository.private?;
     let owner = repository.owner.as_ref()?.login.clone();
     let repo = repository.name.clone();
 
@@ -128,6 +129,7 @@ fn build_context<'a>(
         pool,
         installation_id,
         repository_id,
+        repository_is_private,
         owner,
         repo,
         base_uri: None,

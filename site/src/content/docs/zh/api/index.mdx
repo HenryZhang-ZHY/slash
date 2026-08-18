@@ -35,15 +35,6 @@ JSON 响应里的时间戳是 RFC 3339 字符串。
 | `GET` | `/api/auth/me` | 读取当前用户和团队 |
 | `POST` | `/api/teams` | 创建团队 |
 
-### [Grants 管理](/zh/api/grants/)
-
-| 方法 | 路径 | 用途 |
-| --- | --- | --- |
-| `GET` | `/api/grants` | 列出当前 org 的 grants（仅 owner） |
-| `POST` | `/api/grants` | 创建 grant（仅 owner） |
-| `DELETE` | `/api/grants/{id}` | 删除 grant（仅 owner） |
-| `GET` | `/api/org/members` | 列出 org 的 users + teams 供 grant subject 选择（仅 owner） |
-
 ### [Test Engine 管理](/zh/api/test-engine/)
 
 | 方法 | 路径 | 用途 |
