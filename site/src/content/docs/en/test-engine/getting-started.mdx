@@ -1,0 +1,57 @@
+---
+title: Send your first test result
+description: "Create a suite, upload one execution, and verify it in the console."
+sidebar:
+  order: 2
+---
+
+This tutorial starts with access to a running Slash console and ends with one
+test execution visible in Test Engine.
+
+## 1. Create a suite
+
+Sign in to the Slash console, open `/tests`, and choose **Create suite**. Enter
+the repository owner, repository name, and a stable suite key such as
+`unit-tests`.
+
+Slash creates the suite and displays a collection token. Copy it now; the token
+is the bearer credential your CI uses for this suite.
+
+## 2. Store the collection token
+
+Save the token as a secret in your CI system and expose it to the upload step as
+`SLASH_COLLECTION_TOKEN`. Do not put it in repository configuration, command
+arguments, logs, or test output.
+
+## 3. Upload one execution
+
+Replace the origin below with your Slash deployment and send a normalized
+result:
+
+```sh
+curl -X POST \
+  -H "Authorization: Bearer $SLASH_COLLECTION_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"ci_provider":"github-actions","run_ref":"first-upload","executions":[{"name":"checkout::completes_order","status":"passed","duration_ms":87}]}' \
+  https://slash.example.com/v1/test-engine/upload
+```
+
+A successful upload returns `200 OK` with an empty body. The collection token
+selects the suite, so the request body does not contain a suite ID.
+
+## Confirm the result
+
+Return to `/tests`, select the suite, and find
+`checkout::completes_order`. Its latest result should be `passed`, with one
+recorded execution.
+
+If the upload returns `401`, verify that the token is present, known, and not
+revoked. If it returns `400`, compare the payload with the
+[ingestion schema](/en/api/ingestion/#normalized-json).
+
+## Next steps
+
+- [Integrate Test Engine with CI](/en/test-engine/integrate-ci/) to upload real
+  runner output and apply quarantine.
+- [Understand tests and quarantine](/en/test-engine/concepts/) before changing
+  test states or depending on automatic flaky detection.

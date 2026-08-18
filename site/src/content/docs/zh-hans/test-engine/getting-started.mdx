@@ -1,0 +1,51 @@
+---
+title: 发送第一条测试结果
+description: "创建 suite、上传一次 execution，并在控制台确认结果。"
+sidebar:
+  order: 2
+---
+
+本教程从能够访问 Slash 控制台开始，以 Test Engine 中出现一条测试 execution 为目标。
+
+## 1. 创建 Suite
+
+登录 Slash 控制台，打开 `/tests`，选择 **Create suite**。输入仓库 owner、仓库名称
+和一个稳定的 suite key，例如 `unit-tests`。
+
+Slash 会创建 suite 并显示 collection token。立即复制它；这是 CI 访问该 suite 的
+bearer 凭据。
+
+## 2. 保存 Collection Token
+
+把 token 保存为 CI secret，并以 `SLASH_COLLECTION_TOKEN` 提供给上传步骤。不要把它
+写进仓库配置、命令参数、日志或测试输出。
+
+## 3. 上传一次 Execution
+
+把下面的 origin 替换成你的 Slash 部署，然后发送一条归一化结果：
+
+```sh
+curl -X POST \
+  -H "Authorization: Bearer $SLASH_COLLECTION_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"ci_provider":"github-actions","run_ref":"first-upload","executions":[{"name":"checkout::completes_order","status":"passed","duration_ms":87}]}' \
+  https://slash.example.com/v1/test-engine/upload
+```
+
+上传成功会返回空响应体的 `200 OK`。collection token 已经确定目标 suite，因此请求体
+不包含 suite ID。
+
+## 确认结果
+
+回到 `/tests`，选择对应 suite，找到 `checkout::completes_order`。它的最新结果应为
+`passed`，并显示一条 execution。
+
+如果上传返回 `401`，确认 token 存在、有效且未吊销。如果返回 `400`，请根据
+[ingestion schema](/zh-hans/api/ingestion/#normalized-json)检查 payload。
+
+## 下一步
+
+- [把 Test Engine 接入 CI](/zh-hans/test-engine/integrate-ci/)：上传真实 runner 输出并
+  应用隔离状态。
+- [理解测试与隔离](/zh-hans/test-engine/concepts/)：在修改测试状态或依赖自动 flaky
+  检测前了解其语义。

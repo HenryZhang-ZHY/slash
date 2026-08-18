@@ -69,3 +69,30 @@ test("organizes command documentation around user tasks", () => {
     );
   }
 });
+
+test("separates Test Engine tasks from account guidance", () => {
+  const english = collectFiles(new URL("en/", docsRoot), ".mdx");
+  const simplifiedChinese = collectFiles(new URL("zh-hans/", docsRoot), ".mdx");
+  const taskPages = [
+    "test-engine/index.mdx",
+    "test-engine/getting-started.mdx",
+    "test-engine/concepts.mdx",
+    "test-engine/integrate-ci.mdx",
+    "test-engine/console.mdx",
+    "account/index.mdx",
+  ];
+
+  for (const page of taskPages) {
+    assert.ok(english.includes(page), `missing English task page: ${page}`);
+    assert.ok(simplifiedChinese.includes(page), `missing Chinese task page: ${page}`);
+  }
+
+  for (const retired of ["test-engine.mdx", "web-console.mdx"]) {
+    assert.equal(english.includes(retired), false, `retired English page remains: ${retired}`);
+    assert.equal(
+      simplifiedChinese.includes(retired),
+      false,
+      `retired Chinese page remains: ${retired}`,
+    );
+  }
+});

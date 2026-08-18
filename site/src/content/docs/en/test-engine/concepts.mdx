@@ -1,0 +1,53 @@
+---
+title: Tests and quarantine
+description: "Understand suites, executions, test states, and flaky detection."
+sidebar:
+  order: 3
+---
+
+## Data model
+
+Test Engine stores four related resources:
+
+- **Suite** — a collection identified by `(owner, repo, suite_key)`.
+- **Test** — a stable test name within a suite, with a mutable disposition.
+- **Run** — one CI invocation, identified by `(ci_provider, run_ref)`.
+- **Execution** — one observed test result within a run, including status,
+  duration, stack, and capture time.
+
+Executions are append-only. Test state is the mutable decision derived from
+that history or set by a user.
+
+## Test states
+
+| State | CI behavior | How it changes |
+| --- | --- | --- |
+| `enabled` | Run normally; a failure may fail the pull request | Default, manual change, or automatic recovery |
+| `muted` | Keep running and recording; soft-fail instead of blocking | Manual change or automatic quarantine |
+| `skipped` | Do not run | Manual change only |
+
+Automatic quarantine uses `muted`, not `skipped`, because the detector needs
+new executions to decide when a test has recovered.
+
+## Flaky detection
+
+A test is flaky when a rolling seven-day window contains:
+
+- at least three executions; and
+- a failure or error followed by a later pass.
+
+Slash automatically moves a qualifying test from `enabled` to `muted`. Once
+the window rolls past its recent failures, Slash moves a stable muted test back
+to `enabled`. A `skipped` test never changes automatically because it produces
+no new evidence.
+
+Detection is a recurring reconciliation over durable execution history. It is
+idempotent, and guarded state updates prevent an automatic decision from
+silently overwriting a concurrent manual edit.
+
+## Apply state in CI
+
+Test Engine records disposition; your CI adapter enforces it. Before reporting
+the job result, query the quarantine endpoint and soft-fail or omit the tests
+returned as `muted` or `skipped`. See [Integrate Test Engine with CI](/en/test-engine/integrate-ci/)
+for the complete loop.
