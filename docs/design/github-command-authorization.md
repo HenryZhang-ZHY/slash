@@ -9,7 +9,7 @@ outline:
 
 # GitHub command authorization
 
-Status: accepted for implementation (2026-08-18)
+Status: implemented (2026-08-18)
 
 ## Problem
 
