@@ -1,6 +1,6 @@
 ---
-title: ".slash/ 参考"
-description: "定义命令、参数、权限和目标 workflow。"
+title: 配置命令
+description: "查询命令、参数、权限和目标 workflow 的完整配置。"
 sidebar:
   order: 2
 ---
@@ -57,7 +57,7 @@ args:                             # 可选；有序列表
 
 | 字段         | 必填 | 默认 | 说明 |
 |---------------|----------|---------|-------|
-| `name`        | 是      | —       | `^[a-z][a-z0-9_-]*$`，命令内唯一，不得以 `slash_` 开头（保留前缀 —— 见 [workflow 要求](/zh-hans/workflow-requirements/)）。 |
+| `name`        | 是      | —       | `^[a-z][a-z0-9_-]*$`，命令内唯一，不得以 `slash_` 开头（保留前缀 —— 见 [workflow 指南](/zh-hans/commands/workflows/)）。 |
 | `description` | 否       | 无    | 用法错误时展示。 |
 | `required`    | 否       | `false` | 所有 `required: true` 条目必须排在任意可选条目之前 —— 这个顺序也就是位置参数（非 `--key` 形式的命令行参数）的绑定顺序。 |
 | `choices`     | 否       | 无    | 允许的取值列表；其他取值是用法错误。 |
@@ -77,7 +77,7 @@ args:                             # 可选；有序列表
 
 这是因为它会流入 `workflow_dispatch` 的 inputs，而一个直接在 `run:` 步骤里插值
 `${{ inputs.x }}` 的 workflow（而不是通过 `env:` —— 见
-[workflow 要求](/zh-hans/workflow-requirements/)）会被任何通过权限门的人注入脚本。
+[workflow 指南](/zh-hans/commands/workflows/)）会被任何通过权限门的人注入脚本。
 只有那些通过 `env:`（而非 `run:` 内联 `${{ }}`）消费参数的参数才设置
 `free_text: true`。
 

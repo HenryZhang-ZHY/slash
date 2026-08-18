@@ -68,7 +68,7 @@ test("uses localized homepage metadata and copy", () => {
   const html = builtPage("zh-hans");
 
   assert.match(html, /<meta name="description" content="正确实现 GitHub Pull Request 的 Slash Commands。">/);
-  assert.match(html, />安装并连接 GitHub App</);
+  assert.match(html, />添加并运行第一条命令</);
   assert.doesNotMatch(html, /Slash commands for GitHub pull requests, done right\./);
 });
 

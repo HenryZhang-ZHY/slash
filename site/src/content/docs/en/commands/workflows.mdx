@@ -1,5 +1,5 @@
 ---
-title: Workflow requirements
+title: Build command workflows
 description: "Prepare safe workflow_dispatch workflows for Slash commands."
 sidebar:
   order: 3
@@ -93,7 +93,7 @@ jobs:
 
 Argument values are restricted to a safe charset precisely so that
 `env:`-passed values can never break out of a shell command (see
-the [`.slash/` reference](/en/slash-config-reference/#value-charset)). Inline
+the [command configuration reference](/en/commands/configuration/#value-charset)). Inline
 `${{ }}` interpolation in `run:` bypasses that protection entirely — GitHub
 substitutes the raw string into the shell script text before it runs, so
 anyone who can pass your command's permission gate could inject arbitrary

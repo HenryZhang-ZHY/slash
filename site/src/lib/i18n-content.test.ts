@@ -40,3 +40,32 @@ test("does not retain links to the retired /zh/ routes", () => {
 
   assert.deepEqual(legacyLinks, []);
 });
+
+test("organizes command documentation around user tasks", () => {
+  const english = collectFiles(new URL("en/", docsRoot), ".mdx");
+  const simplifiedChinese = collectFiles(new URL("zh-hans/", docsRoot), ".mdx");
+  const commandPages = [
+    "commands/index.mdx",
+    "commands/configuration.mdx",
+    "commands/workflows.mdx",
+    "commands/authorization.mdx",
+  ];
+
+  for (const page of commandPages) {
+    assert.ok(english.includes(page), `missing English task page: ${page}`);
+    assert.ok(simplifiedChinese.includes(page), `missing Chinese task page: ${page}`);
+  }
+
+  for (const retired of [
+    "slash-config-reference.mdx",
+    "workflow-requirements.mdx",
+    "permissions.mdx",
+  ]) {
+    assert.equal(english.includes(retired), false, `retired English page remains: ${retired}`);
+    assert.equal(
+      simplifiedChinese.includes(retired),
+      false,
+      `retired Chinese page remains: ${retired}`,
+    );
+  }
+});

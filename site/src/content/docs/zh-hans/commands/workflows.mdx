@@ -1,5 +1,5 @@
 ---
-title: Workflow 要求
+title: 构建命令 Workflow
 description: "为 Slash 命令准备安全的 workflow_dispatch workflow。"
 sidebar:
   order: 3
@@ -82,7 +82,7 @@ jobs:
 ```
 
 参数值被限制在安全字符集内，正是为了让 `env:` 传入的值永远无法逃出 shell 命令
-（见 [`.slash/` 参考](/zh-hans/slash-config-reference/#value-charset)）。在 `run:`
+（见[命令配置参考](/zh-hans/commands/configuration/#value-charset)）。在 `run:`
 内联 `${{ }}` 插值会完全绕过这层保护 —— GitHub 会在 shell 脚本运行前把原始字符串
 替换进去，所以任何通过你的命令权限门的人都可能注入任意 shell。只有当参数的
 workflow 完全通过 `env:` 消费它时，才把它排除在安全字符集之外（`free_text: true`）。

@@ -16,7 +16,7 @@ sidebar:
   执行面携带仓库 secrets。
 - **push 后不自动重新触发。** push 之后，必需的 `slash/<command>` check 会回到
   `Expected`，必须重新发布 —— check run 的 **Re-run** 按钮是目前替代方案。参见
-  [workflow 要求](/zh-hans/workflow-requirements/#required-status-checks-capability-and-footgun)。
+  [workflow 指南](/zh-hans/commands/workflows/#required-status-checks-capability-and-footgun)。
 - **同命令的并发调用在 PR UI 里互相遮蔽。** 同一个 PR 上并行的 `/deploy staging`
   和 `/deploy production` 共享一个 check-run 名；较新的胜出，较旧的被标记为
   `superseded` 并做一次指向较新 run 的最终更新，但 GitHub 的 PR checks 列表在任意

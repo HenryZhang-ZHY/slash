@@ -20,7 +20,7 @@ contact with them isn't a surprise.
 - **No automatic re-trigger on push.** After a push, a required
   `slash/<command>` check reverts to `Expected` and must be re-issued — the
   check run's **Re-run** button is the current substitute. See
-  [workflow requirements](/en/workflow-requirements/#required-status-checks-capability-and-footgun).
+  [workflow guide](/en/commands/workflows/#required-status-checks-capability-and-footgun).
 - **Concurrent invocations of the same command mask each other in the PR
   UI.** `/deploy staging` and `/deploy production` in flight together on the
   same PR share one check-run name; the newer one wins and the older is
