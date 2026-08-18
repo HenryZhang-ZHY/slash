@@ -1,0 +1,4 @@
+interface:
+  display_name: "Maintain Slash Documentation"
+  short_description: "Keep Slash docs accurate, localized, and testable"
+  default_prompt: "Use $slash-maintain-docs to update the documentation affected by this change."
