@@ -1,17 +1,21 @@
 ---
-title: 自托管（Self Hosting）
-description: "在你自己的基础设施上运行 Slash。"
+title: 自托管
+description: "在自己的基础设施上部署、配置和运维 Slash。"
 sidebar:
   order: 1
 ---
 
-Slash 以托管云服务的形式提供。如果你更愿意自己运行 —— 在你自己的服务器或云账号上
-—— 本小节涵盖全部相关事项：参考部署、环境配置、可观测性、密钥轮换和故障处理流程。
+自托管是运行 Slash 控制面的完整运维路径，覆盖服务器、Postgres、GitHub App 凭据、
+可选用户登录、可观测性、凭据轮换和故障响应。
 
-自托管是一个刻意的选择，而不是默认路径。大多数用户永远不需要这一节；它面向想要完全
-掌控 Slash 控制面运行位置的团队。
+## 本模块内容
 
-## 本小节内容
+- [部署 Slash](/zh-hans/self-host/deployment/) —— 启动服务器与 Postgres、执行迁移并
+  验证进程。
+- [配置 Slash](/zh-hans/self-host/configuration/) —— 设置必需变量、挂载仅文件 secret，
+  并按需开启 GitHub 用户登录。
+- [运维 Slash](/zh-hans/self-host/operations/) —— 监控队列、使用实例管理后台、轮换
+  凭据并处理故障。
 
-- [部署](/zh-hans/self-host/deployment/) —— 参考部署、环境变量、可观测性、密钥轮换和
-  故障处理流程
+服务可用后，回到[运行第一条命令](/zh-hans/getting-started/)或
+[Test Engine](/zh-hans/test-engine/)开始使用产品。

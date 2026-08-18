@@ -82,5 +82,5 @@ preserve speculative milestone roadmaps.
 
 The authenticated API and setup examples are documented in the Test Engine
 user guides in
-[English](../site/src/content/docs/en/test-engine.mdx) and
-[Chinese](../site/src/content/docs/zh/test-engine.mdx).
+[English](../site/src/content/docs/en/test-engine/index.mdx) and
+[Chinese](../site/src/content/docs/zh-hans/test-engine/index.mdx).

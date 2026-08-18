@@ -69,6 +69,9 @@ test("uses localized homepage metadata and copy", () => {
 
   assert.match(html, /<meta name="description" content="正确实现 GitHub Pull Request 的 Slash Commands。">/);
   assert.match(html, />添加并运行第一条命令</);
+  assert.match(html, />管理团队、连接与 API 凭据</);
+  assert.match(html, /href="\/slash\/zh-hans\/account\/"/);
+  assert.match(html, /href="\/slash\/zh-hans\/self-host\/"/);
   assert.doesNotMatch(html, /Slash commands for GitHub pull requests, done right\./);
 });
 

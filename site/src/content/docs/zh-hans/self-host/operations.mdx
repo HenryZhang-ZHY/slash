@@ -1,0 +1,52 @@
+---
+title: 运维 Slash
+description: "监控工作、管理实例、轮换凭据并处理故障。"
+sidebar:
+  order: 4
+---
+
+## 健康与指标
+
+`GET /healthz` 是存活探针，`GET /metrics` 返回 Prometheus 文本格式。至少监控：
+
+- `slash_deliveries_pending` 和 `slash_deliveries_oldest_pending_age_seconds`，发现
+  卡住或落后的 worker 池；
+- `slash_invocations{status}` 和 `slash_invocations_max_dispatched_age_seconds`，发现
+  等待关联过久的 invocation；
+- `slash_correlation_total{path}`，区分直接 dispatch 关联、轮询恢复和超时；以及
+- `slash_dispatch_failures_total{class}`，统计终态 dispatch 失败。
+
+Slash 目前不暴露按端点的 GitHub API 调用数或剩余 rate-limit 预算。请同时使用应用
+日志发现 GitHub API 和 token minting 错误。
+
+## 实例管理后台
+
+设置 `SLASH_ADMIN_SECRET_PATH` 会开启 `/admin` 和 `/api/admin/*`。它与普通 Slash
+用户和团队是独立的信任边界。登录会创建持续 20 分钟的 `HttpOnly`、
+`SameSite=Strict` admin session；轮换 secret 会使现有 session 失效。
+
+后台显示 installation 状态、近期持久 webhook deliveries、转义后的 payload、相关
+invocations 和队列诊断。**Refresh from GitHub** 会执行一次显式 installation
+reconcile，并受跨副本锁和五分钟冷却保护。后台不会重试或删除 delivery。
+
+## 轮换凭据
+
+轮换 webhook secret 时，更新 GitHub App 设置和挂载的 secret 文件，然后重启 Slash。
+短暂传播窗口可能产生失败 delivery，GitHub 随后会重试。
+
+轮换 App 私钥时，先创建新 key、部署其 PEM 文件、重启 Slash 并确认 token minting
+成功，最后再从 GitHub 删除旧 key。
+
+## 处理故障
+
+Slash 没有按 installation 或全局 kill switch。要立即停止所有新 dispatch：
+
+1. 停止全部服务器副本。已持久化的 claimed 和 dispatched 工作仍在 Postgres 中，
+   重启后会继续 reconcile。
+2. 如果可能泄露，轮换私钥和 webhook secret。
+3. 需要独立于 Slash 撤销仓库访问时，从受影响账户暂停或卸载 GitHub App。
+4. 调查管理后台、`invocations` 记录、指标和日志。
+5. 修复根因后重启服务；没有单独的 paused 状态需要清除。
+
+Installation token 限定到仓库，并只带当前操作需要的权限。GitHub 返回 `401` 时，
+Slash 会使缓存 token 失效，再尝试 mint 一次新 token。

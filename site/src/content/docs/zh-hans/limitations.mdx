@@ -1,64 +1,43 @@
 ---
 title: 已知限制
-description: "回顾刻意的范围决策和当前产品缺口。"
+description: "在工作流中依赖 Slash 前，了解当前产品边界。"
 sidebar:
   order: 9
 ---
 
-这些是刻意的范围决策或已知缺口，列在这里是为了让你第一次遇到它们时不至于意外。
+以下当前产品边界可能影响仓库策略、workflow 设计或运维。
 
-## 来自设计
+## 拉取请求与 Checks
 
-- **不支持 fork PR。** `workflow_dispatch` 无法以 fork 上的 ref 为目标 —— 这是
-  GitHub 平台限制，不是 bug。变通办法：maintainer 把分支推到 base 仓库。安全地支持
-  fork 需要一个第二条 content-trust 轴（按 head-SHA、由 maintainer 签发、可吊销、
-  每次 push 都要重新要求的 grant），与 Slash 已有的评论者信任门禁不同，因为它的
-  执行面携带仓库 secrets。
-- **push 后不自动重新触发。** push 之后，必需的 `slash/<command>` check 会回到
-  `Expected`，必须重新发布 —— check run 的 **Re-run** 按钮是目前替代方案。参见
-  [workflow 指南](/zh-hans/commands/workflows/#required-status-checks-capability-and-footgun)。
-- **同命令的并发调用在 PR UI 里互相遮蔽。** 同一个 PR 上并行的 `/deploy staging`
-  和 `/deploy production` 共享一个 check-run 名；较新的胜出，较旧的被标记为
-  `superseded` 并做一次指向较新 run 的最终更新，但 GitHub 的 PR checks 列表在任意
-  时刻只显示最新的。被 superseded 的 run 本身不会被取消。
-- **push 时没有服务端 `.slash/` 校验。** 弄坏默认分支配置的人不一定就是发现它的
-  人 —— 可能要过几天，等别人试着调用受影响的命令。在你自己仓库的 CI 里运行
-  `slash validate .slash/` 在合并前发现问题；一个每次 push 自动校验的 `slash/config`
-  check run 是计划中的修复，尚未构建。
-- **命令文件之间没有共享默认值** —— 例如仓库级权限底线。每个 `.slash/*.yml` 文件
-  完全自包含。
-- **命令必须在评论的第一行。** 出现在多行评论其他位置的命令不会被执行，而且会被
-  静默忽略 —— 会告诉作者这一点的 §3.2 "misplaced command" 回复尚未实现。
+- **不支持 fork 拉取请求。** GitHub 无法针对另一个仓库拥有的 ref dispatch 已配置
+  workflow。调用命令前，请把分支推到 base 仓库。
+- **push 后命令不会自动重跑。** head commit 更新后，必需的 `slash/<command>` check
+  会回到 `Expected`。请重新调用命令或使用 check run 的 **Re-run**。把命令设为必需
+  check 前，先阅读[必需 check 行为](/zh-hans/commands/workflows/#required-status-checks-capability-and-footgun)。
+- **同一命令的并发调用共享 check-run 名称。** 拉取请求 checks 列表只显示最新调用。
+  Slash 会把更早的调用标记为 `superseded`，但不会取消其 workflow run。
 
-## 实现过程中发现的额外缺口
+## 命令配置
 
-这些在设计文档里没有点名，但值得知道：
+- **Slash 不会在 push 时校验 `.slash/`。** 请在仓库 CI 中运行
+  `slash validate .slash/`，在有人调用之前发现默认分支上的无效配置。
+- **命令文件没有共享默认值。** 每个 `.slash/*.yml` 文件都拥有完整的权限、workflow
+  和参数配置。
+- **命令必须位于评论第一行。** 多行评论其他位置的命令会被忽略，且不会收到回复。
 
-- **没有 kill switch。** 设计要求在每个会修改数据的 GitHub API 调用之前检查一个
-   按安装和全局的 kill switch，这样行为异常的安装可以在不影响其他安装的情况下被
-   暂停。这一点没有实现 —— 目前唯一的杠杆是整体停止服务器进程，会同时暂停所有
-   安装。参见 [部署指南](/zh-hans/self-host/deployment/#incident-procedure)。
- - **§6.4 反垃圾规则只部分接线。** 编辑距离回复门禁（`should_suggest_commands`）
-  已生效：与已配置命令编辑距离在 2 以内的未知命令会得到一个建议回复。但 token
-  bucket、每 PR 评论去重和 §3.2 misplaced-command 扫描还没有进入 dispatch pipeline。
-  目前，Slash 实际的评论量由它的守卫结构限制（大多数拒绝每事件最多发一条评论），
-  而不是由显式的速率限制器。
-- **没有 `slash_github_api_calls_total`/rate-limit-remaining 指标。** 设计要求的
-  其他指标都已实现（见 [部署指南](/zh-hans/self-host/deployment/#observability)），但按端点的
-  GitHub API 调用计数和剩余 rate-limit 预算还没有通过 `/metrics` 暴露 —— 底层
-  GitHub 客户端今天会丢弃响应头，而干净地接通它需要的不止增量改动。
+## 回复与速率限制
 
-## 尚未演示
+当未知命令与已配置命令的编辑距离不超过二时，Slash 会给出建议。目前没有 token
+bucket、按拉取请求评论去重或 misplaced-command 回复。大多数拒绝路径对每个 webhook
+事件最多发一条评论，但不存在独立的回复 rate limiter。
 
-设计的成功标准（在一个真实测试仓库上的编号结果 —— 20/20 次调用达到终态、关联
-策略分布、多租户隔离等等）需要一个安装到真实仓库的活 GitHub App 才能测量。这个
-演示还没有在本环境运行过。
+## 运维
 
-有一个 release-checklist 项目*不需要*活 GitHub，因为 webhook handler 在自己的请求
-路径里从不外呼 GitHub —— 只有签名校验和一次 Postgres insert —— 而且已被直接测量：
-对一个 release 构建和真实 Postgres 打 1000 个并发、各自独立签名的 `POST /webhook`
-redelivery，得到 p99 ≈ 10ms（`slash_webhook_handler_seconds{outcome="accepted"}`：
-1000 个里 999 个在 ≤10ms 桶，1000/1000 在 ≤25ms 桶），从容满足 &lt;1s 的底线。
-复现：用已知 webhook secret（放在 `SLASH_WEBHOOK_SECRET_PATH` 指向的文件里）
-对任意 Postgres 跑服务器，然后用带唯一
-`X-GitHub-Delivery` 值的一批 HMAC-SHA256 签名请求打它，之后读 `GET /metrics`。
+- **没有按 installation 或全局 kill switch。** 停止全部服务器副本可以终止 dispatch
+  活动；暂停 GitHub App installation 可以撤销单个账户的访问。持久工作仍保留在
+  Postgres 中等待恢复。
+- **GitHub API rate-limit 可见性不完整。** `/metrics` 不暴露按端点的 GitHub 请求数
+  或剩余 rate-limit 预算。请把服务器日志与现有队列和 invocation 指标结合使用。
+
+监控、凭据轮换、实例管理后台和故障响应见
+[运维 Slash](/zh-hans/self-host/operations/)。

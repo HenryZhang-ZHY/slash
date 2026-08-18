@@ -96,3 +96,19 @@ test("separates Test Engine tasks from account guidance", () => {
     );
   }
 });
+
+test("keeps self-hosting as a complete standalone module", () => {
+  const english = collectFiles(new URL("en/", docsRoot), ".mdx");
+  const simplifiedChinese = collectFiles(new URL("zh-hans/", docsRoot), ".mdx");
+  const selfHostPages = [
+    "self-host/index.mdx",
+    "self-host/deployment.mdx",
+    "self-host/configuration.mdx",
+    "self-host/operations.mdx",
+  ];
+
+  for (const page of selfHostPages) {
+    assert.ok(english.includes(page), `missing English self-host page: ${page}`);
+    assert.ok(simplifiedChinese.includes(page), `missing Chinese self-host page: ${page}`);
+  }
+});

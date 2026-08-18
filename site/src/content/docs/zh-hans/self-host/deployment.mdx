@@ -1,157 +1,57 @@
 ---
-title: 部署
-description: "用 Postgres 部署和运维 Slash 服务器。"
+title: 部署 Slash
+description: "用 Postgres 运行 Slash 服务器并验证部署。"
 sidebar:
   order: 2
 ---
 
-## 参考部署：单副本
+## 参考拓扑
 
-参考部署是**一个无状态服务器容器加 Postgres**。单副本时，Postgres 的
-`FOR UPDATE SKIP LOCKED` 上没有跨副本竞争（进程内 worker 池仍会用到它），所以
-以后横向扩展是部署变更，而不是代码变更 —— 每一块协调（claim、受保护的状态转换、
-sweeper）都活在数据库里，绝不活在进程内计时器或队列里（丢失会改变结果）。多副本
-下的无竞争由项目的双 worker 并发测试证明，而不是靠生产环境跑多副本。
+从一个无状态 `slash-server` 容器和一个 Postgres 数据库开始。Postgres 拥有持久工作、
+唯一性约束、受保护的状态转换和 worker 协调。正确性不依赖内存队列，因此需要横向
+扩展时，多台服务器可以共享同一数据库。
 
-## 运行它
+通过环境中的 HTTPS 入口暴露服务器端口 `8080`。Web 控制台、REST API、GitHub
+webhook、健康端点和指标端点共享同一个 origin。
 
-构建并运行容器：
+## 运行容器
+
+构建仓库镜像，并以只读方式挂载必需的 secret 文件：
 
 ```sh
 docker build -t slash-server .
 docker run -p 8080:8080 \
   -e SLASH_DATABASE_URL_PATH=/run/secrets/database-url \
   -e SLASH_WEBHOOK_SECRET_PATH=/run/secrets/webhook-secret \
-  -e SLASH_GITHUB_APP_ID=... \
+  -e SLASH_AUTH_SECRET_PATH=/run/secrets/auth-secret \
+  -e SLASH_GITHUB_APP_ID=123456 \
   -e SLASH_GITHUB_PRIVATE_KEY_PATH=/run/secrets/github-app-key.pem \
-  -v /path/to/your-database-url.txt:/run/secrets/database-url:ro \
-  -v /path/to/your-webhook-secret.txt:/run/secrets/webhook-secret:ro \
-  -v /path/to/your-app-key.pem:/run/secrets/github-app-key.pem:ro \
+  -v /path/to/database-url:/run/secrets/database-url:ro \
+  -v /path/to/webhook-secret:/run/secrets/webhook-secret:ro \
+  -v /path/to/auth-secret:/run/secrets/auth-secret:ro \
+  -v /path/to/github-app-key.pem:/run/secrets/github-app-key.pem:ro \
   slash-server
 ```
 
-或者使用仓库根目录的 `docker-compose.yml`，它把 Postgres 和服务器一起接好供本地
-使用 —— 看它顶部注释里期望的 `.env` 值。
+仓库根目录的 `docker-compose.yml` 提供已经连接 Postgres 与服务器的本地参考。适配到
+其他环境前，请先阅读[配置](/zh-hans/self-host/configuration/)。
 
-服务器在启动时自己跑 Postgres 迁移（`sqlx::migrate!`，构建时嵌进二进制），失败
-立即退出，所以坏迁移绝不会让进程半启动。
+## 数据库迁移
 
-### 环境变量
+迁移嵌入服务器二进制，并在启动时执行。数据库不可用或迁移失败时进程直接退出，
+绝不会使用只迁移一部分的 schema 提供请求。
 
-| 变量 | 必填 | 说明 |
-| ---------------------------------- | ---------- | ------- |
-| `SLASH_DATABASE_URL_PATH` | 是 | 包含 Postgres 连接串的文件路径，启动时逐字节读取。 |
-| `SLASH_WEBHOOK_SECRET_PATH` | 是 | 包含 webhook secret 的文件路径（须匹配 GitHub App 上配置的 webhook secret）。没有它服务器拒绝启动 —— 签名校验绝不省略。 |
-| `SLASH_GITHUB_APP_ID` | 是 | GitHub App 的数字 ID。 |
-| `SLASH_GITHUB_PRIVATE_KEY_PATH` | 是 | App 私钥的**文件**路径（不是内联密钥）—— 只读挂载，平台支持时 mode `0400`。 |
-| `SLASH_AUTH_SECRET_PATH` | 是 | 包含会话签名 HMAC secret 的文件路径，逐字节读取。和其他 secret 一样仅文件方式。 |
-| `SLASH_ADMIN_SECRET_PATH` | 否 | 实例管理 secret 的文件路径。未设置时 `/admin` 和 `/api/admin/*` 返回 404；设置后文件必须可读且非空。 |
-| `SLASH_GITHUB_CLIENT_ID` | 否 | 同一个 GitHub App 的 Client ID；开启“使用 GitHub 登录”。 |
-| `SLASH_GITHUB_CLIENT_SECRET_PATH` | 否 | 包含该 GitHub App Client Secret 的文件路径；设置 Client ID 时必填。 |
-| `SLASH_BASE_URL` | 开启 GitHub 用户认证时 | 服务公开 base URL，用来生成精确 callback URI。 |
-| `SLASH_WEB_DIR` | 否 | 构建好的 web 控制台 SPA 的根目录。默认 `web/dist`（相对服务器工作目录）。 |
-| `RUST_LOG` | 否 | `tracing_subscriber` env-filter 语法，例如 `info` 或 `slash_server=debug`。 |
+请为 Postgres 使用持久存储，并把数据库纳入备份与恢复计划。Invocation 和 webhook
+状态是持久工作记录，不是可随时重建的缓存。
 
-每个 secret 都**只走文件**——每种 secret 只有一种配置方式：一个指向启动时读取
-文件的 `*_PATH` 环境变量（与 GitHub App 私钥一致）。旧的 inline 变体
-（`SLASH_DATABASE_URL` / `SLASH_WEBHOOK_SECRET` / `SLASH_AUTH_SECRET`）**不再
-识别**，所以 secret 永远不会通过 `docker inspect` 或 `ps aux` 暴露。文件内容
-**逐字节读取、不做 trim**——末尾换行或多余空白就是 secret 的一部分，配不上就
-让配不上，而不是被悄悄"修正"。若 `*_PATH` 未设置、或其文件不可读/为空，服务器
-拒绝启动而不是跳过该 secret。可选的 admin secret 是唯一例外：不设置路径会关闭管理
-后台，但路径一旦设置，文件不可读或为空仍会导致启动失败。auth secret 见
-`docs/user/onboarding`。
+## 验证部署
 
-刻意没有把私钥作为内联环境变量传入的方式 —— 只有文件路径 —— 而且 config 结构体
-没有 `Debug`/`Display` 实现，所以 webhook secret 和数据库 URL（可能内嵌密码）都
-不会通过一行 stray 日志泄漏。
+启动后请求存活端点：
 
-### GitHub App 用户认证（可选）
+```sh
+curl https://slash.example.com/healthz
+```
 
-Slash 使用同一个 GitHub App 完成仓库自动化和用户登录。GitHub 的 web authorization
-流程返回 GitHub App user access token；它使用 App 的细粒度权限而不是传统 OAuth
-scope。Slash 只读取 `/user`，不申请 GitHub 邮箱权限。
-
-1. 打开 Slash 所用 GitHub App 的设置。
-2. 添加 `{base_url}/api/auth/github/callback` 作为 callback URL，必须精确匹配。
-3. 记录该 App 的 Client ID，并生成 Client Secret。
-4. 配置 `SLASH_GITHUB_CLIENT_ID`、`SLASH_GITHUB_CLIENT_SECRET_PATH` 和
-   `SLASH_BASE_URL`。
-
-GitHub 首次登录按稳定 numeric user ID 创建一个不带密码凭据的 Slash 账户。已有邮箱
-密码账户必须先登录，再从 Settings 显式连接 GitHub；Slash 永远不会按邮箱自动合并。
-
-### 端点
-
-| 端点         | 用途 |
-|------------------|---------|
-| `POST /webhook`  | GitHub App 的 webhook URL。 |
-| `POST /api/auth/register` | 创建邮箱密码账户。 |
-| `POST /api/auth/login` | 使用邮箱密码登录。 |
-| `GET /api/auth/github/sign-in` | 开始 GitHub App 用户登录。 |
-| `POST /api/auth/github/connect` | 为当前账户显式连接 GitHub。 |
-| `GET /api/auth/github/callback` | GitHub App 用户认证 callback。 |
-| `GET /healthz`   | 存活检查；进程起来后总是返回 `200 ok`。 |
-| `GET /metrics`   | Prometheus 文本格式指标 —— 见下。 |
-
-## 可观测性
-
-`GET /metrics` 暴露（参见 `crates/slash-server/src/metrics.rs`）：
-
-- `slash_webhook_deliveries_total{event,outcome}` 和
-  `slash_webhook_handler_seconds{outcome}` —— webhook 摄入量与延迟。
-- `slash_deliveries_pending` 和 `slash_deliveries_oldest_pending_age_seconds`
-  —— 收件箱深度与陈旧度；非零且增长表示 worker 池卡住或落后了。
-- `slash_invocations{status}` 和 `slash_invocations_max_dispatched_age_seconds`
-  —— 每种生命周期状态的 invocation 数量，以及最老的等待 run id 的 `dispatched`
-  有多久。`dispatched` 数量或时长持续攀升是卡住 invocation 的警报；sweeper 会在
-  配置的超时内自动解决它们，所以持续攀升指向 GitHub API 错误，而不是逻辑 bug。
-- `slash_correlation_total{path}` —— 每次 dispatch 的 run id 最终如何被解析：
-  `dispatch_response`（常见情况）、`polled`（sweeper 的缺失 run id 恢复）或
-  `timeout`（从未解析）。健康的部署几乎全是 `dispatch_response`。
-- `slash_dispatch_failures_total{class}` —— 以 `dispatch_failed` 结束的 dispatch，
-  按失败类别。
-
-**已知缺口**（参见 [已知限制](/zh-hans/limitations/)）：还没有
-`slash_github_api_calls_total`/rate-limit-remaining 指标 —— GitHub API 调用量和
-剩余 rate-limit 预算目前无法通过 `/metrics` 观测。用应用日志里的 `sweeper: failed
-to mint token` / API 错误告警作为临时信号。
-
-## 密钥轮换
-
-轮换任一凭据不需要代码变更，只需更新配置并重启：
-
-- **Webhook secret**：生成新 secret，在 GitHub App 设置里更新，然后更新
-  `SLASH_WEBHOOK_SECRET_PATH` 指向的文件并重启服务器。在 App 设置保存传播之前会有一个短暂窗口，
-  GitHub 可能用旧 secret 投递 —— 这个窗口里的少量 `401` 是预期且无害的（GitHub
-  会重试投递）。
-- **私钥**：在 GitHub App 设置里生成新私钥（不会立刻让旧的失效），把新 `.pem`
-  文件部署到 `SLASH_GITHUB_PRIVATE_KEY_PATH` 并重启，然后确认新部署能正常 mint
-  token 后，再从 App 设置里删除旧私钥。
-
-两者都要定期做，并总是在任何疑似凭据泄露后做 —— 参见下面的故障处理流程。
-
-## 故障处理流程
-
-如果 App 正在做不该做的事（在某个仓库上行为异常、凭据疑似泄露、或 GitHub 报告
-滥用）：
-
-1. **停止服务器进程。** 目前没有按安装或全局的 kill switch（记录在案，参见
-   [已知限制](/zh-hans/limitations/)）；停止进程是立即暂停*所有*跨安装 dispatch 活动的
-   唯一办法。进行中的 `claimed`/`dispatched` invocation 会持久留在 Postgres 里，
-   服务器重启后通过 sweeper 的正常超时路径自行解决 —— 停止它不会丢任何东西。
-2. **如果凭据疑似泄露**：立即轮换私钥和 webhook secret（见上），并考虑从 GitHub
-   自己的 UI 里暂停或卸载受影响仓库/组织的 GitHub App —— 这会立即使 App 无法为它
-   mint 新的 installation token，与 Slash 自己做的任何事无关。
-3. **调查** —— 用 `invocations` 表（每次 dispatch 尝试的持久、append-mostly 审计
-   记录 —— installation、repo、PR、actor、command、workflow、结果 run id，在
-   dispatch API 调用*之前*写入）和上面的 `/metrics` 计数器。
-4. **恢复** —— 根本问题解决后重启服务器即可。没有单独的"暂停"状态要清除 ——
-   停止的服务器只是不在处理任何东西。
-
-## 多租户说明
-
-Installation token 按仓库 mint，只带单次调用实际需要的权限，并分别按
-`(installation_id, repository_id, permission_set)` 缓存 —— token 泄露被限制在一个
-仓库和一组权限内，而不是 App 安装的每一个仓库。遇到 `401` 时，缓存的 token 失效并
-重新 mint 一次。
+运行中的进程返回带 `ok` 的 `200 OK`。接着把 GitHub App webhook URL 配置为
+`https://slash.example.com/webhook`，确认签名 delivery 被接受。使用
+[运维 Slash](/zh-hans/self-host/operations/)查看队列健康与近期 delivery。
