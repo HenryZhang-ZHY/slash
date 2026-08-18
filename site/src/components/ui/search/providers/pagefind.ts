@@ -1,6 +1,7 @@
 import type { SearchProvider, SearchResult } from "@cloudflare/nimbus-docs/types";
 import { config } from "virtual:nimbus/config";
 import { withBasePath } from "@/lib/urls";
+import { getLocaleByPath, getTranslations } from "@/lib/i18n";
 
 interface PagefindSubResult {
   title?: string;
@@ -46,10 +47,12 @@ let pagefind: PagefindApi | undefined;
  * Computed at module-import time so we don't pay the config lookup on
  * every keystroke.
  */
-const defaultFilters: PagefindFilters | undefined =
-  config.versions && config.versions.deprecated && config.versions.deprecated.length > 0
-    ? { status: { none: "deprecated" } }
-    : undefined;
+function defaultFilters(): PagefindFilters {
+  const locale = getLocaleByPath(window.location.pathname, import.meta.env.BASE_URL);
+  const filters: PagefindFilters = { language: locale.path };
+  if (config.versions?.deprecated?.length) filters.status = { none: "deprecated" };
+  return filters;
+}
 
 export const provider: SearchProvider = {
   async init() {
@@ -68,11 +71,13 @@ export const provider: SearchProvider = {
 
     const search = await pagefind.search(
       query,
-      defaultFilters ? { filters: defaultFilters } : undefined,
+      { filters: defaultFilters() },
     );
     const results = await Promise.all(search.results.slice(0, 10).map((result) => result.data()));
     return results.map((result): SearchResult => ({
-      title: result.meta?.title ?? "Untitled",
+      title: result.meta?.title ?? getTranslations(
+        getLocaleByPath(window.location.pathname, import.meta.env.BASE_URL).languageTag,
+      ).search.untitled,
       url: withBasePath(result.url),
       snippet: result.excerpt,
       subResults: result.sub_results

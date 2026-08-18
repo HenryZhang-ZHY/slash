@@ -1,4 +1,5 @@
 export const DEFAULT_LOCALE = "en" as const;
+export const LOCALE_STORAGE_KEY = "docs-locale";
 
 export const LOCALES = {
   en: {
@@ -35,6 +36,7 @@ const translations = {
       tableOfContents: "Table of contents",
       jumpToSection: "Jump to section",
       overview: "Overview",
+      toggleSection: (label: string) => `Toggle ${label} section`,
     },
     search: {
       label: "Search documentation",
@@ -56,6 +58,7 @@ const translations = {
       updated: "Updated",
       copyPage: "Copy page",
       copied: "Copied",
+      copyFailed: "Couldn't copy",
       viewMarkdown: "View as Markdown",
     },
     language: { select: "Select language" },
@@ -77,6 +80,7 @@ const translations = {
       tableOfContents: "本页目录",
       jumpToSection: "跳到章节",
       overview: "概览",
+      toggleSection: (label: string) => `展开或折叠“${label}”`,
     },
     search: {
       label: "搜索文档",
@@ -98,6 +102,7 @@ const translations = {
       updated: "更新于",
       copyPage: "复制页面",
       copied: "已复制",
+      copyFailed: "复制失败",
       viewMarkdown: "查看 Markdown",
     },
     language: { select: "选择语言" },
