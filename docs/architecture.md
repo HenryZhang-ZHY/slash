@@ -131,6 +131,11 @@ profile fields never merge accounts. Protocol adapters normalize provider
 responses before the provider-neutral persistence layer. The complete contract
 is in [Authentication and external identities](design/authentication.md).
 
+Instance administration is a separate secret-gated trust boundary. It is
+disabled when its file-backed secret is absent and grants no repository or
+organization role. The operational surface and installation reconciliation
+rules are in [Instance admin console](design/admin-console.md).
+
 ## Repository and release discipline
 
 The Rust workspace contains pure domain crates, GitHub/configuration adapters,

@@ -45,6 +45,7 @@ docker run -p 8080:8080 \
 | `SLASH_GITHUB_APP_ID` | 是 | GitHub App 的数字 ID。 |
 | `SLASH_GITHUB_PRIVATE_KEY_PATH` | 是 | App 私钥的**文件**路径（不是内联密钥）—— 只读挂载，平台支持时 mode `0400`。 |
 | `SLASH_AUTH_SECRET_PATH` | 是 | 包含会话签名 HMAC secret 的文件路径，逐字节读取。和其他 secret 一样仅文件方式。 |
+| `SLASH_ADMIN_SECRET_PATH` | 否 | 实例管理 secret 的文件路径。未设置时 `/admin` 和 `/api/admin/*` 返回 404；设置后文件必须可读且非空。 |
 | `SLASH_GITHUB_CLIENT_ID` | 否 | 同一个 GitHub App 的 Client ID；开启“使用 GitHub 登录”。 |
 | `SLASH_GITHUB_CLIENT_SECRET_PATH` | 否 | 包含该 GitHub App Client Secret 的文件路径；设置 Client ID 时必填。 |
 | `SLASH_BASE_URL` | 开启 GitHub 用户认证时 | 服务公开 base URL，用来生成精确 callback URI。 |
@@ -57,7 +58,9 @@ docker run -p 8080:8080 \
 识别**，所以 secret 永远不会通过 `docker inspect` 或 `ps aux` 暴露。文件内容
 **逐字节读取、不做 trim**——末尾换行或多余空白就是 secret 的一部分，配不上就
 让配不上，而不是被悄悄"修正"。若 `*_PATH` 未设置、或其文件不可读/为空，服务器
-拒绝启动而不是跳过该 secret。auth secret 见 `docs/user/onboarding`。
+拒绝启动而不是跳过该 secret。可选的 admin secret 是唯一例外：不设置路径会关闭管理
+后台，但路径一旦设置，文件不可读或为空仍会导致启动失败。auth secret 见
+`docs/user/onboarding`。
 
 刻意没有把私钥作为内联环境变量传入的方式 —— 只有文件路径 —— 而且 config 结构体
 没有 `Debug`/`Display` 实现，所以 webhook secret 和数据库 URL（可能内嵌密码）都

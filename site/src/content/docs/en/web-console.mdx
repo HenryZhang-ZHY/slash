@@ -69,3 +69,16 @@ The `/tests` page is the Test Engine control panel. It lets you:
 
 Every action in the console maps 1:1 to an endpoint in the
 [Test Engine management API](/en/api/test-engine/).
+
+## Instance admin console
+
+Self-hosters can enable the separate `/admin` operations console with
+`SLASH_ADMIN_SECRET_PATH`. It uses its own 20-minute session and is not
+granted by a Slash user or organization role. When the secret is not
+configured, the page and API return 404.
+
+The console shows installation counts, recent webhook deliveries and their
+escaped JSON payloads, related slash-command responses, and queue diagnostics.
+Installation calibration runs only when an admin clicks **Refresh from
+GitHub**. A cross-replica lock and five-minute cooldown prevent repeated App
+API requests. The first version does not retry or delete failed webhooks.

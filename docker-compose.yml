@@ -9,6 +9,7 @@
 # and fill in an `.env` file (docker-compose reads it automatically) with:
 #   WEBHOOK_SECRET_FILE=./webhook-secret.txt        (must exist)
 #   DATABASE_URL_FILE=./database-url.txt            (must exist; e.g. postgres://slash:slash@postgres:5432/slash)
+#   AUTH_SECRET_FILE=./auth-secret.txt                (must exist)
 #   SLASH_GITHUB_APP_ID=...
 #   GITHUB_PRIVATE_KEY_PATH=./your-app-key.pem
 # Secrets (webhook secret, DB URL, App private key) are mounted as read-only
@@ -36,6 +37,7 @@ services:
     environment:
       SLASH_DATABASE_URL_PATH: /run/secrets/database-url
       SLASH_WEBHOOK_SECRET_PATH: /run/secrets/webhook-secret
+      SLASH_AUTH_SECRET_PATH: /run/secrets/auth-secret
       SLASH_GITHUB_APP_ID: ${SLASH_GITHUB_APP_ID:?set SLASH_GITHUB_APP_ID in .env}
       SLASH_GITHUB_PRIVATE_KEY_PATH: /run/secrets/github-app-key.pem
       RUST_LOG: info
@@ -47,6 +49,7 @@ services:
       # leak them.
       - ${WEBHOOK_SECRET_FILE:?set WEBHOOK_SECRET_FILE in .env}:/run/secrets/webhook-secret:ro
       - ${DATABASE_URL_FILE:?set DATABASE_URL_FILE in .env}:/run/secrets/database-url:ro
+      - ${AUTH_SECRET_FILE:?set AUTH_SECRET_FILE in .env}:/run/secrets/auth-secret:ro
       - ${GITHUB_PRIVATE_KEY_PATH:?set GITHUB_PRIVATE_KEY_PATH in .env}:/run/secrets/github-app-key.pem:ro
     depends_on:
       postgres:

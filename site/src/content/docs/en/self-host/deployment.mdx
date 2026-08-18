@@ -51,6 +51,7 @@ a bad migration never leaves the process half-started.
 | `SLASH_GITHUB_APP_ID` | yes | The GitHub App's numeric ID. |
 | `SLASH_GITHUB_PRIVATE_KEY_PATH` | yes | Path to the App's private key **file** (not the key inline) — mount it read-only, mode `0400` if your platform supports setting it. |
 | `SLASH_AUTH_SECRET_PATH` | yes | Path to a file containing the HMAC session-signing secret, read byte-for-byte. File-only, like the other secrets. |
+| `SLASH_ADMIN_SECRET_PATH` | no | Path to the instance-admin secret. When absent, `/admin` and `/api/admin/*` return 404. When set, the file must be readable and non-empty. |
 | `SLASH_GITHUB_CLIENT_ID` | no | Client ID of the same GitHub App used by the control plane. Enables "Sign in with GitHub". |
 | `SLASH_GITHUB_CLIENT_SECRET_PATH` | no | Path to a file containing that GitHub App's client secret. Required when `SLASH_GITHUB_CLIENT_ID` is set. |
 | `SLASH_BASE_URL` | with GitHub user auth | Public base URL of the server (e.g. `https://slash.example.com`). Used to construct the exact callback URI. |
@@ -65,7 +66,9 @@ secret can never end up visible via `docker inspect` or `ps aux`. The file's
 content is read **byte-for-byte — no trimming** — a trailing newline or stray
 whitespace is part of the secret, and a mismatch simply fails rather than
 being silently corrected. If a `*_PATH` env var is unset, or its file is
-unreadable or empty, startup fails rather than skipping the secret. See
+unreadable or empty, startup fails rather than skipping the secret. The one
+exception is the optional admin secret: leaving its path unset disables the
+admin surface, while setting an unreadable or empty file still fails startup. See
 `docs/user/onboarding` for the auth secret.
 
 There is deliberately no way to pass the private key as an inline
