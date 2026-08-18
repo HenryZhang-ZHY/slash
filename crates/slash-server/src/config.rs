@@ -20,11 +20,11 @@ pub struct ServerConfig {
     pub webhook_secret: String,
     pub database_url: String,
     pub auth_secret: String,
-    /// GitHub OAuth App client ID (inline env var). `None` when OAuth login
-    /// is not configured — the server still starts with email/password auth.
+    /// Client ID of the same GitHub App used by the control plane. `None`
+    /// when GitHub user authentication is not configured.
     pub github_client_id: Option<String>,
-    /// GitHub OAuth App client secret (file-only, same convention as other
-    /// secrets). `None` when OAuth login is not configured.
+    /// GitHub App client secret (file-only, same convention as other secrets).
+    /// `None` when GitHub user authentication is not configured.
     pub github_client_secret: Option<String>,
     /// Public origin used to construct the exact OAuth callback URI.
     pub github_base_url: Option<String>,
@@ -60,8 +60,8 @@ impl ServerConfig {
         let github_private_key_path =
             PathBuf::from(require(lookup, "SLASH_GITHUB_PRIVATE_KEY_PATH")?);
 
-        // GitHub OAuth login is optional: the server works with email/password
-        // alone. Both client ID and secret must be present for OAuth to activate.
+        // GitHub App user authentication is optional: the server works with
+        // password credentials alone. Both client ID and secret must be present.
         let github_client_id = lookup("SLASH_GITHUB_CLIENT_ID");
         let github_client_secret = match github_client_id {
             Some(_) => Some(resolve_secret(

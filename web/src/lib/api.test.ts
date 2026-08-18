@@ -144,7 +144,6 @@ describe("authentication API", () => {
             connections: {
               github: {
                 login: "octocat",
-                email: "octocat@example.com",
               },
             },
           }),
@@ -157,7 +156,6 @@ describe("authentication API", () => {
 
     expect(me.connections.github).toEqual({
       login: "octocat",
-      email: "octocat@example.com",
     });
   });
 

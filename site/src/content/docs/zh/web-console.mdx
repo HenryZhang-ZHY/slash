@@ -17,6 +17,8 @@ HTTP API，所以控制台能做的任何事通过 API 也都能做。
 - **Create your account** —— 用邮箱和至少 8 字节的密码注册（`POST
   /api/auth/register`）。注册后立即登录。
 - **Sign in** —— 用现有账户登录（`POST /api/auth/login`）。
+- **Sign in with GitHub** —— 按稳定 GitHub 身份登录，或创建一个不带邮箱密码凭据的
+  Slash 账户。Slash 不读取 GitHub 邮箱，也不会按邮箱自动合并账户。
 
 两者都设置 `HttpOnly` 会话 cookie；控制台永远看不到密码。
 
@@ -31,6 +33,11 @@ Engine 等 Slash 原生产品；slash command 权限由 GitHub 仓库权限独�
 
 工作区首页（`/`）显示概览：你的团队数量、Test Engine 套件/测试用例/执行数量、
 团队列表，以及进入 Test Engine 控制台的快捷方式。
+
+## Settings 与 GitHub 连接
+
+`/settings` 从 `GET /api/auth/me` 读取真实连接状态。邮箱密码用户可以通过
+`POST /api/auth/github/connect` 显式连接 GitHub；已连接用户会看到 GitHub login。
 
 ## Test Engine 控制台
 

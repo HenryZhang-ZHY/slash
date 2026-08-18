@@ -20,9 +20,9 @@ unauthenticated visit redirects to `/login`. The login page toggles between
   8 bytes (`POST /api/auth/register`). Registration immediately signs you in.
 - **Sign in** — log in with an existing account (`POST /api/auth/login`).
 - **Sign in with GitHub** — sign in by stable GitHub identity or create a new
-  Slash account from a verified primary GitHub email. Slash never merges an
-  existing account by matching email; sign in with its password and connect
-  GitHub explicitly from Settings instead.
+  credential-free Slash account. Slash does not read GitHub email and never
+  merges accounts by email; sign in with a password account and connect GitHub
+  explicitly from Settings when that is the account you intend to keep.
 
 Both set an `HttpOnly` session cookie; the console never sees the password.
 
@@ -46,7 +46,7 @@ shortcut into the Test Engine console.
 
 The `/settings` page reads connection state from `GET /api/auth/me`. An
 unconnected user can start `POST /api/auth/github/connect`; an already
-connected user sees the GitHub login and verified email recorded by Slash.
+connected user sees the GitHub login recorded by Slash.
 The page never infers connection state from the callback URL.
 
 ## Test Engine console

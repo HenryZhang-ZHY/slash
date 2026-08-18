@@ -1,8 +1,9 @@
-//! GitHub OAuth 2.0 sign-in and account connection.
+//! GitHub App user authentication and account connection.
 //!
-//! Sign-in and connection share the OAuth transport, but deliberately use
-//! different account-resolution policies. See
-//! `docs/design/github-authentication.md`.
+//! GitHub App user access tokens use the OAuth web application transport but
+//! are authorized by fine-grained App permissions, not OAuth scopes. Sign-in
+//! and connection deliberately use different account-resolution policies. See
+//! `docs/design/authentication.md`.
 
 use std::sync::Arc;
 
@@ -20,6 +21,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::auth::{self, AuthSecret};
+use crate::identity::{self, AuthenticatedIdentity, IdentityError};
 use crate::userapi::{UserId, api_error};
 
 type HmacSha256 = Hmac<Sha256>;
@@ -27,8 +29,8 @@ type HmacSha256 = Hmac<Sha256>;
 const GITHUB_AUTHORIZE_URL: &str = "https://github.com/login/oauth/authorize";
 const GITHUB_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
 const GITHUB_USER_URL: &str = "https://api.github.com/user";
-const GITHUB_EMAILS_URL: &str = "https://api.github.com/user/emails";
 const GITHUB_API_VERSION: &str = "2026-03-10";
+const GITHUB_CONNECTION_ID: Uuid = Uuid::from_u128(1);
 const STATE_COOKIE: &str = "slash_github_oauth";
 const STATE_TTL_SECS: u64 = 10 * 60;
 
@@ -37,7 +39,6 @@ struct OauthEndpoints {
     authorize: Arc<str>,
     token: Arc<str>,
     user: Arc<str>,
-    emails: Arc<str>,
 }
 
 impl Default for OauthEndpoints {
@@ -46,12 +47,11 @@ impl Default for OauthEndpoints {
             authorize: Arc::from(GITHUB_AUTHORIZE_URL),
             token: Arc::from(GITHUB_TOKEN_URL),
             user: Arc::from(GITHUB_USER_URL),
-            emails: Arc::from(GITHUB_EMAILS_URL),
         }
     }
 }
 
-/// Configuration for GitHub's OAuth web application flow.
+/// Configuration for the GitHub App user authorization flow.
 #[derive(Clone)]
 pub struct OauthState {
     client_id: Arc<str>,
@@ -108,40 +108,11 @@ struct GithubTokenResponse {
     error: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 struct GithubUser {
     id: i64,
     login: String,
     name: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct GithubEmail {
-    email: String,
-    primary: bool,
-    verified: bool,
-}
-
-#[derive(Clone, Debug)]
-struct GithubProfile {
-    subject: String,
-    login: String,
-    email: String,
-    display_name: String,
-}
-
-#[derive(Debug, thiserror::Error)]
-enum AccountError {
-    #[error("a Slash account already uses this email")]
-    EmailInUse,
-    #[error("this GitHub account is connected to another Slash account")]
-    IdentityInUse,
-    #[error("this Slash account already has a different GitHub account")]
-    ProviderAlreadyConnected,
-    #[error("the Slash account is not available")]
-    UserUnavailable,
-    #[error("database operation failed")]
-    Database(#[from] sqlx::Error),
 }
 
 /// `GET /api/auth/github/sign-in` starts an unauthenticated GitHub sign-in.
@@ -195,12 +166,11 @@ fn authorization_url(
     pkce_challenge: &str,
 ) -> String {
     format!(
-        "{}?client_id={}&redirect_uri={}&state={}&scope={}&code_challenge={}&code_challenge_method=S256&prompt=select_account",
+        "{}?client_id={}&redirect_uri={}&state={}&code_challenge={}&code_challenge_method=S256&prompt=select_account",
         oauth.endpoints.authorize,
         urlencoding::encode(&oauth.client_id),
         urlencoding::encode(redirect_uri),
         urlencoding::encode(nonce),
-        urlencoding::encode("read:user user:email"),
         urlencoding::encode(pkce_challenge),
     )
 }
@@ -314,7 +284,7 @@ async fn exchange_code(
 async fn fetch_profile(
     oauth: &OauthState,
     access_token: &str,
-) -> Result<GithubProfile, &'static str> {
+) -> Result<AuthenticatedIdentity, &'static str> {
     let client = reqwest::Client::new();
     let user_response = github_get(&client, oauth.endpoints.user.as_ref(), access_token)
         .await
@@ -323,23 +293,17 @@ async fn fetch_profile(
         return Err("github_unavailable");
     }
     let user: GithubUser = user_response.json().await.map_err(|_| "invalid_profile")?;
-    let email_response = github_get(&client, oauth.endpoints.emails.as_ref(), access_token)
-        .await
-        .map_err(|_| "github_unavailable")?;
-    if !email_response.status().is_success() {
-        return Err("email_unavailable");
-    }
-    let emails: Vec<GithubEmail> = email_response.json().await.map_err(|_| "invalid_email")?;
-    let email = verified_primary_email(&emails).ok_or("verified_email_required")?;
+    let profile = serde_json::to_value(&user).map_err(|_| "invalid_profile")?;
     let display_name = user
         .name
         .filter(|name| !name.trim().is_empty())
         .unwrap_or_else(|| user.login.clone());
-    Ok(GithubProfile {
+    Ok(AuthenticatedIdentity {
+        connection_id: GITHUB_CONNECTION_ID,
         subject: user.id.to_string(),
-        login: user.login,
-        email: email.to_lowercase(),
+        username: user.login,
         display_name,
+        profile,
     })
 }
 
@@ -358,24 +322,14 @@ async fn github_get(
         .await
 }
 
-fn verified_primary_email(emails: &[GithubEmail]) -> Option<&str> {
-    emails
-        .iter()
-        .find(|email| email.primary && email.verified)
-        .map(|email| email.email.as_str())
-}
-
 async fn finish_sign_in(
     state: &crate::AppState,
     oauth: &OauthState,
-    profile: &GithubProfile,
+    profile: &AuthenticatedIdentity,
 ) -> Response {
-    let user_id = match sign_in_user(&state.pool, profile).await {
+    let user_id = match identity::sign_in_or_create(&state.pool, profile).await {
         Ok(user_id) => user_id,
-        Err(AccountError::EmailInUse) => {
-            return callback_error(oauth, Some(OauthIntent::SignIn), "account_exists");
-        }
-        Err(AccountError::UserUnavailable) => {
+        Err(IdentityError::UserUnavailable) => {
             return callback_error(oauth, Some(OauthIntent::SignIn), "account_unavailable");
         }
         Err(error) => {
@@ -407,175 +361,25 @@ async fn finish_connection(
     pool: &PgPool,
     oauth: &OauthState,
     user_id: Uuid,
-    profile: &GithubProfile,
+    profile: &AuthenticatedIdentity,
 ) -> Response {
-    match connect_user(pool, user_id, profile).await {
+    match identity::connect(pool, user_id, profile).await {
         Ok(()) => callback_success(oauth, OauthIntent::Connect),
-        Err(AccountError::IdentityInUse) => {
+        Err(IdentityError::IdentityInUse) => {
             callback_error(oauth, Some(OauthIntent::Connect), "identity_in_use")
         }
-        Err(AccountError::ProviderAlreadyConnected) => callback_error(
+        Err(IdentityError::ConnectionAlreadyLinked) => callback_error(
             oauth,
             Some(OauthIntent::Connect),
             "different_identity_connected",
         ),
-        Err(AccountError::UserUnavailable) => {
+        Err(IdentityError::UserUnavailable) => {
             callback_error(oauth, Some(OauthIntent::Connect), "session_expired")
         }
         Err(error) => {
             tracing::error!(%error, "github account connection persistence failed");
             callback_error(oauth, Some(OauthIntent::Connect), "internal")
         }
-    }
-}
-
-async fn sign_in_user(pool: &PgPool, profile: &GithubProfile) -> Result<Uuid, AccountError> {
-    let mut tx = pool.begin().await?;
-    let existing = sqlx::query_as::<_, (Uuid, String)>(
-        "SELECT u.id, u.status
-         FROM user_identities ui
-         JOIN users u ON u.id = ui.user_id
-         WHERE ui.provider = 'github' AND ui.provider_subject = $1
-         FOR UPDATE OF ui, u",
-    )
-    .bind(&profile.subject)
-    .fetch_optional(&mut *tx)
-    .await?;
-    if let Some((user_id, status)) = existing {
-        if status != "active" {
-            return Err(AccountError::UserUnavailable);
-        }
-        update_identity(&mut tx, user_id, profile).await?;
-        tx.commit().await?;
-        return Ok(user_id);
-    }
-
-    let email_in_use: bool =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE email = $1)")
-            .bind(&profile.email)
-            .fetch_one(&mut *tx)
-            .await?;
-    if email_in_use {
-        return Err(AccountError::EmailInUse);
-    }
-
-    let user_id = Uuid::new_v4();
-    sqlx::query(
-        "INSERT INTO users (id, email, password_hash, display_name, status)
-         VALUES ($1, $2, '', $3, 'active')",
-    )
-    .bind(user_id)
-    .bind(&profile.email)
-    .bind(&profile.display_name)
-    .execute(&mut *tx)
-    .await
-    .map_err(map_constraint)?;
-    insert_identity(&mut tx, user_id, profile)
-        .await
-        .map_err(map_constraint)?;
-    tx.commit().await?;
-    Ok(user_id)
-}
-
-async fn connect_user(
-    pool: &PgPool,
-    user_id: Uuid,
-    profile: &GithubProfile,
-) -> Result<(), AccountError> {
-    let mut tx = pool.begin().await?;
-    let status: Option<String> =
-        sqlx::query_scalar("SELECT status FROM users WHERE id = $1 FOR UPDATE")
-            .bind(user_id)
-            .fetch_optional(&mut *tx)
-            .await?;
-    if status.as_deref() != Some("active") {
-        return Err(AccountError::UserUnavailable);
-    }
-
-    let subject_owner: Option<Uuid> = sqlx::query_scalar(
-        "SELECT user_id
-         FROM user_identities
-         WHERE provider = 'github' AND provider_subject = $1
-         FOR UPDATE",
-    )
-    .bind(&profile.subject)
-    .fetch_optional(&mut *tx)
-    .await?;
-    if subject_owner.is_some_and(|owner| owner != user_id) {
-        return Err(AccountError::IdentityInUse);
-    }
-
-    let current_subject: Option<String> = sqlx::query_scalar(
-        "SELECT provider_subject
-         FROM user_identities
-         WHERE provider = 'github' AND user_id = $1
-         FOR UPDATE",
-    )
-    .bind(user_id)
-    .fetch_optional(&mut *tx)
-    .await?;
-    match current_subject {
-        Some(subject) if subject != profile.subject => {
-            return Err(AccountError::ProviderAlreadyConnected);
-        }
-        Some(_) => update_identity(&mut tx, user_id, profile).await?,
-        None => insert_identity(&mut tx, user_id, profile)
-            .await
-            .map_err(map_constraint)?,
-    }
-    tx.commit().await?;
-    Ok(())
-}
-
-async fn insert_identity(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    user_id: Uuid,
-    profile: &GithubProfile,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "INSERT INTO user_identities
-            (id, user_id, provider, provider_subject, provider_login, provider_email)
-         VALUES ($1, $2, 'github', $3, $4, $5)",
-    )
-    .bind(Uuid::new_v4())
-    .bind(user_id)
-    .bind(&profile.subject)
-    .bind(&profile.login)
-    .bind(&profile.email)
-    .execute(&mut **tx)
-    .await?;
-    Ok(())
-}
-
-async fn update_identity(
-    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    user_id: Uuid,
-    profile: &GithubProfile,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "UPDATE user_identities
-         SET provider_login = $1, provider_email = $2, updated_at = now()
-         WHERE user_id = $3 AND provider = 'github' AND provider_subject = $4",
-    )
-    .bind(&profile.login)
-    .bind(&profile.email)
-    .bind(user_id)
-    .bind(&profile.subject)
-    .execute(&mut **tx)
-    .await?;
-    Ok(())
-}
-
-fn map_constraint(error: sqlx::Error) -> AccountError {
-    let constraint = match &error {
-        sqlx::Error::Database(database) => database.constraint(),
-        _ => None,
-    };
-    match constraint {
-        Some("users_email_key") => AccountError::EmailInUse,
-        Some("user_identities_provider_subject_unique") => AccountError::IdentityInUse,
-        Some("user_identities_user_provider_unique") => AccountError::ProviderAlreadyConnected,
-        _ => AccountError::Database(error),
     }
 }
 
@@ -722,6 +526,8 @@ fn callback_error(oauth: &OauthState, intent: Option<OauthIntent>, code: &'stati
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn secret() -> AuthSecret {
         AuthSecret(Arc::from("test-oauth-secret"))
@@ -747,12 +553,13 @@ mod tests {
         }
     }
 
-    fn profile(subject: &str, email: &str) -> GithubProfile {
-        GithubProfile {
+    fn profile(subject: &str) -> AuthenticatedIdentity {
+        AuthenticatedIdentity {
+            connection_id: GITHUB_CONNECTION_ID,
             subject: subject.into(),
-            login: format!("user-{subject}"),
-            email: email.into(),
+            username: format!("user-{subject}"),
             display_name: format!("User {subject}"),
+            profile: serde_json::json!({"id": subject, "login": format!("user-{subject}")}),
         }
     }
 
@@ -777,6 +584,7 @@ mod tests {
         assert!(location.contains("state=public-nonce"));
         assert!(location.contains("code_challenge=public-challenge"));
         assert!(location.contains("code_challenge_method=S256"));
+        assert!(!location.contains("scope="));
         assert!(!location.contains("client-secret"));
         assert!(!location.contains("pkce_verifier"));
     }
@@ -812,27 +620,28 @@ mod tests {
         assert!(connection_session_user(&secret(), None, Some(user_id)).is_err());
     }
 
-    #[test]
-    fn only_a_verified_primary_email_is_accepted() {
-        let emails = vec![
-            GithubEmail {
-                email: "secondary@example.com".into(),
-                primary: false,
-                verified: true,
-            },
-            GithubEmail {
-                email: "unverified@example.com".into(),
-                primary: true,
-                verified: false,
-            },
-            GithubEmail {
-                email: "primary@example.com".into(),
-                primary: true,
-                verified: true,
-            },
-        ];
-        assert_eq!(verified_primary_email(&emails), Some("primary@example.com"));
-        assert_eq!(verified_primary_email(emails.get(..2).unwrap()), None);
+    #[tokio::test]
+    async fn github_profile_requires_only_the_authenticated_user_endpoint() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/user"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "id": 42,
+                "login": "octocat",
+                "name": "The Octocat"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut oauth = oauth();
+        oauth.endpoints.user = Arc::from(format!("{}/user", server.uri()));
+
+        let identity = fetch_profile(&oauth, "user-access-token").await.unwrap();
+
+        assert_eq!(identity.connection_id, GITHUB_CONNECTION_ID);
+        assert_eq!(identity.subject, "42");
+        assert_eq!(identity.username, "octocat");
+        assert_eq!(identity.display_name, "The Octocat");
     }
 
     async fn test_pool() -> Option<PgPool> {
@@ -849,8 +658,16 @@ mod tests {
     async fn password_user(pool: &PgPool, email: &str) -> Uuid {
         let user_id = Uuid::new_v4();
         sqlx::query(
-            "INSERT INTO users (id, email, password_hash, display_name, status)
-             VALUES ($1, $2, 'hash', 'Existing', 'active')",
+            "INSERT INTO users (id, display_name, status)
+             VALUES ($1, 'Existing', 'active')",
+        )
+        .bind(user_id)
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO password_credentials (user_id, normalized_email, password_hash)
+             VALUES ($1, $2, 'hash')",
         )
         .bind(user_id)
         .bind(email)
@@ -862,18 +679,20 @@ mod tests {
 
     #[serial_test::serial(db)]
     #[tokio::test]
-    async fn github_sign_in_never_silently_merges_by_email() {
+    async fn github_sign_in_does_not_use_email_credentials_as_identity() {
         let Some(pool) = test_pool().await else {
             return;
         };
-        password_user(&pool, "same@example.com").await;
-        let result = sign_in_user(&pool, &profile("101", "same@example.com")).await;
-        assert!(matches!(result, Err(AccountError::EmailInUse)));
+        let password_user_id = password_user(&pool, "same@example.com").await;
+        let github_user_id = identity::sign_in_or_create(&pool, &profile("101"))
+            .await
+            .unwrap();
+        assert_ne!(github_user_id, password_user_id);
         let identities: i64 = sqlx::query_scalar("SELECT count(*) FROM user_identities")
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(identities, 0);
+        assert_eq!(identities, 1);
     }
 
     #[serial_test::serial(db)]
@@ -882,19 +701,48 @@ mod tests {
         let Some(pool) = test_pool().await else {
             return;
         };
-        let first = sign_in_user(&pool, &profile("102", "new@example.com"))
+        let first = identity::sign_in_or_create(&pool, &profile("102"))
             .await
             .unwrap();
-        let second = sign_in_user(&pool, &profile("102", "renamed@example.com"))
-            .await
-            .unwrap();
+        let mut renamed = profile("102");
+        renamed.username = "renamed".into();
+        let second = identity::sign_in_or_create(&pool, &renamed).await.unwrap();
         assert_eq!(first, second);
-        let account_email: String = sqlx::query_scalar("SELECT email FROM users WHERE id = $1")
-            .bind(first)
-            .fetch_one(&pool)
+        let password_credentials: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM password_credentials WHERE user_id = $1")
+                .bind(first)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(password_credentials, 0);
+    }
+
+    #[serial_test::serial(db)]
+    #[tokio::test]
+    async fn equal_subjects_from_different_connections_are_distinct_identities() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        let first = identity::sign_in_or_create(&pool, &profile("same-subject"))
             .await
             .unwrap();
-        assert_eq!(account_email, "new@example.com");
+        let connection_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO auth_connections
+                (id, connection_key, kind, protocol, issuer)
+             VALUES ($1, $2, 'oidc', 'oidc', 'https://idp.example')",
+        )
+        .bind(connection_id)
+        .bind(format!("other-oidc-{connection_id}"))
+        .execute(&pool)
+        .await
+        .unwrap();
+        let mut other = profile("same-subject");
+        other.connection_id = connection_id;
+
+        let second = identity::sign_in_or_create(&pool, &other).await.unwrap();
+
+        assert_ne!(first, second);
     }
 
     #[serial_test::serial(db)]
@@ -904,16 +752,16 @@ mod tests {
             return;
         };
         let user_id = password_user(&pool, "owner@example.com").await;
-        connect_user(&pool, user_id, &profile("103", "github@example.com"))
+        identity::connect(&pool, user_id, &profile("103"))
             .await
             .unwrap();
-        connect_user(&pool, user_id, &profile("103", "updated@example.com"))
+        identity::connect(&pool, user_id, &profile("103"))
             .await
             .unwrap();
-        let result = connect_user(&pool, user_id, &profile("104", "other@example.com")).await;
+        let result = identity::connect(&pool, user_id, &profile("104")).await;
         assert!(matches!(
             result,
-            Err(AccountError::ProviderAlreadyConnected)
+            Err(IdentityError::ConnectionAlreadyLinked)
         ));
     }
 
@@ -925,10 +773,10 @@ mod tests {
         };
         let first = password_user(&pool, "first@example.com").await;
         let second = password_user(&pool, "second@example.com").await;
-        connect_user(&pool, first, &profile("105", "github@example.com"))
+        identity::connect(&pool, first, &profile("105"))
             .await
             .unwrap();
-        let result = connect_user(&pool, second, &profile("105", "github@example.com")).await;
-        assert!(matches!(result, Err(AccountError::IdentityInUse)));
+        let result = identity::connect(&pool, second, &profile("105")).await;
+        assert!(matches!(result, Err(IdentityError::IdentityInUse)));
     }
 }

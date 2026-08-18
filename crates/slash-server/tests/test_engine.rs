@@ -67,11 +67,10 @@ async fn lists_only_suites_owned_by_the_user() {
     };
     let user_id = Uuid::new_v4();
     sqlx::query(
-        "INSERT INTO users (id, email, password_hash, display_name, status)
-         VALUES ($1, $2, 'unused', 'Owner', 'active')",
+        "INSERT INTO users (id, display_name, status)
+         VALUES ($1, 'Owner', 'active')",
     )
     .bind(user_id)
-    .bind(format!("{user_id}@example.test"))
     .execute(&pool)
     .await
     .unwrap();

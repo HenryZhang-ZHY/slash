@@ -124,6 +124,13 @@ and GitHub effects stay at crate boundaries where they can be tested through
 explicit interfaces. Identities for deliveries, invocations, workflow runs,
 and check runs remain tenant-scoped and idempotent.
 
+Authentication separates the internal user, configured trust domains,
+external identities, password credentials, and contact addresses. External
+accounts resolve only by `(connection_id, subject)`; email and mutable provider
+profile fields never merge accounts. Protocol adapters normalize provider
+responses before the provider-neutral persistence layer. The complete contract
+is in [Authentication and external identities](design/authentication.md).
+
 ## Repository and release discipline
 
 The Rust workspace contains pure domain crates, GitHub/configuration adapters,

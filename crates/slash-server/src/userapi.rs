@@ -54,7 +54,7 @@ pub struct CreateTeamRequest {
 #[serde(rename_all = "camelCase")]
 pub struct UserView {
     pub id: Uuid,
-    pub email: String,
+    pub email: Option<String>,
     pub display_name: String,
 }
 
@@ -73,7 +73,6 @@ pub struct TeamView {
 #[serde(rename_all = "camelCase")]
 pub struct GithubConnectionView {
     pub login: String,
-    pub email: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -112,10 +111,10 @@ fn clear_token_cookie(resp: &mut axum::response::Response) {
     resp.headers_mut().insert(SET_COOKIE, value);
 }
 
-fn user_view(id: Uuid, email: &str, display_name: &str) -> UserView {
+fn user_view(id: Uuid, email: Option<&str>, display_name: &str) -> UserView {
     UserView {
         id,
-        email: email.to_string(),
+        email: email.map(str::to_string),
         display_name: display_name.to_string(),
     }
 }
@@ -141,15 +140,38 @@ pub async fn register(
         Err(_) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, "auth setup failed"),
     };
     let id = Uuid::new_v4();
-    let insert = sqlx::query(
-        "INSERT INTO users (id, email, password_hash, display_name, status)
-         VALUES ($1, $2, $3, $4, 'active')",
-    )
-    .bind(id)
-    .bind(&email)
-    .bind(&password_hash)
-    .bind(body.display_name.trim());
-    let result = insert.execute(&state.pool).await;
+    let result = async {
+        let mut tx = state.pool.begin().await?;
+        sqlx::query(
+            "INSERT INTO users (id, display_name, status)
+             VALUES ($1, $2, 'active')",
+        )
+        .bind(id)
+        .bind(body.display_name.trim())
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO password_credentials (user_id, normalized_email, password_hash)
+             VALUES ($1, $2, $3)",
+        )
+        .bind(id)
+        .bind(&email)
+        .bind(&password_hash)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO user_emails
+                (id, user_id, normalized_email, purpose, is_primary)
+             VALUES ($1, $2, $3, 'contact', true)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(id)
+        .bind(&email)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await
+    }
+    .await;
     match result {
         Ok(_) => {}
         Err(e) if is_unique_violation(&e) => {
@@ -176,7 +198,7 @@ pub async fn register(
         }
     };
     let mut resp = Json(AuthPayload {
-        user: user_view(id, &email, body.display_name.trim()),
+        user: user_view(id, Some(&email), body.display_name.trim()),
     })
     .into_response();
     set_token_cookie(&mut resp, &token);
@@ -189,7 +211,10 @@ pub async fn login(
 ) -> Response {
     let email = body.email.trim().to_lowercase();
     let row = sqlx::query_as::<_, (Uuid, String, String)>(
-        "SELECT id, password_hash, display_name FROM users WHERE email = $1 AND status = 'active'",
+        "SELECT u.id, pc.password_hash, u.display_name
+         FROM password_credentials pc
+         JOIN users u ON u.id = pc.user_id
+         WHERE pc.normalized_email = $1 AND u.status = 'active'",
     )
     .bind(&email)
     .fetch_optional(&state.pool)
@@ -220,7 +245,7 @@ pub async fn login(
         }
     };
     let mut resp = Json(AuthPayload {
-        user: user_view(id, &email, &display_name),
+        user: user_view(id, Some(&email), &display_name),
     })
     .into_response();
     set_token_cookie(&mut resp, &token);
@@ -235,8 +260,11 @@ pub async fn logout() -> Response {
 
 pub async fn me(State(state): State<crate::AppState>, auth_user: UserId) -> Response {
     let id = auth_user.0;
-    let row = sqlx::query_as::<_, (String, String)>(
-        "SELECT email, display_name FROM users WHERE id = $1",
+    let row = sqlx::query_as::<_, (Option<String>, String)>(
+        "SELECT pc.normalized_email, u.display_name
+         FROM users u
+         LEFT JOIN password_credentials pc ON pc.user_id = u.id
+         WHERE u.id = $1",
     )
     .bind(id)
     .fetch_optional(&state.pool)
@@ -251,7 +279,7 @@ pub async fn me(State(state): State<crate::AppState>, auth_user: UserId) -> Resp
         Err(_) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, "could not load account"),
     };
     Json(MePayload {
-        user: user_view(id, &email, &display_name),
+        user: user_view(id, email.as_deref(), &display_name),
         teams,
         connections: ConnectionsView { github },
     })
@@ -435,15 +463,16 @@ async fn load_github_connection(
     pool: &PgPool,
     user_id: Uuid,
 ) -> Result<Option<GithubConnectionView>, sqlx::Error> {
-    sqlx::query_as::<_, (String, String)>(
-        "SELECT provider_login, provider_email
-         FROM user_identities
-         WHERE user_id = $1 AND provider = 'github'",
+    sqlx::query_as::<_, (String,)>(
+        "SELECT ui.username
+         FROM user_identities ui
+         JOIN auth_connections ac ON ac.id = ui.connection_id
+         WHERE ui.user_id = $1 AND ac.connection_key = 'github'",
     )
     .bind(user_id)
     .fetch_optional(pool)
     .await
-    .map(|row| row.map(|(login, email)| GithubConnectionView { login, email }))
+    .map(|row| row.map(|(login,)| GithubConnectionView { login }))
 }
 
 // ---- auth extractor -----------------------------------------------------------
@@ -572,9 +601,13 @@ mod tests {
         let resp = register(State(state), body).await;
         assert_eq!(response_status(&resp), StatusCode::OK);
 
-        // The user row exists with the normalized (lowercased/trimmed) email.
+        // Identity, password credential, and verified contact data are stored
+        // separately. The core user record does not own either login method.
         let (id, email, hashed): (uuid::Uuid, String, String) = sqlx::query_as(
-            "SELECT id, email, password_hash FROM users WHERE email = 'alice@example.com'",
+            "SELECT u.id, pc.normalized_email, pc.password_hash
+             FROM users u
+             JOIN password_credentials pc ON pc.user_id = u.id
+             WHERE pc.normalized_email = 'alice@example.com'",
         )
         .fetch_one(&pool)
         .await
@@ -583,7 +616,16 @@ mod tests {
         // password is stored as an Argon2 PHC hash ("$argon2id$...").
         assert!(hashed.starts_with("$argon2id$"));
         assert!(crate::auth::verify_password("supersecure1", &hashed));
-        let _ = id;
+        let verified_contact: bool = sqlx::query_scalar(
+            "SELECT verified_at IS NOT NULL
+             FROM user_emails
+             WHERE user_id = $1 AND normalized_email = 'alice@example.com'",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(!verified_contact);
     }
 
     #[serial_test::serial(db)]
@@ -730,11 +772,13 @@ mod tests {
             }),
         )
         .await;
-        let (uid,): (uuid::Uuid,) =
-            sqlx::query_as("SELECT id FROM users WHERE email = 'frank@example.com'")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let (uid,): (uuid::Uuid,) = sqlx::query_as(
+            "SELECT user_id FROM password_credentials
+             WHERE normalized_email = 'frank@example.com'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
 
         let resp = create_team(
             State(state.clone()),
@@ -795,7 +839,8 @@ mod tests {
         )
         .await;
         let uid: uuid::Uuid = sqlx::query_scalar::<_, uuid::Uuid>(
-            "SELECT id FROM users WHERE email = 'gina@example.com'",
+            "SELECT user_id FROM password_credentials
+             WHERE normalized_email = 'gina@example.com'",
         )
         .fetch_one(&pool)
         .await
@@ -846,8 +891,8 @@ mod tests {
         };
         let user_id = Uuid::new_v4();
         sqlx::query(
-            "INSERT INTO users (id, email, password_hash, display_name, status)
-             VALUES ($1, 'connected@example.com', 'hash', 'Connected', 'active')",
+            "INSERT INTO users (id, display_name, status)
+             VALUES ($1, 'Connected', 'active')",
         )
         .bind(user_id)
         .execute(&pool)
@@ -862,8 +907,11 @@ mod tests {
 
         sqlx::query(
             "INSERT INTO user_identities
-                (id, user_id, provider, provider_subject, provider_login, provider_email)
-             VALUES ($1, $2, 'github', '42', 'octocat', 'octocat@example.com')",
+                (id, user_id, connection_id, subject, username, display_name)
+             VALUES (
+                $1, $2, '00000000-0000-0000-0000-000000000001',
+                '42', 'octocat', 'The Octocat'
+             )",
         )
         .bind(Uuid::new_v4())
         .bind(user_id)
@@ -876,7 +924,6 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(github.login, "octocat");
-        assert_eq!(github.email, "octocat@example.com");
     }
 
     #[test]
@@ -940,9 +987,9 @@ mod tests {
     #[test]
     fn user_view_round_trips_fields() {
         let id = uuid::Uuid::new_v4();
-        let view = user_view(id, "a@b.com", "Alice");
+        let view = user_view(id, Some("a@b.com"), "Alice");
         assert_eq!(view.id, id);
-        assert_eq!(view.email, "a@b.com");
+        assert_eq!(view.email.as_deref(), Some("a@b.com"));
         assert_eq!(view.display_name, "Alice");
     }
 }
