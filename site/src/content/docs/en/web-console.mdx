@@ -33,30 +33,14 @@ After signing in, users without a team go to `/onboarding`, which asks for a
 to 63 characters). Existing users with a team go directly to `/`. Creating
 the first team calls `POST /api/teams` and, in one
 transaction, creates a home organization for you (if you do not have one) and
-makes you the team's maintainer. The team is the access-control boundary for
-repositories and automation — see [Grants](/en/grants/) for how teams receive
-command authority.
+makes you the team's maintainer. Teams organize Slash-native products such as
+Test Engine; GitHub repository access independently controls slash commands.
 
 ## The dashboard
 
 The workspace home page (`/`) shows an overview: your team count, the number
 of Test Engine suites, test cases, and executions, your teams list, and a
 shortcut into the Test Engine console.
-
-## Grants page
-
-The `/grants` page manages command-authorization grants (see
-[Grants](/en/grants/)). It is **org-owner-only** — a non-owner gets `403` and
-the create button is disabled. It lets you:
-
-- **List grants** — see each grant's subject, scope, repo/command, permission,
-  and effect; `deny` rows are highlighted red (deny wins).
-- **Create a grant** — pick the subject type (user or team), choose from the
-  org's users/teams, select the scope, fill in the scope-conditional
-  repo/command, and set the permission and effect.
-- **Delete a grant** — with a confirmation prompt.
-
-Every action maps 1:1 to the [grants management API](/en/api/grants/).
 
 ## Settings and GitHub connection
 
