@@ -6,6 +6,10 @@ function builtPage(path: string): string {
   return readFileSync(new URL(`../dist/${path}/index.html`, import.meta.url), "utf8");
 }
 
+function builtFile(path: string): string {
+  return readFileSync(new URL(`../dist/${path}`, import.meta.url), "utf8");
+}
+
 test("renders fully localized Simplified Chinese document chrome", () => {
   const html = builtPage("zh-hans/getting-started");
 
@@ -66,4 +70,14 @@ test("uses localized homepage metadata and copy", () => {
   assert.match(html, /<meta name="description" content="正确实现 GitHub Pull Request 的 Slash Commands。">/);
   assert.match(html, />安装并连接 GitHub App</);
   assert.doesNotMatch(html, /Slash commands for GitHub pull requests, done right\./);
+});
+
+test("offers valid bilingual recovery links from the static 404 page", () => {
+  const html = builtFile("404.html");
+
+  assert.match(html, />Page not found</);
+  assert.match(html, />页面不存在</);
+  assert.match(html, /href="\/slash\/en\/"/);
+  assert.match(html, /href="\/slash\/zh-hans\/"/);
+  assert.doesNotMatch(html, /href="\/slash\/(?:en|zh-hans)\/404/);
 });
