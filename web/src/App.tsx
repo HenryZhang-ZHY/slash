@@ -17,6 +17,7 @@ import { LoginPage } from '@/pages/LoginPage'
 import { OnboardingPage } from '@/pages/OnboardingPage'
 import { SettingsPage } from '@/pages/SettingsPage'
 import { TestEnginePage } from '@/pages/TestEnginePage'
+import { AdminPage } from '@/pages/AdminPage'
 
 function HomePage() {
   const navigate = useNavigate()
@@ -113,6 +114,7 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
+        <Route path="/admin/*" element={<AdminPage />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/onboarding" element={<OnboardingPage />} />
         <Route element={<AppShell />}>

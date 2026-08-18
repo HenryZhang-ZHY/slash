@@ -15,6 +15,15 @@ use octocrab::models::AppId;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppInstallation {
+    pub id: u64,
+    pub account: String,
+    pub target_type: String,
+    pub created_at: Option<DateTime<Utc>>,
+    pub updated_at: Option<DateTime<Utc>>,
+}
+
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum AppAuthError {
     #[error("failed to read private key file {path}: {reason}")]
@@ -164,6 +173,42 @@ impl GithubApp {
         Ok(login)
     }
 
+    /// Lists every installation visible to the App JWT. The server uses this
+    /// as a periodic authoritative reconciliation pass so a missed lifecycle
+    /// webhook cannot leave the admin installation count stale forever.
+    pub async fn list_installations(&self) -> Result<Vec<AppInstallation>, AppAuthError> {
+        let mut installations = Vec::new();
+        let mut page = 1u32;
+        loop {
+            let response = self
+                .app_client
+                .apps()
+                .installations()
+                .per_page(100u8)
+                .page(page)
+                .send()
+                .await
+                .map_err(|error| AppAuthError::Mint(error.to_string()))?;
+            let item_count = response.items.len();
+            installations.extend(response.items.into_iter().map(|installation| {
+                AppInstallation {
+                    id: installation.id.0,
+                    account: installation.account.login,
+                    target_type: installation
+                        .target_type
+                        .unwrap_or(installation.account.r#type),
+                    created_at: installation.created_at,
+                    updated_at: installation.updated_at,
+                }
+            }));
+            if item_count < 100 {
+                break;
+            }
+            page = page.saturating_add(1);
+        }
+        Ok(installations)
+    }
+
     /// Mints (or reuses a cached, still-valid) installation token scoped to
     /// exactly one repository with exactly the requested permissions (spec
     /// §7.5). Never mint a whole-installation token — the least-permission
@@ -265,6 +310,62 @@ mod tests {
 
     async fn app_against(server: &MockServer) -> GithubApp {
         GithubApp::with_base_uri(123, TEST_KEY_PEM, Some(&server.uri())).unwrap()
+    }
+
+    fn installation(id: u64, login: &str, target_type: &str) -> serde_json::Value {
+        serde_json::json!({
+            "id": id,
+            "account": {
+                "login": login,
+                "id": id,
+                "node_id": format!("node-{id}"),
+                "avatar_url": "https://example.test/avatar",
+                "gravatar_id": "",
+                "url": "https://example.test/user",
+                "html_url": "https://example.test/user",
+                "followers_url": "https://example.test/user/followers",
+                "following_url": "https://example.test/user/following{/other_user}",
+                "gists_url": "https://example.test/user/gists{/gist_id}",
+                "starred_url": "https://example.test/user/starred{/owner}{/repo}",
+                "subscriptions_url": "https://example.test/user/subscriptions",
+                "organizations_url": "https://example.test/user/orgs",
+                "repos_url": "https://example.test/user/repos",
+                "events_url": "https://example.test/user/events{/privacy}",
+                "received_events_url": "https://example.test/user/received_events",
+                "type": target_type,
+                "site_admin": false
+            },
+            "target_type": target_type,
+            "permissions": {},
+            "events": [],
+            "created_at": "2026-08-01T00:00:00Z",
+            "updated_at": "2026-08-02T00:00:00Z"
+        })
+    }
+
+    #[tokio::test]
+    async fn lists_app_installations_with_normalized_account_type() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/app/installations"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(vec![installation(
+                42,
+                "acme",
+                "Organization",
+            )]))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let installations = app_against(&server)
+            .await
+            .list_installations()
+            .await
+            .unwrap();
+        assert_eq!(installations.len(), 1);
+        assert_eq!(installations[0].id, 42);
+        assert_eq!(installations[0].account, "acme");
+        assert_eq!(installations[0].target_type, "Organization");
     }
 
     fn mint_response(token: &str) -> ResponseTemplate {

@@ -70,7 +70,7 @@ pub async fn process_one(
         return Ok(ProcessOutcome::Processed);
     }
 
-    let Some(ctx) = build_context(pool, app, metrics, &parsed) else {
+    let Some(ctx) = build_context(pool, app, metrics, &parsed, &guid) else {
         tracing::warn!(delivery_guid = %guid, event = %event_name, "event missing installation/repository");
         claimed
             .fail("missing installation/repository on webhook event")
@@ -116,6 +116,7 @@ fn build_context<'a>(
     app: &'a GithubApp,
     metrics: &'a Metrics,
     event: &slash_github::WebhookEvent,
+    delivery_guid: &'a str,
 ) -> Option<PipelineContext<'a>> {
     let installation_id = event.installation.as_ref()?.id().0;
     let repository = event.repository.as_ref()?;
@@ -132,6 +133,7 @@ fn build_context<'a>(
         repository_is_private,
         owner,
         repo,
+        delivery_guid: Some(delivery_guid),
         base_uri: None,
         metrics,
     })
@@ -176,7 +178,7 @@ mod tests {
         let url = crate::test_support::test_database_url()?;
         let pool = db::connect(&url).await.unwrap();
         db::migrate(&pool).await.unwrap();
-        sqlx::query("TRUNCATE deliveries")
+        sqlx::query("TRUNCATE deliveries, invocations")
             .execute(&pool)
             .await
             .unwrap();

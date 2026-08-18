@@ -5,6 +5,7 @@
 //! `pub mod` and the entrypoint (`run`) drives the router. The binary target
 //! is a thin wrapper around `slash_server::run`.
 
+pub mod admin;
 pub mod auth;
 pub mod catalog;
 pub mod collectors;
@@ -59,6 +60,10 @@ pub struct AppState {
     pub metrics: Arc<Metrics>,
     pub webhook_secret: Arc<str>,
     pub auth_secret: auth::AuthSecret,
+    pub admin_secret: Option<admin::AdminSecret>,
+    /// App-JWT client used only by the explicit admin installation refresh.
+    /// Optional in test states that never exercise the upstream operation.
+    pub github_app: Option<Arc<slash_github::GithubApp>>,
     /// Root directory of the built SPA (`web/dist`).
     pub web_dir: Arc<str>,
     /// GitHub App user-auth config. `None` when it is not configured.
@@ -126,6 +131,11 @@ pub async fn run() {
         metrics: metrics.clone(),
         webhook_secret: Arc::from(config.webhook_secret.as_str()),
         auth_secret: auth::AuthSecret(Arc::from(config.auth_secret.as_str())),
+        admin_secret: config
+            .admin_secret
+            .as_deref()
+            .map(|secret| admin::AdminSecret(Arc::from(secret))),
+        github_app: Some(github_app.clone()),
         web_dir: Arc::from(web_dir.as_str()),
         github_oauth,
     };
@@ -137,8 +147,8 @@ pub async fn run() {
         WORKER_POLL_INTERVAL,
     ));
     tokio::spawn(sweeper::run(
-        pool,
-        github_app,
+        pool.clone(),
+        github_app.clone(),
         sweeper::SweeperConfig::default(),
         metrics,
     ));
@@ -165,6 +175,18 @@ pub async fn run() {
         .route("/api/auth/login", post(userapi::login))
         .route("/api/auth/logout", post(userapi::logout))
         .route("/api/auth/me", get(userapi::me))
+        .route("/api/admin/auth/login", post(admin::login))
+        .route("/api/admin/auth/logout", post(admin::logout))
+        .route("/api/admin/auth/session", get(admin::session))
+        .route("/api/admin/overview", get(admin::overview))
+        .route("/api/admin/installations", get(admin::installations))
+        .route(
+            "/api/admin/installations/refresh",
+            post(admin::refresh_installations),
+        )
+        .route("/api/admin/deliveries", get(admin::deliveries))
+        .route("/api/admin/deliveries/{guid}", get(admin::delivery_detail))
+        .route("/api/admin/invocations", get(admin::invocations))
         .route(
             "/api/auth/github/sign-in",
             get(github_oauth::start_github_sign_in),
@@ -202,6 +224,8 @@ pub async fn run() {
             "/api/test-engine/suites/{id}/tokens/revoke",
             post(test_engine_api::revoke_token),
         )
+        .route("/admin", get(admin_page))
+        .route("/admin/{*path}", get(admin_page))
         // Serve the React SPA: static files under /assets and the root
         // favicon/icons come from the dist dir; everything else falls back
         // to `index.html` (history-API routing) with a 200 status.
@@ -284,6 +308,17 @@ async fn web_fallback(
             }
             Err(_) => index_response(&state.web_dir),
         };
+    }
+    index_response(&state.web_dir)
+}
+
+async fn admin_page(State(state): State<AppState>) -> axum::response::Response {
+    if !admin::enabled(&state) {
+        return (
+            axum::http::StatusCode::NOT_FOUND,
+            axum::Json(serde_json::json!({"error":"not found"})),
+        )
+            .into_response();
     }
     index_response(&state.web_dir)
 }

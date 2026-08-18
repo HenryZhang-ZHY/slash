@@ -577,6 +577,8 @@ mod tests {
             metrics: std::sync::Arc::new(crate::metrics::Metrics::new().unwrap()),
             webhook_secret: std::sync::Arc::from("test-webhook-secret"),
             auth_secret: crate::auth::AuthSecret(std::sync::Arc::from("test-auth-secret")),
+            admin_secret: None,
+            github_app: None,
             web_dir: std::sync::Arc::from(""),
             github_oauth: None,
         }

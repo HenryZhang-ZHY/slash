@@ -20,6 +20,10 @@ pub struct ServerConfig {
     pub webhook_secret: String,
     pub database_url: String,
     pub auth_secret: String,
+    /// Optional instance-admin secret. When absent, every admin route is
+    /// disabled. When configured, it follows the same file-only convention
+    /// as all other Slash secrets.
+    pub admin_secret: Option<String>,
     /// Client ID of the same GitHub App used by the control plane. `None`
     /// when GitHub user authentication is not configured.
     pub github_client_id: Option<String>,
@@ -53,6 +57,14 @@ impl ServerConfig {
         let webhook_secret = resolve_secret(lookup, &mut read_file, "SLASH_WEBHOOK_SECRET_PATH")?;
         let database_url = resolve_secret(lookup, &mut read_file, "SLASH_DATABASE_URL_PATH")?;
         let auth_secret = resolve_secret(lookup, &mut read_file, "SLASH_AUTH_SECRET_PATH")?;
+        let admin_secret = match lookup("SLASH_ADMIN_SECRET_PATH") {
+            Some(_) => Some(resolve_secret(
+                lookup,
+                &mut read_file,
+                "SLASH_ADMIN_SECRET_PATH",
+            )?),
+            None => None,
+        };
         let github_app_id_raw = require(lookup, "SLASH_GITHUB_APP_ID")?;
         let github_app_id = github_app_id_raw
             .parse()
@@ -82,6 +94,7 @@ impl ServerConfig {
             webhook_secret,
             database_url,
             auth_secret,
+            admin_secret,
             github_client_id,
             github_client_secret,
             github_base_url,
@@ -287,6 +300,46 @@ mod tests {
         match load(&env) {
             Err(ConfigError::MissingEnvVar("SLASH_BASE_URL")) => {}
             _ => panic!("expected a missing public base URL error"),
+        }
+    }
+
+    #[test]
+    fn admin_secret_is_optional_and_disables_admin_when_absent() {
+        let mut env = env_of(&[
+            ("SLASH_GITHUB_APP_ID", "42"),
+            ("SLASH_GITHUB_PRIVATE_KEY_PATH", "/key.pem"),
+        ]);
+        let env = file_env(&mut env);
+        let config = load(&env).unwrap();
+        assert_eq!(config.admin_secret, None);
+    }
+
+    #[test]
+    fn admin_secret_is_loaded_from_its_path() {
+        let mut env = env_of(&[
+            ("SLASH_GITHUB_APP_ID", "42"),
+            ("SLASH_GITHUB_PRIVATE_KEY_PATH", "/key.pem"),
+        ]);
+        let mut env = file_env(&mut env);
+        env.insert(
+            "SLASH_ADMIN_SECRET_PATH".to_string(),
+            secret_file("admin-secret"),
+        );
+        let config = load(&env).unwrap();
+        assert_eq!(config.admin_secret.as_deref(), Some("admin-secret"));
+    }
+
+    #[test]
+    fn configured_admin_secret_must_be_readable_and_non_empty() {
+        let mut env = env_of(&[
+            ("SLASH_GITHUB_APP_ID", "42"),
+            ("SLASH_GITHUB_PRIVATE_KEY_PATH", "/key.pem"),
+        ]);
+        let mut env = file_env(&mut env);
+        env.insert("SLASH_ADMIN_SECRET_PATH".to_string(), secret_file(""));
+        match load(&env) {
+            Err(ConfigError::UnreadableFile("SLASH_ADMIN_SECRET_PATH", _)) => {}
+            _ => panic!("expected an empty admin-secret file error"),
         }
     }
 

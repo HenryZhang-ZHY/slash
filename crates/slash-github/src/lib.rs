@@ -8,7 +8,7 @@ mod payloads;
 mod retry;
 mod webhook;
 
-pub use auth::{AppAuthError, GithubApp, InstallationToken, TokenCacheKey};
+pub use auth::{AppAuthError, AppInstallation, GithubApp, InstallationToken, TokenCacheKey};
 pub use client::{
     Actor, CheckRunUpdate, ClientError, DispatchOutcome, ListWorkflowRunsFilter, RepoClient,
     WorkflowRun,

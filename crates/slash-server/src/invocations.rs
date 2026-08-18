@@ -26,6 +26,7 @@ pub struct NewInvocation<'a> {
     pub raw_comment_line: &'a str,
     pub args: Json,
     pub workflow_file: &'a str,
+    pub delivery_guid: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,8 +49,8 @@ pub async fn claim(pool: &PgPool, new: &NewInvocation<'_>) -> Result<ClaimOutcom
         "INSERT INTO invocations (
             id, installation_id, repository_id, owner, repo, comment_id, attempt,
             pr_number, head_sha, head_branch, actor, actor_id,
-            command, raw_comment_line, args, workflow_file, status
-         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 'claimed')
+            command, raw_comment_line, args, workflow_file, delivery_guid, status
+         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, 'claimed')
          ON CONFLICT (installation_id, comment_id, attempt) DO NOTHING
          RETURNING id",
     )
@@ -69,6 +70,7 @@ pub async fn claim(pool: &PgPool, new: &NewInvocation<'_>) -> Result<ClaimOutcom
     .bind(new.raw_comment_line)
     .bind(&new.args)
     .bind(new.workflow_file)
+    .bind(new.delivery_guid)
     .fetch_optional(pool)
     .await?;
 
@@ -473,6 +475,7 @@ mod tests {
             raw_comment_line: "/echo hi",
             args: serde_json::json!({}),
             workflow_file: "echo.yml",
+            delivery_guid: None,
         }
     }
 
@@ -485,6 +488,29 @@ mod tests {
         let id = Uuid::new_v4();
         let outcome = claim(&pool, &sample(id)).await.unwrap();
         assert_eq!(outcome, ClaimOutcome::Claimed(id));
+    }
+
+    #[serial_test::serial(db)]
+    #[tokio::test]
+    async fn claim_records_the_originating_webhook_delivery() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        crate::deliveries::insert_delivery(&pool, "origin-guid", "issue_comment", b"{}")
+            .await
+            .unwrap();
+        let id = Uuid::new_v4();
+        let mut invocation = sample(id);
+        invocation.delivery_guid = Some("origin-guid");
+        claim(&pool, &invocation).await.unwrap();
+
+        let delivery_guid: Option<String> =
+            sqlx::query_scalar("SELECT delivery_guid FROM invocations WHERE id = $1")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(delivery_guid.as_deref(), Some("origin-guid"));
     }
 
     #[serial_test::serial(db)]
