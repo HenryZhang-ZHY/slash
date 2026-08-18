@@ -12,12 +12,16 @@ description = "Check Rust formatting"
 run = "cargo fmt --all --check"
 
 [tasks."check:rust"]
-description = "Run the Rust pre-push gate"
+description = "Run the database-free Rust pre-push gate"
 depends = ["check:rust-format"]
 run = [
   "cargo clippy --workspace --all-targets",
-  "SLASH_TEST_DATABASE_URL=postgres://slash:slash@127.0.0.1:5433/slash cargo test --workspace",
+  "unset SLASH_TEST_DATABASE_URL; cargo test --workspace",
 ]
+
+[tasks."check:rust-db"]
+description = "Run the opt-in database-backed Rust tests"
+run = "SLASH_TEST_DATABASE_URL=postgres://slash:slash@127.0.0.1:5433/slash cargo test --workspace"
 
 [tasks."check:web"]
 description = "Run the Web UI pre-push gate"

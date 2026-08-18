@@ -13,10 +13,13 @@ these must be clean — do not push red.
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets    # zero warnings
-SLASH_TEST_DATABASE_URL=postgres://slash:slash@127.0.0.1:5433/slash cargo test --workspace
+cargo test --workspace                    # database-backed tests skip
 ```
 
-`cargo` is via mise (`mise.toml` pins `rust = 1.94.1`); the test database is
+`cargo` is via mise (`mise.toml` pins `rust = 1.94.1`). Database-backed tests
+are deliberately excluded from the automatic pre-push gate so local database
+availability or schema drift cannot block unrelated pushes. Run the opt-in
+`mise run check:rust-db` task when changing persistence or migrations; it uses
 the local `slashtest-pg` container.
 
 ## Web SPA (`web/`)

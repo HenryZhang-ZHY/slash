@@ -51,9 +51,11 @@ mise run hooks:install
 ```
 
 The pre-commit hook runs fast file hygiene and Rust formatting checks. The
-pre-push hook selects the complete Rust, Web UI, or documentation gate based
-on the files in the pushed commits. The same gates can be run explicitly with
-`mise run check:rust`, `mise run check:web`, and `mise run check:site`.
+pre-push hook selects the database-free Rust, Web UI, or documentation gate
+based on the files in the pushed commits. The same gates can be run explicitly
+with `mise run check:rust`, `mise run check:web`, and `mise run check:site`.
+Database-backed Rust tests are intentionally opt-in through
+`mise run check:rust-db`.
 
 ## License
 
