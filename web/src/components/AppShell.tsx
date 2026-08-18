@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { FlaskConical, LayoutDashboard, LogOut, Settings, Shield, Users } from 'lucide-react'
+import { FlaskConical, LayoutDashboard, LogOut, Settings, Users } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 
@@ -63,17 +63,14 @@ export function AppShell() {
   const navItems = [
     { to: '/', label: t('app.overview'), icon: LayoutDashboard, end: true },
     { to: '/tests', label: t('app.testEngineSection'), icon: FlaskConical, end: false },
-    { to: '/grants', label: t('grants.title'), icon: Shield, end: false },
     { to: '/settings', label: t('app.settings'), icon: Settings, end: false },
   ]
 
   const activeLabel = location.pathname.startsWith('/tests')
     ? t('app.testEngineSection')
-    : location.pathname.startsWith('/grants')
-      ? t('grants.title')
-      : location.pathname.startsWith('/settings')
-        ? t('app.settings')
-        : t('app.overview')
+    : location.pathname.startsWith('/settings')
+      ? t('app.settings')
+      : t('app.overview')
   const primaryTeam = me.teams[0]
 
   return (

@@ -84,55 +84,6 @@ export const api = {
     }),
 }
 
-// --- Grants administration (org/user lane, #68/#69) ---
-
-export interface Grant {
-  id: string
-  subjectType: 'user' | 'team'
-  subjectId: string
-  subjectName: string
-  scope: 'org' | 'repository' | 'command'
-  repository: string | null
-  command: string | null
-  permission: 'read' | 'write' | 'admin'
-  effect: 'allow' | 'deny'
-  grantedBy: string | null
-  grantedByName: string | null
-}
-
-export interface OrgMember {
-  id: string
-  name: string
-}
-
-export interface OrgMembersResponse {
-  orgId: string
-  users: OrgMember[]
-  teams: OrgMember[]
-}
-
-export interface CreateGrantInput {
-  subjectType: 'user' | 'team'
-  subjectId: string
-  scope: 'org' | 'repository' | 'command'
-  repository?: string
-  command?: string
-  permission: 'read' | 'write' | 'admin'
-  effect?: 'allow' | 'deny'
-}
-
-export const grantsApi = {
-  list: () => request<Grant[]>('/api/grants'),
-  create: (input: CreateGrantInput) =>
-    request<{ id: string }>('/api/grants', {
-      method: 'POST',
-      body: JSON.stringify(input),
-    }),
-  remove: (id: string) => request<void>(`/api/grants/${id}`, { method: 'DELETE' }),
-  orgMembers: () => request<OrgMembersResponse>('/api/org/members'),
-}
-
-
 // --- Test Engine console API (docs/design/1.0-test-engine.md §6) ---
 
 export interface TestSuiteSummary {
