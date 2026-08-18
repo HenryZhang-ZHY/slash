@@ -1,0 +1,4 @@
+interface:
+  display_name: "Find Slash Simplifications"
+  short_description: "Find evidence-backed ways to simplify Slash"
+  default_prompt: "Use $slash-find-simplifications to audit Slash for high-value simplification candidates."
