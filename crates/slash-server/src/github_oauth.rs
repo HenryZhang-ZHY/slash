@@ -28,7 +28,7 @@ const GITHUB_AUTHORIZE_URL: &str = "https://github.com/login/oauth/authorize";
 const GITHUB_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
 const GITHUB_USER_URL: &str = "https://api.github.com/user";
 const GITHUB_EMAILS_URL: &str = "https://api.github.com/user/emails";
-const GITHUB_API_VERSION: &str = "2022-11-28";
+const GITHUB_API_VERSION: &str = "2026-03-10";
 const STATE_COOKIE: &str = "slash_github_oauth";
 const STATE_TTL_SECS: u64 = 10 * 60;
 
