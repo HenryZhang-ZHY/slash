@@ -49,6 +49,11 @@ unconnected user can start `POST /api/auth/github/connect`; an already
 connected user sees the GitHub login recorded by Slash.
 The page never infers connection state from the callback URL.
 
+The same page lets each user create, inspect, and revoke personal access
+tokens for agents and REST API clients. Plaintext is displayed once after
+creation; the table shows creation, last-use, and expiry state without exposing
+the credential again. See [Personal access tokens](/en/api/access-tokens/).
+
 ## Test Engine console
 
 The `/tests` page is the Test Engine control panel. It lets you:
