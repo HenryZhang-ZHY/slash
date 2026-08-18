@@ -22,11 +22,11 @@ function collectFiles(root: URL, extension: string): string[] {
   return files.sort();
 }
 
-test("keeps the English and Simplified Chinese document inventories paired", () => {
+test("requires every Simplified Chinese document to have an English source", () => {
   const english = collectFiles(new URL("en/", docsRoot), ".mdx");
   const simplifiedChinese = collectFiles(new URL("zh-hans/", docsRoot), ".mdx");
 
-  assert.deepEqual(simplifiedChinese, english);
+  assert.deepEqual(simplifiedChinese.filter((file) => !english.includes(file)), []);
   assert.equal(existsSync(new URL("zh/", docsRoot)), false);
 });
 

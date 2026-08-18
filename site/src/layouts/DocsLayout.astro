@@ -18,18 +18,24 @@ import { Badge } from "@/components/ui/badge";
 import type { DocsPageProps } from "@cloudflare/nimbus-docs/types";
 import { getVersionStatus, getVersionAlternates } from "@cloudflare/nimbus-docs";
 import { withBasePath } from "@/lib/urls";
-import { getLocaleByEntryId, getTranslations } from "@/lib/i18n";
+import { getLocaleByEntryId, getTranslations, LOCALES, type Locale } from "@/lib/i18n";
 
-type Props = DocsPageProps & { audience?: "human" };
+type Props = DocsPageProps & {
+  audience?: "human";
+  locale?: Locale;
+  contentLocale?: Locale;
+  translationFallback?: boolean;
+  canonicalUrl?: string;
+};
 
-const { title, description, sidebar, headings, breadcrumbs, prevNext, mode = "doc", banner, head = [], searchable, noindex, markdownUrl, socialImage, lastUpdated, editUrl, draft, audience, collection, entryId } = Astro.props;
+const { title, description, sidebar, headings, breadcrumbs, prevNext, mode = "doc", banner, head = [], searchable, noindex, markdownUrl, socialImage, lastUpdated, editUrl, draft, audience, collection, entryId, locale: localeOverride, contentLocale, translationFallback = false, canonicalUrl } = Astro.props;
 
 // `searchable` derives from `noindex` when omitted: a non-crawlable page is
 // by default not in the site search either. Explicit `searchable: true`
 // overrides for the edge case of "no search engines, yes internal search."
 const effectiveSearchable = searchable ?? !noindex;
 const isCustom = mode === "custom";
-const pageLocale = getLocaleByEntryId(entryId);
+const pageLocale = LOCALES[localeOverride ?? getLocaleByEntryId(entryId).languageTag];
 const t = getTranslations(pageLocale.languageTag);
 
 // `sidebar: false` / `tableOfContents: false` in frontmatter come through
@@ -84,7 +90,7 @@ const hasPagination = Astro.slots.has("pagination");
 
 ---
 
-<BaseLayout title={title} description={description} noindex={noindex || draft} markdownUrl={markdownUrl} socialImage={socialImage} lastUpdated={lastUpdated} head={head} collection={collection} entryId={entryId} lang={pageLocale.languageTag}>
+<BaseLayout title={title} description={description} noindex={noindex || draft} markdownUrl={markdownUrl} socialImage={socialImage} lastUpdated={lastUpdated} head={head} collection={collection} entryId={entryId} lang={pageLocale.languageTag} canonicalUrl={canonicalUrl} availableLocales={translationFallback ? ["en"] : undefined}>
   <div class="flex flex-col min-h-screen">
     {hasHeader ? <slot name="header" /> : <Header collection={collection} entryId={entryId} showSidebar={showSidebar} />}
 
@@ -184,6 +190,7 @@ const hasPagination = Astro.slots.has("pagination");
                   }
                 />
               )}
+              {translationFallback && <Banner variant="note" content={t.translationFallback} />}
               {banner && <Banner content={banner.content} variant={banner.type} dismissible={banner.dismissible} />}
               <Breadcrumbs items={breadcrumbs} class="pb-2" />
               <div {...pagefindAttrs}>
@@ -218,7 +225,7 @@ const hasPagination = Astro.slots.has("pagination");
                     {!description && !markdownUrl && audience !== "human" && <div class="mb-4" />}
                   </Fragment>
                 )}
-                <article class="docs-content max-w-none">
+                <article class="docs-content max-w-none" lang={translationFallback ? contentLocale : undefined}>
                   <slot />
                 </article>
                 {hasContentFooter ? (

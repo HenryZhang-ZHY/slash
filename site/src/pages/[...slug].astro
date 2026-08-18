@@ -1,5 +1,7 @@
 ---
 import DocsLayout from "../layouts/DocsLayout.astro";
+import type { GetStaticPaths } from "astro";
+import type { CollectionEntry } from "astro:content";
 import {
   getDocsStaticPaths,
   getDocsPageProps,
@@ -12,12 +14,24 @@ import {
   getTOC,
 } from "@cloudflare/nimbus-docs";
 import { components } from "../components";
-import { siteUrl, withoutBasePath } from "@/lib/urls";
+import { basePath, siteUrl, withoutBasePath } from "@/lib/urls";
+import {
+  getLocaleByEntryId,
+  getLocalePath,
+  type LocaleFallback,
+  type LocalizedStaticPath,
+  withLocaleFallbacks,
+} from "@/lib/i18n";
 
 export const prerender = true;
-export const getStaticPaths = getDocsStaticPaths;
+export const getStaticPaths: GetStaticPaths = async (context) => withLocaleFallbacks(
+  await getDocsStaticPaths(context) as LocalizedStaticPath<CollectionEntry<"docs">>[],
+);
 
 const { entry, Content, headings } = await getDocsPageProps(Astro);
+const fallback = Astro.props.fallback as LocaleFallback | undefined;
+const pageLocale = fallback?.requestedLocale ?? getLocaleByEntryId(entry.id).languageTag;
+const contentLocale = fallback?.sourceLocale ?? getLocaleByEntryId(entry.id).languageTag;
 
 const currentSlug = withoutBasePath(Astro.url.pathname).replace(/\/$/, "") || "/";
 
@@ -44,6 +58,9 @@ const toc = tocOn && tocConfig !== false ? getTOC(headings, tocConfig) : false;
 const markdownPath = `/${entry.id}/index.md`;
 const markdownUrl = siteUrl(markdownPath);
 const socialImage = entry.data.socialImage ?? `/og/${entry.id}.png`;
+const canonicalUrl = fallback
+  ? getLocalePath(Astro.url.pathname, fallback.sourceLocale, basePath)
+  : undefined;
 ---
 
 <DocsLayout
@@ -57,7 +74,7 @@ const socialImage = entry.data.socialImage ?? `/og/${entry.id}.png`;
   banner={entry.data.banner}
   head={entry.data.head}
   searchable={entry.data.searchable}
-  noindex={entry.data.noindex}
+  noindex={entry.data.noindex || Boolean(fallback)}
   markdownUrl={markdownUrl}
   socialImage={socialImage}
   lastUpdated={lastUpdated}
@@ -66,6 +83,10 @@ const socialImage = entry.data.socialImage ?? `/og/${entry.id}.png`;
   audience={entry.data.audience}
   collection={entry.collection}
   entryId={entry.id}
+  locale={pageLocale}
+  contentLocale={contentLocale}
+  translationFallback={Boolean(fallback)}
+  canonicalUrl={canonicalUrl}
 >
   <Content components={components} />
 </DocsLayout>

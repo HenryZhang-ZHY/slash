@@ -19,6 +19,16 @@ export const LOCALES = {
 export type Locale = keyof typeof LOCALES;
 export type LocaleDefinition = (typeof LOCALES)[Locale];
 
+export interface LocaleFallback {
+  requestedLocale: Locale;
+  sourceLocale: Locale;
+}
+
+export interface LocalizedStaticPath<T> {
+  params: { slug: string };
+  props: { entry: T; fallback?: LocaleFallback };
+}
+
 const localeList = Object.values(LOCALES);
 
 const translations = {
@@ -76,6 +86,7 @@ const translations = {
     editPage: "Edit this page",
     draft: "Draft",
     forHumans: "For humans",
+    translationFallback: "This page is not available in your language yet. Showing the English source.",
   },
   "zh-Hans": {
     skipToContent: "跳到正文",
@@ -131,6 +142,7 @@ const translations = {
     editPage: "编辑此页",
     draft: "草稿",
     forHumans: "面向读者",
+    translationFallback: "此页面尚无简体中文翻译，当前显示英文原文。",
   },
 } as const;
 
@@ -183,4 +195,36 @@ export function getLocalePath(value: string, target: Locale, basePath = ""): str
   const trailingSlash = pathname.endsWith("/") || segments.length === 0;
   const localized = `/${LOCALES[target].path}${segments.length ? `/${segments.join("/")}` : ""}${trailingSlash ? "/" : ""}`;
   return `${base}${localized}${suffix}`;
+}
+
+export function withLocaleFallbacks<T>(
+  paths: LocalizedStaticPath<T>[],
+): LocalizedStaticPath<T>[] {
+  const knownSlugs = new Set(paths.map((path) => path.params.slug));
+  const defaultPath = LOCALES[DEFAULT_LOCALE].path;
+  const defaultPrefix = `${defaultPath}/`;
+  const fallbacks: LocalizedStaticPath<T>[] = [];
+
+  for (const path of paths) {
+    if (!path.params.slug.startsWith(defaultPrefix)) continue;
+    const relativeSlug = path.params.slug.slice(defaultPrefix.length);
+
+    for (const locale of localeList) {
+      if (locale.languageTag === DEFAULT_LOCALE) continue;
+      const slug = `${locale.path}/${relativeSlug}`;
+      if (knownSlugs.has(slug)) continue;
+      fallbacks.push({
+        params: { slug },
+        props: {
+          entry: path.props.entry,
+          fallback: {
+            requestedLocale: locale.languageTag,
+            sourceLocale: DEFAULT_LOCALE,
+          },
+        },
+      });
+    }
+  }
+
+  return [...paths, ...fallbacks];
 }

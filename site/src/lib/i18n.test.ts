@@ -8,6 +8,7 @@ import {
   getLocalePath,
   getTranslations,
   hasLocalePath,
+  withLocaleFallbacks,
 } from "./i18n.ts";
 
 test("uses short BCP 47 tags and a dedicated URL path", () => {
@@ -45,4 +46,35 @@ test("provides a complete localized chrome dictionary", () => {
   assert.equal(zh.navigation.onThisPage, "本页内容");
   assert.equal(zh.pagination.previous, "上一页");
   assert.equal(zh.pageActions.viewMarkdown, "查看 Markdown");
+});
+
+test("generates non-indexable locale fallbacks from default-language entries", () => {
+  const source = { id: "en/new-page" };
+  const paths = withLocaleFallbacks([
+    { params: { slug: "en/new-page" }, props: { entry: source } },
+  ]);
+
+  assert.deepEqual(paths, [
+    { params: { slug: "en/new-page" }, props: { entry: source } },
+    {
+      params: { slug: "zh-hans/new-page" },
+      props: {
+        entry: source,
+        fallback: { requestedLocale: "zh-Hans", sourceLocale: "en" },
+      },
+    },
+  ]);
+});
+
+test("does not replace a real translation with fallback content", () => {
+  const english = { id: "en/existing" };
+  const chinese = { id: "zh-hans/existing" };
+  const paths = withLocaleFallbacks([
+    { params: { slug: english.id }, props: { entry: english } },
+    { params: { slug: chinese.id }, props: { entry: chinese } },
+  ]);
+
+  assert.equal(paths.length, 2);
+  assert.equal(paths[1].props.entry, chinese);
+  assert.equal(paths[1].props.fallback, undefined);
 });
