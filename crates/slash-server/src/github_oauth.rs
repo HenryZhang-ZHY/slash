@@ -1,563 +1,725 @@
-//! GitHub OAuth 2.0 login and account linking (Authorization Code flow).
+//! GitHub OAuth 2.0 sign-in and account connection.
 //!
-//! Activated only when `SLASH_GITHUB_CLIENT_ID` and
-//! `SLASH_GITHUB_CLIENT_SECRET_PATH` are both set. The server starts normally
-//! with email/password auth when OAuth is not configured.
-//!
-//! Two modes:
-//!   - **Login** (`GET /api/auth/github`): unauthenticated; creates or
-//!     reuses a user by GitHub identity.
-//!   - **Link** (`POST /api/auth/github/link`): authenticated; binds the
-//!     caller's existing account to their GitHub identity.
-//!
-//! Both flow through the same callback (`GET /api/auth/github/callback`);
-//! the signed state token carries the mode and, for link, the user id.
+//! Sign-in and connection share the OAuth transport, but deliberately use
+//! different account-resolution policies. See
+//! `docs/design/github-authentication.md`.
 
 use std::sync::Arc;
 
 use axum::extract::State;
-use axum::http::StatusCode;
-use axum::http::header::{HeaderValue, SET_COOKIE};
+use axum::http::header::{COOKIE, HeaderValue, LOCATION, SET_COOKIE};
+use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use base64::Engine;
-use hmac::{Hmac, Mac};
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use hmac::digest::KeyInit;
+use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
+use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::auth::{self, AuthSecret};
-use crate::userapi::api_error;
+use crate::userapi::{UserId, api_error};
 
 type HmacSha256 = Hmac<Sha256>;
 
-/// GitHub OAuth endpoints.
 const GITHUB_AUTHORIZE_URL: &str = "https://github.com/login/oauth/authorize";
 const GITHUB_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
-const GITHUB_USERINFO_URL: &str = "https://api.github.com/user";
-
-/// Cookie that carries the signed CSRF state token.
-const STATE_COOKIE: &str = "slash_github_state";
-
-/// How long the state token is valid (10 minutes — short-lived CSRF token).
+const GITHUB_USER_URL: &str = "https://api.github.com/user";
+const GITHUB_EMAILS_URL: &str = "https://api.github.com/user/emails";
+const GITHUB_API_VERSION: &str = "2026-03-10";
+const STATE_COOKIE: &str = "slash_github_oauth";
 const STATE_TTL_SECS: u64 = 10 * 60;
 
-/// GitHub OAuth configuration. `None` when OAuth login is not configured.
+#[derive(Clone)]
+struct OauthEndpoints {
+    authorize: Arc<str>,
+    token: Arc<str>,
+    user: Arc<str>,
+    emails: Arc<str>,
+}
+
+impl Default for OauthEndpoints {
+    fn default() -> Self {
+        Self {
+            authorize: Arc::from(GITHUB_AUTHORIZE_URL),
+            token: Arc::from(GITHUB_TOKEN_URL),
+            user: Arc::from(GITHUB_USER_URL),
+            emails: Arc::from(GITHUB_EMAILS_URL),
+        }
+    }
+}
+
+/// Configuration for GitHub's OAuth web application flow.
 #[derive(Clone)]
 pub struct OauthState {
-    pub client_id: Arc<str>,
-    pub client_secret: Arc<str>,
-    /// Pre-configured base URL for constructing the redirect URI. Derived
-    /// from `SLASH_BASE_URL` at startup; `None` falls back to the request's
-    /// `Host` header.
-    pub base_url: Option<Arc<str>>,
-    pub auth_secret: AuthSecret,
+    client_id: Arc<str>,
+    client_secret: Arc<str>,
+    base_url: Arc<str>,
+    auth_secret: AuthSecret,
+    endpoints: OauthEndpoints,
 }
 
-#[derive(Debug, Deserialize)]
-#[allow(dead_code)]
-struct GithubTokenResponse {
-    access_token: String,
-    token_type: String,
-    scope: String,
+impl OauthState {
+    pub fn new(
+        client_id: Arc<str>,
+        client_secret: Arc<str>,
+        base_url: Arc<str>,
+        auth_secret: AuthSecret,
+    ) -> Self {
+        Self {
+            client_id,
+            client_secret,
+            base_url,
+            auth_secret,
+            endpoints: OauthEndpoints::default(),
+        }
+    }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
-struct GithubUser {
-    id: i64,
-    login: String,
-    name: Option<String>,
-    email: Option<String>,
+enum OauthIntent {
+    SignIn,
+    Connect,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct StateClaims {
+    intent: OauthIntent,
+    nonce: String,
+    pkce_verifier: String,
+    redirect_uri: String,
+    exp: u64,
+    user_id: Option<Uuid>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct CallbackParams {
-    code: String,
-    state: String,
+    code: Option<String>,
+    state: Option<String>,
+    error: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct StateClaims {
-    /// `"login"` or `"link"`.
-    #[serde(default)]
-    mode: String,
-    /// CSRF token (random UUID, verified against the `state` query param).
-    csrf: String,
-    /// Expiry (unix seconds).
-    exp: u64,
-    /// Where to redirect after the callback. Defaults to `/onboarding`.
-    #[serde(default)]
-    redirect: String,
-    /// For link mode: the authenticated user's UUID.
-    #[serde(default)]
+#[derive(Debug, Deserialize)]
+struct GithubTokenResponse {
+    access_token: Option<String>,
+    error: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubUser {
+    id: i64,
+    login: String,
+    name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubEmail {
+    email: String,
+    primary: bool,
+    verified: bool,
+}
+
+#[derive(Clone, Debug)]
+struct GithubProfile {
+    subject: String,
+    login: String,
+    email: String,
+    display_name: String,
+}
+
+#[derive(Debug, thiserror::Error)]
+enum AccountError {
+    #[error("a Slash account already uses this email")]
+    EmailInUse,
+    #[error("this GitHub account is connected to another Slash account")]
+    IdentityInUse,
+    #[error("this Slash account already has a different GitHub account")]
+    ProviderAlreadyConnected,
+    #[error("the Slash account is not available")]
+    UserUnavailable,
+    #[error("database operation failed")]
+    Database(#[from] sqlx::Error),
+}
+
+/// `GET /api/auth/github/sign-in` starts an unauthenticated GitHub sign-in.
+pub async fn start_github_sign_in(State(state): State<crate::AppState>) -> Response {
+    start_oauth(state, OauthIntent::SignIn, None).await
+}
+
+/// `POST /api/auth/github/connect` starts connection for the current user.
+pub async fn start_github_connect(State(state): State<crate::AppState>, user: UserId) -> Response {
+    start_oauth(state, OauthIntent::Connect, Some(user.0)).await
+}
+
+async fn start_oauth(
+    state: crate::AppState,
+    intent: OauthIntent,
     user_id: Option<Uuid>,
-}
-
-// ---- Handlers ---------------------------------------------------------------
-
-/// `GET /api/auth/github` — Initiate GitHub OAuth login (unauthenticated).
-///
-/// Generates a signed state token, stores it in a cookie, and redirects
-/// the browser to GitHub's authorization endpoint.
-pub async fn start_github_login(
-    State(state): State<crate::AppState>,
-    parts: axum::http::request::Parts,
 ) -> Response {
-    let redirect_to = "/onboarding";
-    start_github_oauth(state, parts, "login", None, redirect_to).await
+    let oauth = match &state.github_oauth {
+        Some(oauth) => oauth,
+        None => return api_error(StatusCode::NOT_FOUND, "github login is not configured"),
+    };
+    let redirect_uri = format!(
+        "{}/api/auth/github/callback",
+        oauth.base_url.trim_end_matches('/')
+    );
+    let nonce = random_token();
+    let pkce_verifier = random_token();
+    let pkce_challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(pkce_verifier.as_bytes()));
+    let claims = StateClaims {
+        intent,
+        nonce: nonce.clone(),
+        pkce_verifier,
+        redirect_uri: redirect_uri.clone(),
+        exp: now_secs() + STATE_TTL_SECS,
+        user_id,
+    };
+    let state_cookie = match sign_state(&oauth.auth_secret, &claims) {
+        Ok(cookie) => cookie,
+        Err(_) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, "auth setup failed"),
+    };
+    let location = authorization_url(oauth, &redirect_uri, &nonce, &pkce_challenge);
+    let mut response = redirect(&location);
+    append_cookie(&mut response, &state_cookie_value(oauth, &state_cookie));
+    response
 }
 
-/// `POST /api/auth/github/link` — Initiate GitHub OAuth for account linking
-/// (authenticated). Binds the caller's existing Slash account to their
-/// GitHub identity.
-pub async fn start_github_link(
-    State(state): State<crate::AppState>,
-    auth_user: crate::userapi::UserId,
-    parts: axum::http::request::Parts,
-) -> Response {
-    let redirect_to = "/settings?github=linked";
-    start_github_oauth(state, parts, "link", Some(auth_user.0), redirect_to).await
+fn authorization_url(
+    oauth: &OauthState,
+    redirect_uri: &str,
+    nonce: &str,
+    pkce_challenge: &str,
+) -> String {
+    format!(
+        "{}?client_id={}&redirect_uri={}&state={}&scope={}&code_challenge={}&code_challenge_method=S256&prompt=select_account",
+        oauth.endpoints.authorize,
+        urlencoding::encode(&oauth.client_id),
+        urlencoding::encode(redirect_uri),
+        urlencoding::encode(nonce),
+        urlencoding::encode("read:user user:email"),
+        urlencoding::encode(pkce_challenge),
+    )
 }
 
-/// `GET /api/auth/github/callback` — Handle GitHub OAuth callback.
-///
-/// Validates the state token, exchanges the authorization code for an
-/// access token, fetches the GitHub user profile, then either:
-///   - **login mode**: upserts the user and sets a session cookie.
-///   - **link mode**: binds the GitHub identity to the existing user.
+/// GitHub callback for both intents. All browser-facing failures are bounded
+/// redirects; internal and GitHub response details are logged only server-side.
 pub async fn handle_github_callback(
     State(state): State<crate::AppState>,
     axum::extract::Query(params): axum::extract::Query<CallbackParams>,
-    axum::http::request::Parts { headers, .. }: axum::http::request::Parts,
+    parts: axum::http::request::Parts,
 ) -> Response {
     let oauth = match &state.github_oauth {
-        Some(o) => o,
+        Some(oauth) => oauth,
         None => return api_error(StatusCode::NOT_FOUND, "github login is not configured"),
     };
-
-    // Extract and verify the state token from the cookie.
-    let state_token = headers
-        .get(axum::http::header::COOKIE)
-        .and_then(|v| v.to_str().ok())
-        .and_then(extract_state_cookie);
-    let state_token = match state_token {
-        Some(t) => t,
-        None => {
-            tracing::error!("github oauth: missing state cookie");
-            return api_error(StatusCode::UNAUTHORIZED, "missing state cookie");
+    let cookie_header = parts
+        .headers
+        .get(COOKIE)
+        .and_then(|value| value.to_str().ok());
+    let signed_state = cookie_header.and_then(extract_state_cookie);
+    let claims = match signed_state
+        .as_deref()
+        .ok_or(auth::AuthError::MissingToken)
+        .and_then(|token| verify_state(&oauth.auth_secret, token))
+    {
+        Ok(claims) => claims,
+        Err(error) => {
+            tracing::warn!(%error, "github oauth callback rejected state cookie");
+            return callback_error(oauth, None, "invalid_state");
         }
     };
-    // Verify the cookie's state token is valid (signature + expiry).
-    let state_claims = match verify_state(&oauth.auth_secret, &state_token) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!(?e, "github oauth: invalid or expired state");
-            return api_error(StatusCode::UNAUTHORIZED, "invalid or expired state");
-        }
-    };
-    // GitHub returns the exact state parameter we sent — compare the full
-    // signed tokens, not the inner csrf UUID (which would never match the
-    // base64-encoded token GitHub echoes back).
-    if state_token != params.state {
-        tracing::error!(
-            cookie_len = state_token.len(),
-            query_len = params.state.len(),
-            "github oauth: state mismatch"
-        );
-        return api_error(StatusCode::UNAUTHORIZED, "state mismatch");
+    if params.state.as_deref() != Some(claims.nonce.as_str()) {
+        tracing::warn!(intent = ?claims.intent, "github oauth callback state mismatch");
+        return callback_error(oauth, Some(claims.intent), "invalid_state");
     }
+    if let Some(error) = params.error.as_deref() {
+        tracing::info!(intent = ?claims.intent, github_error = %error, "github oauth was not authorized");
+        return callback_error(oauth, Some(claims.intent), "access_denied");
+    }
+    let code = match params.code.as_deref() {
+        Some(code) => code,
+        None => return callback_error(oauth, Some(claims.intent), "missing_code"),
+    };
 
-    tracing::info!(mode = %state_claims.mode, "github oauth: state verified, exchanging code");
+    let connected_user = if claims.intent == OauthIntent::Connect {
+        match connection_session_user(&oauth.auth_secret, cookie_header, claims.user_id) {
+            Ok(user_id) => Some(user_id),
+            Err(error) => {
+                tracing::warn!(%error, "github connection callback lost its Slash session");
+                return callback_error(oauth, Some(claims.intent), "session_expired");
+            }
+        }
+    } else {
+        None
+    };
 
-    // Exchange authorization code for access token.
-    let http = reqwest::Client::new();
-    let token_resp = http
-        .post(GITHUB_TOKEN_URL)
+    let access_token = match exchange_code(oauth, code, &claims).await {
+        Ok(token) => token,
+        Err(error) => {
+            tracing::error!(%error, intent = ?claims.intent, "github oauth token exchange failed");
+            return callback_error(oauth, Some(claims.intent), "github_unavailable");
+        }
+    };
+    let profile = match fetch_profile(oauth, &access_token).await {
+        Ok(profile) => profile,
+        Err(error) => {
+            tracing::error!(%error, intent = ?claims.intent, "github oauth profile fetch failed");
+            return callback_error(oauth, Some(claims.intent), error);
+        }
+    };
+
+    match claims.intent {
+        OauthIntent::SignIn => finish_sign_in(&state, oauth, &profile).await,
+        OauthIntent::Connect => {
+            let Some(user_id) = connected_user else {
+                return callback_error(oauth, Some(claims.intent), "session_expired");
+            };
+            finish_connection(&state.pool, oauth, user_id, &profile).await
+        }
+    }
+}
+
+async fn exchange_code(
+    oauth: &OauthState,
+    code: &str,
+    claims: &StateClaims,
+) -> Result<String, &'static str> {
+    let response = reqwest::Client::new()
+        .post(oauth.endpoints.token.as_ref())
         .header("accept", "application/json")
         .form(&[
             ("client_id", oauth.client_id.as_ref()),
             ("client_secret", oauth.client_secret.as_ref()),
-            ("code", &params.code),
+            ("code", code),
+            ("redirect_uri", claims.redirect_uri.as_str()),
+            ("code_verifier", claims.pkce_verifier.as_str()),
         ])
         .send()
-        .await;
-    let token_resp = match token_resp {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::error!(?e, "github oauth: failed to send token exchange request");
-            return api_error(StatusCode::BAD_GATEWAY, "failed to reach github");
-        }
-    };
-    let token_status = token_resp.status();
-    if !token_status.is_success() {
-        let body = token_resp.text().await.unwrap_or_default();
-        tracing::error!(status = %token_status, body = %body, "github oauth: token exchange failed");
-        return api_error(StatusCode::BAD_GATEWAY, "github token exchange failed");
+        .await
+        .map_err(|_| "token_request")?;
+    if !response.status().is_success() {
+        return Err("token_status");
     }
-    let token_data: GithubTokenResponse = match token_resp.json().await {
-        Ok(d) => d,
-        Err(e) => {
-            // GitHub may return 200 with an error body — re-fetch won't work
-            // since the body is consumed, but the error message is enough.
-            tracing::error!(?e, "github oauth: failed to parse token response (GitHub may have returned an error)");
-            return api_error(StatusCode::BAD_GATEWAY, "invalid github token response");
-        }
-    };
+    let payload: GithubTokenResponse = response.json().await.map_err(|_| "token_payload")?;
+    if payload.error.is_some() {
+        return Err("token_rejected");
+    }
+    payload.access_token.ok_or("token_missing")
+}
 
-    tracing::info!("github oauth: token received, fetching user info");
+async fn fetch_profile(
+    oauth: &OauthState,
+    access_token: &str,
+) -> Result<GithubProfile, &'static str> {
+    let client = reqwest::Client::new();
+    let user_response = github_get(&client, oauth.endpoints.user.as_ref(), access_token)
+        .await
+        .map_err(|_| "github_unavailable")?;
+    if !user_response.status().is_success() {
+        return Err("github_unavailable");
+    }
+    let user: GithubUser = user_response.json().await.map_err(|_| "invalid_profile")?;
+    let email_response = github_get(&client, oauth.endpoints.emails.as_ref(), access_token)
+        .await
+        .map_err(|_| "github_unavailable")?;
+    if !email_response.status().is_success() {
+        return Err("email_unavailable");
+    }
+    let emails: Vec<GithubEmail> = email_response.json().await.map_err(|_| "invalid_email")?;
+    let email = verified_primary_email(&emails).ok_or("verified_email_required")?;
+    let display_name = user
+        .name
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or_else(|| user.login.clone());
+    Ok(GithubProfile {
+        subject: user.id.to_string(),
+        login: user.login,
+        email: email.to_lowercase(),
+        display_name,
+    })
+}
 
-    // Fetch the authenticated user's GitHub profile.
-    let gh_user_resp = http
-        .get(GITHUB_USERINFO_URL)
-        .header("authorization", format!("Bearer {}", token_data.access_token))
+async fn github_get(
+    client: &reqwest::Client,
+    url: &str,
+    access_token: &str,
+) -> Result<reqwest::Response, reqwest::Error> {
+    client
+        .get(url)
+        .bearer_auth(access_token)
+        .header("accept", "application/vnd.github+json")
+        .header("x-github-api-version", GITHUB_API_VERSION)
         .header("user-agent", "slash-server")
         .send()
-        .await;
-    let gh_user: GithubUser = match gh_user_resp {
-        Ok(r) => {
-            let user_status = r.status();
-            match r.json().await {
-                Ok(u) => u,
-                Err(e) => {
-                    tracing::error!(?e, status = %user_status, "github oauth: failed to parse user info");
-                    return api_error(StatusCode::BAD_GATEWAY, "invalid github user response");
-                }
-            }
+        .await
+}
+
+fn verified_primary_email(emails: &[GithubEmail]) -> Option<&str> {
+    emails
+        .iter()
+        .find(|email| email.primary && email.verified)
+        .map(|email| email.email.as_str())
+}
+
+async fn finish_sign_in(
+    state: &crate::AppState,
+    oauth: &OauthState,
+    profile: &GithubProfile,
+) -> Response {
+    let user_id = match sign_in_user(&state.pool, profile).await {
+        Ok(user_id) => user_id,
+        Err(AccountError::EmailInUse) => {
+            return callback_error(oauth, Some(OauthIntent::SignIn), "account_exists");
         }
-        Err(e) => {
-            tracing::error!(?e, "github oauth: failed to send user info request");
-            return api_error(StatusCode::BAD_GATEWAY, "failed to reach github");
+        Err(AccountError::UserUnavailable) => {
+            return callback_error(oauth, Some(OauthIntent::SignIn), "account_unavailable");
+        }
+        Err(error) => {
+            tracing::error!(%error, "github sign-in persistence failed");
+            return callback_error(oauth, Some(OauthIntent::SignIn), "internal");
         }
     };
-
-    tracing::info!(github_id = gh_user.id, login = %gh_user.login, "github oauth: user info fetched");
-
-    let github_id = gh_user.id;
-    let github_login = gh_user.login;
-
-
-    // Branch on mode.
-    match state_claims.mode.as_str() {
-        "link" => {
-            // Link mode: bind GitHub identity to the existing user.
-            let user_id = match state_claims.user_id {
-                Some(id) => id,
-                None => return api_error(StatusCode::UNAUTHORIZED, "missing user context"),
-            };
-            if link_github_user(&state.pool, user_id, github_id, &github_login).await.is_err() {
-                return api_error(StatusCode::INTERNAL_SERVER_ERROR, "could not link github account");
-            }
-            // Redirect without issuing a new session cookie (user is already
-            // authenticated in the browser).
-            let redirect_to = if state_claims.redirect.is_empty() {
-                "/settings?github=linked".to_string()
-            } else {
-                state_claims.redirect
-            };
-            let mut resp = axum::response::Redirect::to(&redirect_to).into_response();
-            clear_state_cookie(&mut resp);
-            resp
+    let token = match auth::sign_token(&state.auth_secret, user_id) {
+        Ok(token) => token,
+        Err(error) => {
+            tracing::error!(%error, "github sign-in session creation failed");
+            return callback_error(oauth, Some(OauthIntent::SignIn), "internal");
         }
-        _ => {
-            // Login mode (default): upsert user and set session cookie.
-            let display_name = gh_user.name.unwrap_or_else(|| github_login.clone());
-            let email = gh_user
-                .email
-                .unwrap_or_else(|| format!("{github_id}+{github_login}@users.noreply.github.com"));
+    };
+    let destination = match account_destination(&state.pool, user_id).await {
+        Ok(destination) => destination,
+        Err(error) => {
+            tracing::error!(%error, "github sign-in destination lookup failed");
+            return callback_error(oauth, Some(OauthIntent::SignIn), "internal");
+        }
+    };
+    let mut response = redirect(destination);
+    append_cookie(&mut response, &auth::set_cookie_value(&token));
+    append_cookie(&mut response, &clear_state_cookie_value(oauth));
+    response
+}
 
-            let user_id = match upsert_github_user(&state.pool, github_id, &github_login, &email, &display_name).await {
-                Ok(id) => id,
-                Err(_) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, "could not create account"),
-            };
-
-            let token = match auth::sign_token(&state.auth_secret, user_id) {
-                Ok(t) => t,
-                Err(_) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, "could not create session"),
-            };
-
-            // Existing users with teams go to the dashboard; new users
-            // without any team are sent to onboarding.
-            let redirect_to = if user_has_teams(&state.pool, user_id).await {
-                "/".to_string()
-            } else {
-                "/onboarding".to_string()
-            };
-
-            let mut resp = axum::response::Redirect::to(&redirect_to).into_response();
-            set_session_and_clear_state_cookie(&mut resp, &token);
-            resp
+async fn finish_connection(
+    pool: &PgPool,
+    oauth: &OauthState,
+    user_id: Uuid,
+    profile: &GithubProfile,
+) -> Response {
+    match connect_user(pool, user_id, profile).await {
+        Ok(()) => callback_success(oauth, OauthIntent::Connect),
+        Err(AccountError::IdentityInUse) => {
+            callback_error(oauth, Some(OauthIntent::Connect), "identity_in_use")
+        }
+        Err(AccountError::ProviderAlreadyConnected) => callback_error(
+            oauth,
+            Some(OauthIntent::Connect),
+            "different_identity_connected",
+        ),
+        Err(AccountError::UserUnavailable) => {
+            callback_error(oauth, Some(OauthIntent::Connect), "session_expired")
+        }
+        Err(error) => {
+            tracing::error!(%error, "github account connection persistence failed");
+            callback_error(oauth, Some(OauthIntent::Connect), "internal")
         }
     }
 }
 
-// ---- Shared OAuth initiation ------------------------------------------------
+async fn sign_in_user(pool: &PgPool, profile: &GithubProfile) -> Result<Uuid, AccountError> {
+    let mut tx = pool.begin().await?;
+    let existing = sqlx::query_as::<_, (Uuid, String)>(
+        "SELECT u.id, u.status
+         FROM user_identities ui
+         JOIN users u ON u.id = ui.user_id
+         WHERE ui.provider = 'github' AND ui.provider_subject = $1
+         FOR UPDATE OF ui, u",
+    )
+    .bind(&profile.subject)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if let Some((user_id, status)) = existing {
+        if status != "active" {
+            return Err(AccountError::UserUnavailable);
+        }
+        update_identity(&mut tx, user_id, profile).await?;
+        tx.commit().await?;
+        return Ok(user_id);
+    }
 
-/// Core OAuth initiation logic shared by login and link flows.
-async fn start_github_oauth(
-    state: crate::AppState,
-    parts: axum::http::request::Parts,
-    mode: &str,
-    user_id: Option<Uuid>,
-    redirect_to: &str,
-) -> Response {
-    let oauth = match &state.github_oauth {
-        Some(o) => o,
-        None => return api_error(StatusCode::NOT_FOUND, "github login is not configured"),
-    };
+    let email_in_use: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM users WHERE email = $1)")
+            .bind(&profile.email)
+            .fetch_one(&mut *tx)
+            .await?;
+    if email_in_use {
+        return Err(AccountError::EmailInUse);
+    }
 
-    let axum::http::request::Parts { uri: _, headers, .. } = parts;
-
-    // Determine the callback base URL: prefer the configured value, fall
-    // back to the request's Host header.
-    let host = headers
-        .get(axum::http::header::HOST)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("localhost");
-    let scheme = "https";
-    let base = match &oauth.base_url {
-        Some(b) => b.to_string(),
-        None => format!("{scheme}://{host}"),
-    };
-    let redirect_uri = format!("{base}/api/auth/github/callback");
-
-    // CSRF: short-lived signed state token.
-    let csrf = Uuid::new_v4().to_string();
-    let state_token = match sign_state(&oauth.auth_secret, mode, &csrf, redirect_to, user_id) {
-        Ok(t) => t,
-        Err(_) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, "auth setup failed"),
-    };
-
-    let mut resp = axum::response::Redirect::to(&format!(
-        "{GITHUB_AUTHORIZE_URL}?client_id={}&redirect_uri={}&state={}&scope=read:user user:email",
-        oauth.client_id,
-        urlencoding::encode(&redirect_uri),
-        urlencoding::encode(&state_token),
-    ))
-    .into_response();
-
-    // Set the state cookie (HttpOnly, SameSite=Lax, short-lived).
-    #[allow(clippy::expect_used)]
-    let cookie = HeaderValue::from_str(&format!(
-        "{STATE_COOKIE}={state_token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={STATE_TTL_SECS}"
-    ))
-    .expect("Set-Cookie value is ASCII");
-    resp.headers_mut().insert(SET_COOKIE, cookie);
-
-    resp
+    let user_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO users (id, email, password_hash, display_name, status)
+         VALUES ($1, $2, '', $3, 'active')",
+    )
+    .bind(user_id)
+    .bind(&profile.email)
+    .bind(&profile.display_name)
+    .execute(&mut *tx)
+    .await
+    .map_err(map_constraint)?;
+    insert_identity(&mut tx, user_id, profile)
+        .await
+        .map_err(map_constraint)?;
+    tx.commit().await?;
+    Ok(user_id)
 }
 
-// ---- State token (HMAC-signed CSRF) ----------------------------------------
+async fn connect_user(
+    pool: &PgPool,
+    user_id: Uuid,
+    profile: &GithubProfile,
+) -> Result<(), AccountError> {
+    let mut tx = pool.begin().await?;
+    let status: Option<String> =
+        sqlx::query_scalar("SELECT status FROM users WHERE id = $1 FOR UPDATE")
+            .bind(user_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    if status.as_deref() != Some("active") {
+        return Err(AccountError::UserUnavailable);
+    }
 
-fn sign_state(
-    secret: &AuthSecret,
-    mode: &str,
-    csrf: &str,
-    redirect: &str,
-    user_id: Option<Uuid>,
-) -> Result<String, auth::AuthError> {
-    let claims = StateClaims {
-        mode: mode.to_string(),
-        csrf: csrf.to_string(),
-        exp: now_secs() + STATE_TTL_SECS,
-        redirect: redirect.to_string(),
-        user_id,
-    };
-    let payload_json =
-        serde_json::to_string(&claims).map_err(|_| auth::AuthError::Encode)?;
-    let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .encode(payload_json.as_bytes());
-    let mac = hmac(secret, payload.as_bytes());
-    Ok(format!("{payload}.{mac}"))
+    let subject_owner: Option<Uuid> = sqlx::query_scalar(
+        "SELECT user_id
+         FROM user_identities
+         WHERE provider = 'github' AND provider_subject = $1
+         FOR UPDATE",
+    )
+    .bind(&profile.subject)
+    .fetch_optional(&mut *tx)
+    .await?;
+    if subject_owner.is_some_and(|owner| owner != user_id) {
+        return Err(AccountError::IdentityInUse);
+    }
+
+    let current_subject: Option<String> = sqlx::query_scalar(
+        "SELECT provider_subject
+         FROM user_identities
+         WHERE provider = 'github' AND user_id = $1
+         FOR UPDATE",
+    )
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    match current_subject {
+        Some(subject) if subject != profile.subject => {
+            return Err(AccountError::ProviderAlreadyConnected);
+        }
+        Some(_) => update_identity(&mut tx, user_id, profile).await?,
+        None => insert_identity(&mut tx, user_id, profile)
+            .await
+            .map_err(map_constraint)?,
+    }
+    tx.commit().await?;
+    Ok(())
 }
 
-fn verify_state(
+async fn insert_identity(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user_id: Uuid,
+    profile: &GithubProfile,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO user_identities
+            (id, user_id, provider, provider_subject, provider_login, provider_email)
+         VALUES ($1, $2, 'github', $3, $4, $5)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(user_id)
+    .bind(&profile.subject)
+    .bind(&profile.login)
+    .bind(&profile.email)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+async fn update_identity(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    user_id: Uuid,
+    profile: &GithubProfile,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE user_identities
+         SET provider_login = $1, provider_email = $2, updated_at = now()
+         WHERE user_id = $3 AND provider = 'github' AND provider_subject = $4",
+    )
+    .bind(&profile.login)
+    .bind(&profile.email)
+    .bind(user_id)
+    .bind(&profile.subject)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+fn map_constraint(error: sqlx::Error) -> AccountError {
+    let constraint = match &error {
+        sqlx::Error::Database(database) => database.constraint(),
+        _ => None,
+    };
+    match constraint {
+        Some("users_email_key") => AccountError::EmailInUse,
+        Some("user_identities_provider_subject_unique") => AccountError::IdentityInUse,
+        Some("user_identities_user_provider_unique") => AccountError::ProviderAlreadyConnected,
+        _ => AccountError::Database(error),
+    }
+}
+
+async fn account_destination(pool: &PgPool, user_id: Uuid) -> Result<&'static str, sqlx::Error> {
+    let has_team: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM team_members WHERE user_id = $1)")
+            .bind(user_id)
+            .fetch_one(pool)
+            .await?;
+    Ok(if has_team { "/" } else { "/onboarding" })
+}
+
+fn connection_session_user(
     secret: &AuthSecret,
-    token: &str,
-) -> Result<StateClaims, auth::AuthError> {
-    let (payload, mac_str) = token
-        .split_once('.')
-        .ok_or(auth::AuthError::InvalidToken)?;
-    let expected = hmac(secret, payload.as_bytes());
-    let actual_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(mac_str)
-        .map_err(|_| auth::AuthError::InvalidToken)?;
-    let expected_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(&expected)
-        .map_err(|_| auth::AuthError::Internal)?;
-    if actual_bytes != expected_bytes {
+    cookie_header: Option<&str>,
+    expected_user_id: Option<Uuid>,
+) -> Result<Uuid, auth::AuthError> {
+    let expected = expected_user_id.ok_or(auth::AuthError::InvalidToken)?;
+    let token =
+        auth::session_token_from_header(cookie_header).ok_or(auth::AuthError::MissingToken)?;
+    let actual = auth::verify_token(secret, &token)?;
+    if actual != expected {
         return Err(auth::AuthError::InvalidToken);
     }
-    let payload_json = base64::engine::general_purpose::URL_SAFE_NO_PAD
+    Ok(actual)
+}
+
+fn sign_state(secret: &AuthSecret, claims: &StateClaims) -> Result<String, auth::AuthError> {
+    let json = serde_json::to_vec(claims).map_err(|_| auth::AuthError::Encode)?;
+    let payload = URL_SAFE_NO_PAD.encode(json);
+    let signature = state_mac(secret, payload.as_bytes());
+    Ok(format!("{payload}.{signature}"))
+}
+
+fn verify_state(secret: &AuthSecret, token: &str) -> Result<StateClaims, auth::AuthError> {
+    let (payload, signature) = token.split_once('.').ok_or(auth::AuthError::InvalidToken)?;
+    let signature = URL_SAFE_NO_PAD
+        .decode(signature)
+        .map_err(|_| auth::AuthError::InvalidToken)?;
+    let mut mac =
+        HmacSha256::new_from_slice(secret.0.as_bytes()).map_err(|_| auth::AuthError::Internal)?;
+    mac.update(payload.as_bytes());
+    mac.verify_slice(&signature)
+        .map_err(|_| auth::AuthError::InvalidToken)?;
+    let json = URL_SAFE_NO_PAD
         .decode(payload)
         .map_err(|_| auth::AuthError::InvalidToken)?;
-    let claims: StateClaims = serde_json::from_slice(&payload_json)
-        .map_err(|_| auth::AuthError::InvalidToken)?;
+    let claims: StateClaims =
+        serde_json::from_slice(&json).map_err(|_| auth::AuthError::InvalidToken)?;
     if claims.exp < now_secs() {
         return Err(auth::AuthError::ExpiredToken);
     }
     Ok(claims)
 }
 
-fn hmac(secret: &AuthSecret, data: &[u8]) -> String {
+fn state_mac(secret: &AuthSecret, payload: &[u8]) -> String {
     #[allow(clippy::expect_used)]
     let mut mac =
-        HmacSha256::new_from_slice(secret.0.as_bytes()).expect("HMAC accepts any key");
-    mac.update(data);
-    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
+        HmacSha256::new_from_slice(secret.0.as_bytes()).expect("HMAC accepts any key length");
+    mac.update(payload);
+    URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes())
+}
+
+fn random_token() -> String {
+    let first = Uuid::new_v4();
+    let second = Uuid::new_v4();
+    let mut bytes = [0_u8; 32];
+    bytes[..16].copy_from_slice(first.as_bytes());
+    bytes[16..].copy_from_slice(second.as_bytes());
+    URL_SAFE_NO_PAD.encode(bytes)
 }
 
 fn now_secs() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
+        .map(|duration| duration.as_secs())
         .unwrap_or(0)
 }
 
-// ---- Cookie helpers ---------------------------------------------------------
-
-fn set_session_and_clear_state_cookie(resp: &mut Response, token: &str) {
-    let session_str = auth::set_cookie_value(token);
-    let state_str = format!(
-        "{STATE_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"
-    );
-    #[allow(clippy::expect_used)]
-    let combined = HeaderValue::from_str(&format!("{session_str}, {state_str}"))
-        .expect("Set-Cookie value is ASCII");
-    resp.headers_mut().insert(SET_COOKIE, combined);
-}
-
-fn clear_state_cookie(resp: &mut Response) {
-    #[allow(clippy::expect_used)]
-    let value = HeaderValue::from_str(&format!(
-        "{STATE_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0"
-    ))
-    .expect("Set-Cookie value is ASCII");
-    resp.headers_mut().insert(SET_COOKIE, value);
-}
-
-// ---- Database ---------------------------------------------------------------
-
-/// Find an existing user by `github_user_id`, or by email, or create a new
-/// one. Returns the user's UUID.
-async fn upsert_github_user(
-    pool: &sqlx::PgPool,
-    github_id: i64,
-    github_login: &str,
-    email: &str,
-    display_name: &str,
-) -> Result<Uuid, sqlx::Error> {
-    // 1. Existing user linked to this GitHub account.
-    if let Some(id) = sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM users WHERE github_user_id = $1",
-    )
-    .bind(github_id)
-    .fetch_optional(pool)
-    .await?
-    {
-        sqlx::query("UPDATE users SET github_login = $1, updated_at = now() WHERE id = $2")
-            .bind(github_login)
-            .bind(id)
-            .execute(pool)
-            .await?;
-        return Ok(id);
-    }
-
-    // 2. Existing user with a matching email — link GitHub identity.
-    if let Some(id) = sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM users WHERE email = $1",
-    )
-    .bind(email)
-    .fetch_optional(pool)
-    .await?
-    {
-        sqlx::query(
-            "UPDATE users SET github_user_id = $1, github_login = $2, updated_at = now()
-             WHERE id = $3",
-        )
-        .bind(github_id)
-        .bind(github_login)
-        .bind(id)
-        .execute(pool)
-        .await?;
-        return Ok(id);
-    }
-
-    // 3. Brand-new user from GitHub.
-    let id = Uuid::new_v4();
-    sqlx::query(
-        "INSERT INTO users (id, email, password_hash, display_name, github_user_id, github_login, status)
-         VALUES ($1, $2, '', $3, $4, $5, 'active')",
-    )
-    .bind(id)
-    .bind(email)
-    .bind(display_name)
-    .bind(github_id)
-    .bind(github_login)
-    .execute(pool)
-    .await?;
-    Ok(id)
-}
-
-/// Bind a GitHub identity to an existing user account (link mode).
-/// Fails if the GitHub account is already linked to a different user.
-async fn link_github_user(
-    pool: &sqlx::PgPool,
-    user_id: Uuid,
-    github_id: i64,
-    github_login: &str,
-) -> Result<(), sqlx::Error> {
-    // Check that this GitHub account isn't already linked to someone else.
-    let existing: Option<Uuid> = sqlx::query_scalar(
-        "SELECT id FROM users WHERE github_user_id = $1 AND id != $2",
-    )
-    .bind(github_id)
-    .bind(user_id)
-    .fetch_optional(pool)
-    .await?;
-    if existing.is_some() {
-        // Return a unique-violation-like error; the caller maps it to 409.
-        return Err(sqlx::Error::RowNotFound); // sentinel
-    }
-
-    sqlx::query(
-        "UPDATE users SET github_user_id = $1, github_login = $2, updated_at = now()
-         WHERE id = $3",
-    )
-    .bind(github_id)
-    .bind(github_login)
-    .bind(user_id)
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
-/// Returns `true` when the user belongs to at least one team.
-async fn user_has_teams(pool: &sqlx::PgPool, user_id: Uuid) -> bool {
-    sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS(SELECT 1 FROM team_members WHERE user_id = $1)",
-    )
-    .bind(user_id)
-    .fetch_one(pool)
-    .await
-    .unwrap_or(false)
-}
-
-
-// ---- Helpers ----------------------------------------------------------------
-
 fn extract_state_cookie(cookie_header: &str) -> Option<String> {
-    for pair in cookie_header.split(';') {
-        let (k, v) = pair.trim().split_once('=')?;
-        if k.trim() == STATE_COOKIE {
-            return Some(v.trim().to_string());
-        }
+    cookie_header.split(';').find_map(|pair| {
+        let (name, value) = pair.trim().split_once('=')?;
+        (name == STATE_COOKIE).then(|| value.to_string())
+    })
+}
+
+fn state_cookie_value(oauth: &OauthState, token: &str) -> String {
+    format!(
+        "{STATE_COOKIE}={token}; Path=/api/auth/github/callback; HttpOnly; SameSite=Lax; Max-Age={STATE_TTL_SECS}{}",
+        secure_cookie_suffix(oauth)
+    )
+}
+
+fn clear_state_cookie_value(oauth: &OauthState) -> String {
+    format!(
+        "{STATE_COOKIE}=; Path=/api/auth/github/callback; HttpOnly; SameSite=Lax; Max-Age=0{}",
+        secure_cookie_suffix(oauth)
+    )
+}
+
+fn secure_cookie_suffix(oauth: &OauthState) -> &'static str {
+    if oauth.base_url.starts_with("https://") {
+        "; Secure"
+    } else {
+        ""
     }
-    None
+}
+
+fn append_cookie(response: &mut Response, value: &str) {
+    #[allow(clippy::expect_used)]
+    let value = HeaderValue::from_str(value).expect("generated cookie is valid ASCII");
+    response.headers_mut().append(SET_COOKIE, value);
+}
+
+fn redirect(location: &str) -> Response {
+    let mut headers = HeaderMap::new();
+    let value = HeaderValue::from_str(location)
+        .unwrap_or_else(|_| HeaderValue::from_static("/login?github_error=internal"));
+    headers.insert(LOCATION, value);
+    (StatusCode::SEE_OTHER, headers).into_response()
+}
+
+fn callback_success(oauth: &OauthState, intent: OauthIntent) -> Response {
+    let location = match intent {
+        OauthIntent::SignIn => "/",
+        OauthIntent::Connect => "/settings?github=connected",
+    };
+    let mut response = redirect(location);
+    append_cookie(&mut response, &clear_state_cookie_value(oauth));
+    response
+}
+
+fn callback_error(oauth: &OauthState, intent: Option<OauthIntent>, code: &'static str) -> Response {
+    let location = match intent {
+        Some(OauthIntent::Connect) => format!("/settings?github=error&reason={code}"),
+        _ => format!("/login?github_error={code}"),
+    };
+    let mut response = redirect(&location);
+    append_cookie(&mut response, &clear_state_cookie_value(oauth));
+    response
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -565,75 +727,208 @@ mod tests {
         AuthSecret(Arc::from("test-oauth-secret"))
     }
 
-    #[test]
-    fn state_login_sign_and_verify_roundtrip() {
-        let token = sign_state(&secret(), "login", "csrf-123", "/onboarding", None).unwrap();
-        let claims = verify_state(&secret(), &token).unwrap();
-        assert_eq!(claims.mode, "login");
-        assert_eq!(claims.csrf, "csrf-123");
-        assert_eq!(claims.redirect, "/onboarding");
-        assert!(claims.user_id.is_none());
+    fn oauth() -> OauthState {
+        OauthState::new(
+            Arc::from("client-id"),
+            Arc::from("client-secret"),
+            Arc::from("https://slash.example"),
+            secret(),
+        )
+    }
+
+    fn claims(intent: OauthIntent, user_id: Option<Uuid>) -> StateClaims {
+        StateClaims {
+            intent,
+            nonce: "nonce".into(),
+            pkce_verifier: "verifier".into(),
+            redirect_uri: "https://slash.example/api/auth/github/callback".into(),
+            exp: now_secs() + 60,
+            user_id,
+        }
+    }
+
+    fn profile(subject: &str, email: &str) -> GithubProfile {
+        GithubProfile {
+            subject: subject.into(),
+            login: format!("user-{subject}"),
+            email: email.into(),
+            display_name: format!("User {subject}"),
+        }
     }
 
     #[test]
-    fn state_link_sign_and_verify_roundtrip() {
-        let uid = Uuid::new_v4();
-        let token = sign_state(&secret(), "link", "csrf-456", "/settings?github=linked", Some(uid)).unwrap();
-        let claims = verify_state(&secret(), &token).unwrap();
-        assert_eq!(claims.mode, "link");
-        assert_eq!(claims.csrf, "csrf-456");
-        assert_eq!(claims.redirect, "/settings?github=linked");
-        assert_eq!(claims.user_id, Some(uid));
+    fn state_round_trip_keeps_explicit_intent_and_pkce_verifier() {
+        let user_id = Uuid::new_v4();
+        let token = sign_state(&secret(), &claims(OauthIntent::Connect, Some(user_id))).unwrap();
+        let decoded = verify_state(&secret(), &token).unwrap();
+        assert_eq!(decoded.intent, OauthIntent::Connect);
+        assert_eq!(decoded.user_id, Some(user_id));
+        assert_eq!(decoded.pkce_verifier, "verifier");
     }
 
     #[test]
-    fn state_tamper_fails() {
-        let token = sign_state(&secret(), "login", "csrf-123", "/onboarding", None).unwrap();
-        let mut parts: Vec<&str> = token.split('.').collect();
-        let mut payload_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .decode(parts[0])
+    fn authorization_url_exposes_only_nonce_and_pkce_challenge() {
+        let location = authorization_url(
+            &oauth(),
+            "https://slash.example/api/auth/github/callback",
+            "public-nonce",
+            "public-challenge",
+        );
+        assert!(location.contains("state=public-nonce"));
+        assert!(location.contains("code_challenge=public-challenge"));
+        assert!(location.contains("code_challenge_method=S256"));
+        assert!(!location.contains("client-secret"));
+        assert!(!location.contains("pkce_verifier"));
+    }
+
+    #[test]
+    fn unknown_intent_and_tampered_state_fail_closed() {
+        let json = serde_json::json!({
+            "intent": "legacy_link",
+            "nonce": "nonce",
+            "pkce_verifier": "verifier",
+            "redirect_uri": "https://slash.example/api/auth/github/callback",
+            "exp": now_secs() + 60,
+            "user_id": null
+        });
+        let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&json).unwrap());
+        let token = format!("{payload}.{}", state_mac(&secret(), payload.as_bytes()));
+        assert!(verify_state(&secret(), &token).is_err());
+
+        let valid = sign_state(&secret(), &claims(OauthIntent::SignIn, None)).unwrap();
+        assert!(verify_state(&secret(), &format!("{valid}x")).is_err());
+    }
+
+    #[test]
+    fn connection_is_bound_to_the_same_live_session() {
+        let user_id = Uuid::new_v4();
+        let token = auth::sign_token(&secret(), user_id).unwrap();
+        let cookie = format!("slash_session={token}");
+        assert_eq!(
+            connection_session_user(&secret(), Some(&cookie), Some(user_id)).unwrap(),
+            user_id
+        );
+        assert!(connection_session_user(&secret(), Some(&cookie), Some(Uuid::new_v4())).is_err());
+        assert!(connection_session_user(&secret(), None, Some(user_id)).is_err());
+    }
+
+    #[test]
+    fn only_a_verified_primary_email_is_accepted() {
+        let emails = vec![
+            GithubEmail {
+                email: "secondary@example.com".into(),
+                primary: false,
+                verified: true,
+            },
+            GithubEmail {
+                email: "unverified@example.com".into(),
+                primary: true,
+                verified: false,
+            },
+            GithubEmail {
+                email: "primary@example.com".into(),
+                primary: true,
+                verified: true,
+            },
+        ];
+        assert_eq!(verified_primary_email(&emails), Some("primary@example.com"));
+        assert_eq!(verified_primary_email(emails.get(..2).unwrap()), None);
+    }
+
+    async fn test_pool() -> Option<PgPool> {
+        let url = crate::test_support::test_database_url()?;
+        let pool = crate::db::connect(&url).await.unwrap();
+        crate::db::migrate(&pool).await.unwrap();
+        sqlx::query("TRUNCATE users CASCADE")
+            .execute(&pool)
+            .await
             .unwrap();
-        payload_bytes.push(0xff);
-        let reencoded = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&payload_bytes);
-        parts[0] = &reencoded;
-        let tampered = parts.join(".");
-        assert!(verify_state(&secret(), &tampered).is_err());
+        Some(pool)
     }
 
-    #[test]
-    fn state_wrong_key_fails() {
-        let token = sign_state(&secret(), "login", "csrf-123", "/onboarding", None).unwrap();
-        let other = AuthSecret(Arc::from("wrong-key"));
-        assert!(verify_state(&other, &token).is_err());
+    async fn password_user(pool: &PgPool, email: &str) -> Uuid {
+        let user_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO users (id, email, password_hash, display_name, status)
+             VALUES ($1, $2, 'hash', 'Existing', 'active')",
+        )
+        .bind(user_id)
+        .bind(email)
+        .execute(pool)
+        .await
+        .unwrap();
+        user_id
     }
 
-    #[test]
-    fn state_expired_fails() {
-        let claims = StateClaims {
-            mode: "login".into(),
-            csrf: "csrf".into(),
-            exp: now_secs() - 1,
-            redirect: "/".into(),
-            user_id: None,
+    #[serial_test::serial(db)]
+    #[tokio::test]
+    async fn github_sign_in_never_silently_merges_by_email() {
+        let Some(pool) = test_pool().await else {
+            return;
         };
-        let json = serde_json::to_string(&claims).unwrap();
-        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json.as_bytes());
-        let mac = hmac(&secret(), payload.as_bytes());
-        let token = format!("{payload}.{mac}");
+        password_user(&pool, "same@example.com").await;
+        let result = sign_in_user(&pool, &profile("101", "same@example.com")).await;
+        assert!(matches!(result, Err(AccountError::EmailInUse)));
+        let identities: i64 = sqlx::query_scalar("SELECT count(*) FROM user_identities")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(identities, 0);
+    }
+
+    #[serial_test::serial(db)]
+    #[tokio::test]
+    async fn github_sign_in_creates_then_reuses_the_stable_subject() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        let first = sign_in_user(&pool, &profile("102", "new@example.com"))
+            .await
+            .unwrap();
+        let second = sign_in_user(&pool, &profile("102", "renamed@example.com"))
+            .await
+            .unwrap();
+        assert_eq!(first, second);
+        let account_email: String = sqlx::query_scalar("SELECT email FROM users WHERE id = $1")
+            .bind(first)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(account_email, "new@example.com");
+    }
+
+    #[serial_test::serial(db)]
+    #[tokio::test]
+    async fn connection_is_idempotent_but_never_replaces_an_identity() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        let user_id = password_user(&pool, "owner@example.com").await;
+        connect_user(&pool, user_id, &profile("103", "github@example.com"))
+            .await
+            .unwrap();
+        connect_user(&pool, user_id, &profile("103", "updated@example.com"))
+            .await
+            .unwrap();
+        let result = connect_user(&pool, user_id, &profile("104", "other@example.com")).await;
         assert!(matches!(
-            verify_state(&secret(), &token),
-            Err(auth::AuthError::ExpiredToken)
+            result,
+            Err(AccountError::ProviderAlreadyConnected)
         ));
     }
 
-    #[test]
-    fn extract_state_cookie_parses_correctly() {
-        let header = "other=1; slash_github_state=thetoken; x=2";
-        assert_eq!(
-            extract_state_cookie(header).as_deref(),
-            Some("thetoken")
-        );
-        assert_eq!(extract_state_cookie(""), None);
-        assert_eq!(extract_state_cookie("no_state_here"), None);
+    #[serial_test::serial(db)]
+    #[tokio::test]
+    async fn one_github_identity_cannot_connect_to_two_users() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        let first = password_user(&pool, "first@example.com").await;
+        let second = password_user(&pool, "second@example.com").await;
+        connect_user(&pool, first, &profile("105", "github@example.com"))
+            .await
+            .unwrap();
+        let result = connect_user(&pool, second, &profile("105", "github@example.com")).await;
+        assert!(matches!(result, Err(AccountError::IdentityInUse)));
     }
 }

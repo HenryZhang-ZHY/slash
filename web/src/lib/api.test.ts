@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { testEngineApi } from "./api";
+import { api, testEngineApi } from "./api";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -124,6 +124,58 @@ describe("testEngineApi", () => {
       headers: { "Content-Type": "application/json" },
       method: "PATCH",
       body: JSON.stringify({ state: "muted" }),
+    });
+  });
+});
+
+describe("authentication API", () => {
+  it("loads the authoritative GitHub connection state", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            user: {
+              id: "user-1",
+              email: "user@example.com",
+              displayName: "User",
+            },
+            teams: [],
+            connections: {
+              github: {
+                login: "octocat",
+                email: "octocat@example.com",
+              },
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      ),
+    );
+
+    const me = await api.me();
+
+    expect(me.connections.github).toEqual({
+      login: "octocat",
+      email: "octocat@example.com",
+    });
+  });
+
+  it("surfaces the backend error field used by auth endpoints", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({ error: "not signed in" }), {
+          status: 401,
+          statusText: "Unauthorized",
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+
+    await expect(api.me()).rejects.toMatchObject({
+      message: "not signed in",
+      status: 401,
     });
   });
 });

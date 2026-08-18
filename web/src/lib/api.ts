@@ -15,13 +15,22 @@ export interface Team {
   slug: string
 }
 
+export interface GithubConnection {
+  login: string
+  email: string
+}
+
 export interface MeResponse {
   user: User
   teams: Team[]
+  connections: {
+    github: GithubConnection | null
+  }
 }
 
 interface ApiErrorBody {
   message?: string
+  error?: string
 }
 
 export class ApiError extends Error {
@@ -44,6 +53,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     try {
       const body = (await res.json()) as ApiErrorBody
       if (body?.message) message = body.message
+      else if (body?.error) message = body.error
     } catch {
       /* keep statusText */
     }

@@ -53,7 +53,7 @@ a bad migration never leaves the process half-started.
 | `SLASH_AUTH_SECRET_PATH` | yes | Path to a file containing the HMAC session-signing secret, read byte-for-byte. File-only, like the other secrets. |
 | `SLASH_GITHUB_CLIENT_ID` | no | GitHub OAuth App client ID. Enables "Sign in with GitHub" on the login page. |
 | `SLASH_GITHUB_CLIENT_SECRET_PATH` | no | Path to a file containing the GitHub OAuth App client secret (file-only, same convention as other secrets). Required when `SLASH_GITHUB_CLIENT_ID` is set. |
-| `SLASH_BASE_URL` | no | Public base URL of the server (e.g. `https://slash.example.com`). Used to construct the OAuth redirect URI. Falls back to the request's `Host` header when unset. |
+| `SLASH_BASE_URL` | with GitHub OAuth | Public base URL of the server (e.g. `https://slash.example.com`). Required with `SLASH_GITHUB_CLIENT_ID`; it constructs the exact OAuth callback URI. |
 | `SLASH_WEB_DIR` | no | Root directory of the built web console SPA. Defaults to `web/dist` (relative to the server's working directory). |
 | `RUST_LOG` | no | `tracing_subscriber` env-filter syntax, e.g. `info` or `slash_server=debug`. |
 
@@ -75,9 +75,12 @@ database URL (which may embed a password) can leak via a stray log line.
 
 ### GitHub OAuth login (optional)
 
-Slash supports "Sign in with GitHub" via the OAuth 2.0 Authorization Code
-flow. When configured, a GitHub button appears on the login page; existing
-email/password accounts can link their GitHub identity from **Settings**.
+Slash supports "Sign in with GitHub" via GitHub's
+[OAuth 2.0 web application flow](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps).
+This is OAuth, not OpenID Connect: Slash receives an access token and reads
+the authenticated user through GitHub's REST API; GitHub does not issue Slash
+an ID token. When configured, a GitHub button appears on the login page;
+existing email/password accounts can connect GitHub from **Settings**.
 
 **Setup steps:**
 
@@ -92,7 +95,7 @@ email/password accounts can link their GitHub identity from **Settings**.
    ```sh
    SLASH_GITHUB_CLIENT_ID=<client_id>
    SLASH_GITHUB_CLIENT_SECRET_PATH=/run/secrets/github-oauth-secret
-   SLASH_BASE_URL=https://slash.example.com   # recommended
+   SLASH_BASE_URL=https://slash.example.com   # required
    ```
 4. Store the client secret in the file (same byte-for-byte convention as
    other secrets):
@@ -104,13 +107,19 @@ email/password accounts can link their GitHub identity from **Settings**.
 The login flow:
 
 - **New users**: clicking "Sign in with GitHub" creates a Slash account
-  linked to their GitHub identity. If the GitHub email matches an existing
-  account, the accounts are merged.
+  linked to the stable numeric GitHub user id and a
+  [verified primary email](https://docs.github.com/en/rest/users/emails#list-email-addresses-for-the-authenticated-user).
+- **Email conflict**: Slash never merges accounts by email. If the verified
+  GitHub email already belongs to a Slash account, sign in with that
+  account's password and connect GitHub explicitly from Settings.
 - **Existing users**: sign in with email/password, then go to **Settings →
-  Connect GitHub** to bind their GitHub identity to their account.
+  Connect GitHub**. The callback succeeds only while the same Slash user is
+  still signed in, and neither side may already belong to a different
+  connection.
 
-Both flows use a short-lived, HMAC-signed CSRF state token (10-minute TTL)
-stored in an HttpOnly cookie.
+Both flows use a short-lived, HMAC-signed context cookie (10-minute TTL), an
+independent CSRF state nonce, and PKCE with `S256`. GitHub access tokens are
+used only during the callback and are not stored.
 
 ### Endpoints
 
@@ -120,10 +129,10 @@ stored in an HttpOnly cookie.
 | `POST /api/auth/register`      | Create a new email/password account. |
 | `POST /api/auth/login`         | Sign in with email/password. |
 | `POST /api/auth/logout`        | Clear the session cookie. |
-| `GET /api/auth/me`             | Return the authenticated user and teams. |
-| `GET /api/auth/github`         | Initiate GitHub OAuth login (unauthenticated). |
-| `POST /api/auth/github/link`   | Initiate GitHub OAuth for account linking (authenticated). |
-| `GET /api/auth/github/callback`| GitHub OAuth callback (handles both login and link). |
+| `GET /api/auth/me`             | Return the authenticated user, teams, and connections. |
+| `GET /api/auth/github/sign-in` | Initiate GitHub OAuth sign-in (unauthenticated). |
+| `POST /api/auth/github/connect`| Initiate explicit GitHub connection (authenticated). |
+| `GET /api/auth/github/callback`| GitHub OAuth callback for both intents. |
 | `GET /healthz`                 | Liveness check; always returns `200 ok` once the process is up. |
 | `GET /metrics`                 | Prometheus text-format metrics — see below. |
 

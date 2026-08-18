@@ -22,6 +22,9 @@ export function OnboardingPage() {
   useEffect(() => {
     api
       .me()
+      .then((me) => {
+        if (me.teams.length > 0) navigate('/', { replace: true })
+      })
       .catch(() => navigate('/login'))
       .finally(() => setChecking(false))
   }, [navigate])

@@ -78,6 +78,24 @@ Success: `200 OK`, a `Set-Cookie` header, and the same `{ "user": ... }`
 shape returned by registration. Invalid credentials return `401` with a
 generic error; the response does not reveal whether the email exists.
 
+## GitHub sign-in and connection
+
+`GET /api/auth/github/sign-in` starts GitHub sign-in. If the stable GitHub
+user id is already connected, Slash signs in its owner. Otherwise Slash
+creates a user from GitHub's verified primary email. An email collision never
+merges accounts: the callback returns to `/login` and the user must sign in
+with their existing password before connecting GitHub.
+
+`POST /api/auth/github/connect` starts connection for the current Slash user.
+The callback requires a valid session for that same user. A GitHub identity
+connected elsewhere, or a Slash user already connected to a different
+GitHub identity, produces a conflict notice without replacing either side.
+
+Both initiation routes redirect the browser to GitHub. GitHub returns to
+`GET /api/auth/github/callback`; the callback then redirects to `/`,
+`/onboarding`, `/settings`, or `/login`. These routes implement a browser
+flow and do not return GitHub access tokens to API clients.
+
 ## POST `/api/auth/logout`
 
 Clears the browser session cookie.
@@ -93,7 +111,8 @@ require a valid session.
 
 ## GET `/api/auth/me`
 
-Returns the current user and every team the user belongs to.
+Returns the current user, every team the user belongs to, and authoritative
+external-account connection state.
 
 ```sh
 curl -b cookies.txt https://slash.example.com/api/auth/me
@@ -116,9 +135,17 @@ Success: `200 OK`.
       "slug": "platform",
       "role": "maintainer"
     }
-  ]
+  ],
+  "connections": {
+    "github": {
+      "login": "octocat",
+      "email": "octocat@example.com"
+    }
+  }
 }
 ```
+
+`connections.github` is `null` when the user has not connected GitHub.
 
 Missing, invalid, expired, or unknown sessions return `401` with a JSON
 `error` message.
