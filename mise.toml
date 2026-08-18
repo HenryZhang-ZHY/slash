@@ -1,2 +1,40 @@
 [tools]
+prek = "0.4.14"
 rust = "1.94.1"
+node = "26.4.0"
+
+[tasks."hooks:install"]
+description = "Install the repository pre-commit and pre-push hooks"
+run = "prek install --overwrite"
+
+[tasks."check:rust-format"]
+description = "Check Rust formatting"
+run = "cargo fmt --all --check"
+
+[tasks."check:rust"]
+description = "Run the database-free Rust pre-push gate"
+depends = ["check:rust-format"]
+run = [
+  "cargo clippy --workspace --all-targets",
+  "unset SLASH_TEST_DATABASE_URL; cargo test --workspace",
+]
+
+[tasks."check:rust-db"]
+description = "Run the opt-in database-backed Rust tests"
+run = "SLASH_TEST_DATABASE_URL=postgres://slash:slash@127.0.0.1:5433/slash cargo test --workspace"
+
+[tasks."check:web"]
+description = "Run the Web UI pre-push gate"
+dir = "{{config_root}}/web"
+run = ["npm run build", "npm run lint", "npm test"]
+
+[tasks."check:site"]
+description = "Run the documentation site pre-push gate"
+dir = "{{config_root}}/site"
+run = [
+  "npm test",
+  "npm run build",
+  "npm run typecheck",
+  "npm run lint:docs",
+  "npm run test:output",
+]
