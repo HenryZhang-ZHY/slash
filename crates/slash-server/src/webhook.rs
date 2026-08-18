@@ -108,7 +108,7 @@ mod tests {
         let url = crate::test_support::test_database_url()?;
         let pool = db::connect(&url).await.unwrap();
         db::migrate(&pool).await.unwrap();
-        sqlx::query("TRUNCATE deliveries")
+        sqlx::query("TRUNCATE deliveries, invocations")
             .execute(&pool)
             .await
             .unwrap();
@@ -119,6 +119,7 @@ mod tests {
             webhook_secret: Arc::from(SECRET),
             auth_secret: crate::auth::AuthSecret(Arc::from(SECRET)),
             admin_secret: None,
+            github_app: None,
             web_dir: Arc::from("."),
             github_oauth: None,
         })

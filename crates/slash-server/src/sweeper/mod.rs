@@ -191,7 +191,7 @@ mod tests {
         let url = crate::test_support::test_database_url()?;
         let pool = db::connect(&url).await.unwrap();
         db::migrate(&pool).await.unwrap();
-        sqlx::query("TRUNCATE deliveries")
+        sqlx::query("TRUNCATE deliveries, invocations")
             .execute(&pool)
             .await
             .unwrap();
@@ -220,6 +220,7 @@ mod tests {
             raw_comment_line: "/echo hi",
             args: serde_json::json!({}),
             workflow_file: "echo.yml",
+            delivery_guid: None,
         }
     }
 

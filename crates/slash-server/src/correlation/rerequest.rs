@@ -255,6 +255,7 @@ pub async fn handle_check_run_rerequested(
         raw_comment_line: &original.raw_comment_line,
         args: serde_json::Value::Object(serde_json::Map::new()),
         workflow_file: &original.workflow_file,
+        delivery_guid: ctx.delivery_guid,
     };
 
     let claim_outcome = invocations::claim(ctx.pool, &new_invocation).await?;

@@ -100,7 +100,7 @@ pub async fn claim_pending(pool: &PgPool) -> Result<Option<ClaimedDelivery<'_>>,
 impl ClaimedDelivery<'_> {
     pub async fn complete(mut self) -> Result<(), sqlx::Error> {
         sqlx::query(
-            "UPDATE deliveries SET state = 'done', attempts = attempts + 1 WHERE delivery_guid = $1",
+            "UPDATE deliveries SET state = 'done', attempts = attempts + 1, processed_at = now() WHERE delivery_guid = $1",
         )
         .bind(&self.delivery.delivery_guid)
         .execute(&mut *self.tx)
@@ -110,7 +110,7 @@ impl ClaimedDelivery<'_> {
 
     pub async fn fail(mut self, error: &str) -> Result<(), sqlx::Error> {
         sqlx::query(
-            "UPDATE deliveries SET state = 'failed', attempts = attempts + 1, last_error = $2 \
+            "UPDATE deliveries SET state = 'failed', attempts = attempts + 1, last_error = $2, processed_at = now() \
              WHERE delivery_guid = $1",
         )
         .bind(&self.delivery.delivery_guid)
@@ -161,7 +161,7 @@ mod tests {
         let url = crate::test_support::test_database_url()?;
         let pool = db::connect(&url).await.unwrap();
         db::migrate(&pool).await.unwrap();
-        sqlx::query("TRUNCATE deliveries")
+        sqlx::query("TRUNCATE deliveries, invocations")
             .execute(&pool)
             .await
             .unwrap();

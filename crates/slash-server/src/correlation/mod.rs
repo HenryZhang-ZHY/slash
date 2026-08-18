@@ -140,6 +140,7 @@ mod tests {
             raw_comment_line: "/echo hi",
             args: serde_json::json!({}),
             workflow_file: "echo.yml",
+            delivery_guid: None,
         }
     }
 
@@ -157,6 +158,7 @@ mod tests {
             repository_is_private: false,
             owner: "acme".to_string(),
             repo: "widgets".to_string(),
+            delivery_guid: None,
             base_uri: Some(server.uri().leak()),
             metrics,
         }

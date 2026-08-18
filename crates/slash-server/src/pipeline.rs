@@ -54,6 +54,9 @@ pub struct PipelineContext<'a> {
     pub repository_is_private: bool,
     pub owner: String,
     pub repo: String,
+    /// GitHub delivery that caused this processing pass. Sweepers and tests
+    /// have no originating delivery and leave it unset.
+    pub delivery_guid: Option<&'a str>,
     /// Overrides `https://api.github.com` for every `RepoClient` this
     /// pipeline run constructs; used in tests to point at a mock server.
     pub base_uri: Option<&'a str>,
@@ -350,6 +353,7 @@ pub async fn handle_issue_comment(
         raw_comment_line: &parsed.raw_line,
         args: Json::Object(args_json),
         workflow_file: &validated.workflow,
+        delivery_guid: ctx.delivery_guid,
     };
 
     let claim_outcome = invocations::claim(ctx.pool, &new_invocation).await?;
@@ -882,6 +886,7 @@ mod tests {
             repository_is_private: false,
             owner: "acme".to_string(),
             repo: "widgets".to_string(),
+            delivery_guid: None,
             base_uri: Some(server.uri().leak()),
             metrics,
         }

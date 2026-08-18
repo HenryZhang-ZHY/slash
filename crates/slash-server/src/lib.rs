@@ -61,6 +61,9 @@ pub struct AppState {
     pub webhook_secret: Arc<str>,
     pub auth_secret: auth::AuthSecret,
     pub admin_secret: Option<admin::AdminSecret>,
+    /// App-JWT client used only by the explicit admin installation refresh.
+    /// Optional in test states that never exercise the upstream operation.
+    pub github_app: Option<Arc<slash_github::GithubApp>>,
     /// Root directory of the built SPA (`web/dist`).
     pub web_dir: Arc<str>,
     /// GitHub App user-auth config. `None` when it is not configured.
@@ -132,6 +135,7 @@ pub async fn run() {
             .admin_secret
             .as_deref()
             .map(|secret| admin::AdminSecret(Arc::from(secret))),
+        github_app: Some(github_app.clone()),
         web_dir: Arc::from(web_dir.as_str()),
         github_oauth,
     };
@@ -143,8 +147,8 @@ pub async fn run() {
         WORKER_POLL_INTERVAL,
     ));
     tokio::spawn(sweeper::run(
-        pool,
-        github_app,
+        pool.clone(),
+        github_app.clone(),
         sweeper::SweeperConfig::default(),
         metrics,
     ));
@@ -174,6 +178,15 @@ pub async fn run() {
         .route("/api/admin/auth/login", post(admin::login))
         .route("/api/admin/auth/logout", post(admin::logout))
         .route("/api/admin/auth/session", get(admin::session))
+        .route("/api/admin/overview", get(admin::overview))
+        .route("/api/admin/installations", get(admin::installations))
+        .route(
+            "/api/admin/installations/refresh",
+            post(admin::refresh_installations),
+        )
+        .route("/api/admin/deliveries", get(admin::deliveries))
+        .route("/api/admin/deliveries/{guid}", get(admin::delivery_detail))
+        .route("/api/admin/invocations", get(admin::invocations))
         .route(
             "/api/auth/github/sign-in",
             get(github_oauth::start_github_sign_in),

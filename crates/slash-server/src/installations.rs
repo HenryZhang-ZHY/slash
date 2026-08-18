@@ -9,7 +9,7 @@
 
 use octocrab::models::webhook_events::WebhookEventPayload;
 use octocrab::models::webhook_events::payload::InstallationWebhookEventAction;
-use slash_github::{AppAuthError, GithubApp, WebhookEvent};
+use slash_github::{AppAuthError, AppInstallation, GithubApp, WebhookEvent};
 use sqlx::PgPool;
 
 /// Upserts the installation's lifecycle state from an `installation` webhook.
@@ -26,11 +26,20 @@ pub async fn handle_installation_event(
     let Some(state) = installation_state(&payload.action) else {
         return Ok(false);
     };
-    let Some((installation_id, account)) = installation_identity(event) else {
+    let Some((installation_id, account, target_type, installed_at)) = installation_identity(event)
+    else {
         return Ok(false);
     };
 
-    upsert(pool, installation_id, &account, state).await?;
+    upsert(
+        pool,
+        installation_id,
+        &account,
+        &target_type,
+        installed_at,
+        state,
+    )
+    .await?;
     Ok(true)
 }
 
@@ -50,31 +59,118 @@ fn installation_state(action: &InstallationWebhookEventAction) -> Option<&'stati
 /// Extracts `(installation_id, account_login)` from the event's `installation`
 /// object. `installation` webhooks carry the full installation (with the
 /// account); other events only a minimal id — so `Full` is expected here.
-fn installation_identity(event: &WebhookEvent) -> Option<(i64, String)> {
+fn installation_identity(
+    event: &WebhookEvent,
+) -> Option<(i64, String, String, Option<chrono::DateTime<chrono::Utc>>)> {
     let installation = event.installation.as_ref()?;
     let octocrab::models::webhook_events::EventInstallation::Full(installation) = installation
     else {
         return None;
     };
-    Some((installation.id.0 as i64, installation.account.login.clone()))
+    Some((
+        installation.id.0 as i64,
+        installation.account.login.clone(),
+        installation
+            .target_type
+            .clone()
+            .unwrap_or_else(|| installation.account.r#type.clone()),
+        installation.created_at,
+    ))
 }
 
 async fn upsert(
     pool: &PgPool,
     installation_id: i64,
     account: &str,
+    target_type: &str,
+    installed_at: Option<chrono::DateTime<chrono::Utc>>,
     state: &str,
 ) -> Result<(), sqlx::Error> {
     sqlx::query(
-        "INSERT INTO installations (installation_id, account, state)
-         VALUES ($1, $2, $3)
+        "INSERT INTO installations (installation_id, account, target_type, installed_at, state)
+         VALUES ($1, $2, $3, $4, $5)
          ON CONFLICT (installation_id) DO UPDATE
-         SET account = EXCLUDED.account, state = EXCLUDED.state, updated_at = now()",
+         SET account = EXCLUDED.account,
+             target_type = EXCLUDED.target_type,
+             installed_at = COALESCE(installations.installed_at, EXCLUDED.installed_at),
+             state = EXCLUDED.state,
+             updated_at = now()",
     )
     .bind(installation_id)
     .bind(account)
+    .bind(target_type)
+    .bind(installed_at)
     .bind(state)
     .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Applies one complete GitHub App installation snapshot atomically. Callers
+/// must fetch every page before invoking this function; a partial upstream
+/// result is never allowed to mark unseen installations deleted.
+pub async fn reconcile_snapshot(
+    pool: &PgPool,
+    snapshot: &[AppInstallation],
+) -> Result<(), sqlx::Error> {
+    let mut tx = pool.begin().await?;
+    apply_snapshot(&mut tx, snapshot).await?;
+    tx.commit().await
+}
+
+/// Applies a fetched snapshot inside a caller-owned transaction. The admin
+/// refresh endpoint uses this form while holding a cross-replica advisory
+/// lock, preventing simultaneous button clicks from multiplying API calls.
+pub async fn apply_snapshot(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    snapshot: &[AppInstallation],
+) -> Result<(), sqlx::Error> {
+    let mut seen = Vec::with_capacity(snapshot.len());
+    for installation in snapshot {
+        let installation_id = installation.id as i64;
+        seen.push(installation_id);
+        sqlx::query(
+            "INSERT INTO installations (
+                installation_id, account, target_type, state, installed_at,
+                updated_at, last_synced_at
+             ) VALUES ($1, $2, $3, 'active', $4, COALESCE($5, now()), now())
+             ON CONFLICT (installation_id) DO UPDATE SET
+                account = EXCLUDED.account,
+                target_type = EXCLUDED.target_type,
+                installed_at = COALESCE(installations.installed_at, EXCLUDED.installed_at),
+                state = CASE
+                    WHEN installations.state = 'suspended' THEN 'suspended'
+                    ELSE 'active'
+                END,
+                updated_at = COALESCE($5, installations.updated_at),
+                last_synced_at = now()",
+        )
+        .bind(installation_id)
+        .bind(&installation.account)
+        .bind(&installation.target_type)
+        .bind(installation.created_at)
+        .bind(installation.updated_at)
+        .execute(&mut **tx)
+        .await?;
+    }
+
+    sqlx::query(
+        "UPDATE installations
+         SET state = 'deleted', updated_at = now(), last_synced_at = now()
+         WHERE state <> 'deleted' AND NOT (installation_id = ANY($1))",
+    )
+    .bind(&seen)
+    .execute(&mut **tx)
+    .await?;
+    sqlx::query(
+        "INSERT INTO installation_sync_state (singleton, last_success_at, installation_count)
+         VALUES (true, now(), $1)
+         ON CONFLICT (singleton) DO UPDATE SET
+            last_success_at = EXCLUDED.last_success_at,
+            installation_count = EXCLUDED.installation_count",
+    )
+    .bind(snapshot.len() as i64)
+    .execute(&mut **tx)
     .await?;
     Ok(())
 }
@@ -203,6 +299,72 @@ mod tests {
             .fetch_one(pool)
             .await
             .unwrap()
+    }
+
+    fn snapshot_installation(id: u64, account: &str, target_type: &str) -> AppInstallation {
+        AppInstallation {
+            id,
+            account: account.to_string(),
+            target_type: target_type.to_string(),
+            created_at: Some(chrono::Utc::now() - chrono::Duration::days(10)),
+            updated_at: Some(chrono::Utc::now()),
+        }
+    }
+
+    #[serial_test::serial(db)]
+    #[tokio::test]
+    async fn reconciliation_upserts_current_and_deletes_missing_installations() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        reconcile_snapshot(
+            &pool,
+            &[
+                snapshot_installation(1, "alice", "User"),
+                snapshot_installation(2, "acme", "Organization"),
+            ],
+        )
+        .await
+        .unwrap();
+        reconcile_snapshot(
+            &pool,
+            &[snapshot_installation(2, "acme-inc", "Organization")],
+        )
+        .await
+        .unwrap();
+
+        let rows: Vec<(i64, String, String, String)> = sqlx::query_as(
+            "SELECT installation_id, account, target_type, state
+             FROM installations ORDER BY installation_id",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                (1, "alice".into(), "User".into(), "deleted".into()),
+                (2, "acme-inc".into(), "Organization".into(), "active".into())
+            ]
+        );
+    }
+
+    #[serial_test::serial(db)]
+    #[tokio::test]
+    async fn reconciliation_preserves_a_webhook_suspended_installation() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        handle_installation_event(&pool, &installation_event("created"))
+            .await
+            .unwrap();
+        handle_installation_event(&pool, &installation_event("suspend"))
+            .await
+            .unwrap();
+        reconcile_snapshot(&pool, &[snapshot_installation(39593433, "gagbo", "User")])
+            .await
+            .unwrap();
+        assert_eq!(state_of(&pool, 39593433).await, "suspended");
     }
 
     #[serial_test::serial(db)]
