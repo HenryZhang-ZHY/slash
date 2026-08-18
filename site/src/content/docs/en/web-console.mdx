@@ -19,14 +19,19 @@ unauthenticated visit redirects to `/login`. The login page toggles between
 - **Create your account** — register with an email and a password of at least
   8 bytes (`POST /api/auth/register`). Registration immediately signs you in.
 - **Sign in** — log in with an existing account (`POST /api/auth/login`).
+- **Sign in with GitHub** — sign in by stable GitHub identity or create a new
+  Slash account from a verified primary GitHub email. Slash never merges an
+  existing account by matching email; sign in with its password and connect
+  GitHub explicitly from Settings instead.
 
 Both set an `HttpOnly` session cookie; the console never sees the password.
 
 ## Onboarding: create your first team
 
-After signing in, the console redirects to `/onboarding`, which asks for a
+After signing in, users without a team go to `/onboarding`, which asks for a
 **team name** and a **team slug** (lowercase letters, numbers and hyphens, up
-to 63 characters). Creating the team calls `POST /api/teams` and, in one
+to 63 characters). Existing users with a team go directly to `/`. Creating
+the first team calls `POST /api/teams` and, in one
 transaction, creates a home organization for you (if you do not have one) and
 makes you the team's maintainer. The team is the access-control boundary for
 repositories and automation — see [Grants](/en/grants/) for how teams receive
@@ -52,6 +57,13 @@ the create button is disabled. It lets you:
 - **Delete a grant** — with a confirmation prompt.
 
 Every action maps 1:1 to the [grants management API](/en/api/grants/).
+
+## Settings and GitHub connection
+
+The `/settings` page reads connection state from `GET /api/auth/me`. An
+unconnected user can start `POST /api/auth/github/connect`; an already
+connected user sees the GitHub login and verified email recorded by Slash.
+The page never infers connection state from the callback URL.
 
 ## Test Engine console
 

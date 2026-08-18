@@ -34,7 +34,10 @@ The tables below list every route registered by `slash-server`.
 | `POST` | `/api/auth/register` | Create an account and session |
 | `POST` | `/api/auth/login` | Create a session |
 | `POST` | `/api/auth/logout` | Clear the current session |
-| `GET` | `/api/auth/me` | Read the current user and teams |
+| `GET` | `/api/auth/me` | Read the current user, teams, and connections |
+| `GET` | `/api/auth/github/sign-in` | Start GitHub sign-in |
+| `POST` | `/api/auth/github/connect` | Connect GitHub to the current user |
+| `GET` | `/api/auth/github/callback` | Complete GitHub authentication |
 | `POST` | `/api/teams` | Create a team |
 
 ### [Grants management](/en/api/grants/)
