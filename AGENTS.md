@@ -8,8 +8,10 @@ runtime, not here.
 
 ## Working language
 
-English for all code, comments, commits, and docs. The team's chat happens in
-Chinese, but nothing that lands in the repository is Chinese.
+English for all code, comments, commits, and canonical documentation. The
+team's chat happens in Chinese. Reviewed public translations under
+`site/src/content/docs/zh-hans/` are the only repository prose authored in
+Chinese.
 
 ## Small, independently-verifiable PRs
 
@@ -34,7 +36,10 @@ Keep stable system invariants in `docs/architecture.md`, implemented
 topic-specific decisions in `docs/design/`, and operator or user procedures in
 their audience-specific directories. Do not commit review transcripts,
 temporary implementation plans, or milestone checklists as durable product
-documentation. Link code comments to a stable document by name instead of to
+documentation. Use
+[`slash-maintain-docs`](.agents/skills/slash-maintain-docs/SKILL.md) to route
+facts, synchronize existing English and Simplified Chinese pages, and validate
+the result. Link code comments to a stable document by name instead of to
 section numbers that will drift.
 
 ## Secrets are file-only
