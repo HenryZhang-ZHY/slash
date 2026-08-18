@@ -27,15 +27,24 @@ npm run lint     # oxlint (one pre-existing button.tsx fast-refresh warning is k
 npm test         # vitest run
 ```
 
-Node via `mise use node@26.4.0`.
+Node is pinned in `mise.toml` and installed with `mise install`.
 
 ## Docs site (`site/`)
 
 ```sh
+npm test            # source-level Node tests
 npm run build       # astro build
 npm run typecheck   # astro check
 npm run lint:docs   # nimbus-docs lint
+npm run test:output # generated-site regression tests
 ```
+
+## Automation
+
+These gates are defined as mise tasks and selected automatically by the
+repository's prek pre-push hook. After cloning, run `mise install` followed by
+`mise run hooks:install`. The explicit task equivalents are
+`mise run check:rust`, `mise run check:web`, and `mise run check:site`.
 
 ## Note
 

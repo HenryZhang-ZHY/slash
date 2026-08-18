@@ -39,6 +39,22 @@ criteria end-to-end against a live GitHub App on a real repository (see
 - [Design decisions](docs/design/)
 - [User documentation](site/src/content/docs/)
 
+## Development setup
+
+The repository uses [mise](https://mise.jdx.dev/) for its Rust, Node.js, and
+[`prek`](https://prek.j178.dev/) toolchain. Install the pinned tools and Git
+hooks after cloning:
+
+```sh
+mise install
+mise run hooks:install
+```
+
+The pre-commit hook runs fast file hygiene and Rust formatting checks. The
+pre-push hook selects the complete Rust, Web UI, or documentation gate based
+on the files in the pushed commits. The same gates can be run explicitly with
+`mise run check:rust`, `mise run check:web`, and `mise run check:site`.
+
 ## License
 
 See [LICENSE](LICENSE).
