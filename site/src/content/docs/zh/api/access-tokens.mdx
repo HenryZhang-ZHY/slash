@@ -1,0 +1,71 @@
+---
+title: 个人 Access Token
+description: "为 Agent 和 REST API 客户端创建、撤销凭据。"
+sidebar:
+  order: 2
+---
+
+个人 Access Token 让 Agent 和其他程序以创建者的 Slash 用户身份调用已认证 REST API。
+它不会增加权限；每个请求仍使用用户当前的团队和仓库授权。
+
+通过 Authorization header 发送 token：
+
+```sh
+curl -H "Authorization: Bearer $SLASH_ACCESS_TOKEN" \
+  https://slash.example.com/api/auth/me
+```
+
+Token 管理端点只接受 `slash_session` 浏览器 cookie。个人 Access Token 不能创建或撤销
+其他凭据。
+
+## POST `/api/access-tokens`
+
+创建 token。明文 `token` 只在这一次响应中返回。
+
+```sh
+curl -b cookies.txt \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Claude agent","expiresInDays":90}' \
+  https://slash.example.com/api/access-tokens
+```
+
+`name` trim 后必须为 1-100 个字符。`expiresInDays` 可省略；填写时必须为 1-365，省略
+表示永不过期。
+
+成功返回 `201 Created`：
+
+```json
+{
+  "accessToken": {
+    "id": "1165fc2c-64f4-49f6-b77c-15317cf59fb8",
+    "name": "Claude agent",
+    "createdAt": "2026-08-18T13:00:00Z",
+    "lastUsedAt": null,
+    "expiresAt": "2026-11-16T13:00:00Z"
+  },
+  "token": "slash_pat_..."
+}
+```
+
+## GET `/api/access-tokens`
+
+按新到旧列出当前用户未撤销的 token，不会返回明文。过期 token 仍会显示；可比较
+`expiresAt` 与当前时间。`lastUsedAt` 最多每五分钟更新一次。
+
+```sh
+curl -b cookies.txt https://slash.example.com/api/access-tokens
+```
+
+成功返回 `200 OK` 和上述 `accessToken` 对象组成的数组。
+
+## DELETE `/api/access-tokens/{id}`
+
+立即撤销一个属于当前用户的 token。
+
+```sh
+curl -b cookies.txt -X DELETE \
+  https://slash.example.com/api/access-tokens/1165fc2c-64f4-49f6-b77c-15317cf59fb8
+```
+
+成功返回 `204 No Content`。未知 token 或属于其他用户的 token 都返回 `404`，不会泄露
+所有权。

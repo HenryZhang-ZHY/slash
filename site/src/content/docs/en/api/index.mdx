@@ -18,7 +18,8 @@ RFC 3339 strings.
 
 | Surface | Authentication |
 | --- | --- |
-| Account, team, and Test Engine management | `slash_session` cookie issued by register or login |
+| Account, team, and Test Engine management | `slash_session` cookie or personal Bearer token |
+| Personal access token management | `slash_session` cookie only |
 | Test result ingestion and quarantine lookup | `Authorization: Bearer <collection-token>` |
 | GitHub webhook | `X-Hub-Signature-256` HMAC signature |
 | Health and metrics | None |
@@ -39,6 +40,14 @@ The tables below list every route registered by `slash-server`.
 | `POST` | `/api/auth/github/connect` | Connect GitHub to the current user |
 | `GET` | `/api/auth/github/callback` | Complete GitHub authentication |
 | `POST` | `/api/teams` | Create a team |
+
+### [Personal access tokens](/en/api/access-tokens/)
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/access-tokens` | List the current user's tokens |
+| `POST` | `/api/access-tokens` | Create a token and reveal it once |
+| `DELETE` | `/api/access-tokens/{id}` | Revoke a token |
 
 ### [Test Engine management](/en/api/test-engine/)
 

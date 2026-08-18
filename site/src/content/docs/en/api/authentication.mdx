@@ -5,9 +5,9 @@ sidebar:
   order: 1
 ---
 
-These endpoints use the `slash_session` cookie. Register and login return the
-cookie with `HttpOnly`, `SameSite=Lax`, `Path=/`, and a seven-day `Max-Age`.
-Clients must send it on authenticated requests.
+These endpoints accept the `slash_session` cookie or a [personal access
+token](/en/api/access-tokens/). Register and login return the cookie with
+`HttpOnly`, `SameSite=Lax`, `Path=/`, and a seven-day `Max-Age`.
 
 The examples use a cookie jar so the session returned by one request can be
 used by the next:

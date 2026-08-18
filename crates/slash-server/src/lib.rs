@@ -5,6 +5,7 @@
 //! `pub mod` and the entrypoint (`run`) drives the router. The binary target
 //! is a thin wrapper around `slash_server::run`.
 
+pub mod access_tokens;
 pub mod admin;
 pub mod auth;
 pub mod catalog;
@@ -36,7 +37,7 @@ use std::time::Duration;
 use axum::Router;
 use axum::extract::State;
 use axum::response::IntoResponse;
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use sqlx::PgPool;
 use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::limit::RequestBodyLimitLayer;
@@ -175,6 +176,14 @@ pub async fn run() {
         .route("/api/auth/login", post(userapi::login))
         .route("/api/auth/logout", post(userapi::logout))
         .route("/api/auth/me", get(userapi::me))
+        .route(
+            "/api/access-tokens",
+            get(access_tokens::list_tokens).post(access_tokens::issue_token),
+        )
+        .route(
+            "/api/access-tokens/{id}",
+            delete(access_tokens::revoke_token),
+        )
         .route("/api/admin/auth/login", post(admin::login))
         .route("/api/admin/auth/logout", post(admin::logout))
         .route("/api/admin/auth/session", get(admin::session))
