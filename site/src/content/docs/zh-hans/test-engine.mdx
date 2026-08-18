@@ -89,14 +89,14 @@ slash 仓库里的
 Authorization: Bearer collection-token-value
 ```
 
-token 通过 [Test Engine 管理 API](/zh/api/test-engine/) 签发。token 决定目标套件；
+token 通过 [Test Engine 管理 API](/zh-hans/api/test-engine/) 签发。token 决定目标套件；
 上传体里从不携带套件 ID。token 可以随时吊销，吊销后立刻停止对 ingestion 请求的
 认证。
 
 ## 支持的格式
 
 ingestion 端点接受三种形状（完整 schema 见
-[ingestion API](/zh/api/ingestion/)）：
+[ingestion API](/zh-hans/api/ingestion/)）：
 
 | 端点 | 格式 |
 | --- | --- |
@@ -108,8 +108,8 @@ CI provider 会被记录，但与下游逻辑无关 —— slash 同样轻松地
 
 ## 下一步
 
-- [Test Engine 管理 API](/zh/api/test-engine/) —— suites、tests、executions、状态
+- [Test Engine 管理 API](/zh-hans/api/test-engine/) —— suites、tests、executions、状态
   变更和 tokens
-- [Ingestion API](/zh/api/ingestion/) —— 上传 schema 和隔离查询
+- [Ingestion API](/zh-hans/api/ingestion/) —— 上传 schema 和隔离查询
 - [Test Engine 架构](https://github.com/HenryZhang-ZHY/slash/tree/main/docs/test-engine.md)
   —— 当前边界、持久模型与 flaky 调和规则

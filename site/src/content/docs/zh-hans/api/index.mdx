@@ -6,7 +6,7 @@ sidebar:
 ---
 
 Slash 从同一来源提供 HTTP API 和 Web 控制台。把示例里的 `https://slash.example.com`
-替换为你 Slash 部署的 origin。控制台（见 [Web 控制台指南](/zh/web-console/)）是这些
+替换为你 Slash 部署的 origin。控制台（见 [Web 控制台指南](/zh-hans/web-console/)）是这些
 端点的薄客户端。
 
 所有请求体共享一个 **5 MiB 限制**。UUID 路径参数使用标准连字符 UUID 表示。
@@ -26,7 +26,7 @@ JSON 响应里的时间戳是 RFC 3339 字符串。
 
 下面这些表列出 `slash-server` 注册的每条路由。
 
-### [认证与团队](/zh/api/authentication/)
+### [认证与团队](/zh-hans/api/authentication/)
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
@@ -36,7 +36,7 @@ JSON 响应里的时间戳是 RFC 3339 字符串。
 | `GET` | `/api/auth/me` | 读取当前用户和团队 |
 | `POST` | `/api/teams` | 创建团队 |
 
-### [个人 Access Token](/zh/api/access-tokens/)
+### [个人 Access Token](/zh-hans/api/access-tokens/)
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
@@ -44,7 +44,7 @@ JSON 响应里的时间戳是 RFC 3339 字符串。
 | `POST` | `/api/access-tokens` | 创建并一次性显示 token |
 | `DELETE` | `/api/access-tokens/{id}` | 撤销 token |
 
-### [Test Engine 管理](/zh/api/test-engine/)
+### [Test Engine 管理](/zh-hans/api/test-engine/)
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
@@ -57,7 +57,7 @@ JSON 响应里的时间戳是 RFC 3339 字符串。
 | `POST` | `/api/test-engine/suites/{id}/tokens` | 签发 collection token |
 | `POST` | `/api/test-engine/suites/{id}/tokens/revoke` | 吊销 collection token |
 
-### [测试结果 ingestion](/zh/api/ingestion/)
+### [测试结果 ingestion](/zh-hans/api/ingestion/)
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |
@@ -66,7 +66,7 @@ JSON 响应里的时间戳是 RFC 3339 字符串。
 | `POST` | `/v1/test-engine/upload/vitest` | 上传 Vitest 结果 |
 | `GET` | `/v1/test-engine/quarantined` | 列出 muted 或 skipped 的测试名 |
 
-### [Webhook 与运维](/zh/api/platform/)
+### [Webhook 与运维](/zh-hans/api/platform/)
 
 | 方法 | 路径 | 用途 |
 | --- | --- | --- |

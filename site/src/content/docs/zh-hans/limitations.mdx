@@ -16,7 +16,7 @@ sidebar:
   执行面携带仓库 secrets。
 - **push 后不自动重新触发。** push 之后，必需的 `slash/<command>` check 会回到
   `Expected`，必须重新发布 —— check run 的 **Re-run** 按钮是目前替代方案。参见
-  [workflow 要求](/zh/workflow-requirements/#required-status-checks-capability-and-footgun)。
+  [workflow 要求](/zh-hans/workflow-requirements/#required-status-checks-capability-and-footgun)。
 - **同命令的并发调用在 PR UI 里互相遮蔽。** 同一个 PR 上并行的 `/deploy staging`
   和 `/deploy production` 共享一个 check-run 名；较新的胜出，较旧的被标记为
   `superseded` 并做一次指向较新 run 的最终更新，但 GitHub 的 PR checks 列表在任意
@@ -37,14 +37,14 @@ sidebar:
 - **没有 kill switch。** 设计要求在每个会修改数据的 GitHub API 调用之前检查一个
    按安装和全局的 kill switch，这样行为异常的安装可以在不影响其他安装的情况下被
    暂停。这一点没有实现 —— 目前唯一的杠杆是整体停止服务器进程，会同时暂停所有
-   安装。参见 [部署指南](/zh/self-host/deployment/#incident-procedure)。
+   安装。参见 [部署指南](/zh-hans/self-host/deployment/#incident-procedure)。
  - **§6.4 反垃圾规则只部分接线。** 编辑距离回复门禁（`should_suggest_commands`）
   已生效：与已配置命令编辑距离在 2 以内的未知命令会得到一个建议回复。但 token
   bucket、每 PR 评论去重和 §3.2 misplaced-command 扫描还没有进入 dispatch pipeline。
   目前，Slash 实际的评论量由它的守卫结构限制（大多数拒绝每事件最多发一条评论），
   而不是由显式的速率限制器。
 - **没有 `slash_github_api_calls_total`/rate-limit-remaining 指标。** 设计要求的
-  其他指标都已实现（见 [部署指南](/zh/self-host/deployment/#observability)），但按端点的
+  其他指标都已实现（见 [部署指南](/zh-hans/self-host/deployment/#observability)），但按端点的
   GitHub API 调用计数和剩余 rate-limit 预算还没有通过 `/metrics` 暴露 —— 底层
   GitHub 客户端今天会丢弃响应头，而干净地接通它需要的不止增量改动。
 
