@@ -18,7 +18,7 @@ export function AuthShell({
       <aside className="hidden flex-col justify-between border-r bg-[#f3f3f3] p-10 lg:flex">
         <div className="flex items-center gap-3">
           <svg className="size-9" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <polygon fill="white" points="148,20 198,20 108,236 58,236" />
+            <polygon fill="#000000" points="148,20 198,20 108,236 58,236" />
           </svg>
           <div>
             <div className="text-sm font-semibold">{t('app.slash')}</div>
@@ -45,7 +45,7 @@ export function AuthShell({
           <div className="mb-10 flex items-center justify-between lg:flex-col lg:items-start lg:gap-3">
             <div className="flex items-center gap-2">
             <svg className="size-8 lg:hidden" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <polygon fill="white" points="148,20 198,20 108,236 58,236" />
+              <polygon fill="#000000" points="148,20 198,20 108,236 58,236" />
             </svg>
               <span className="text-sm font-semibold">{t('app.slash')}</span>
             </div>
