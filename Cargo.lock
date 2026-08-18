@@ -2906,7 +2906,7 @@ checksum = "0c790de23124f9ab44544d7ac05d60440adc586479ce501c1d6d7da3cd8c9cf5"
 
 [[package]]
 name = "slash-cli"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "clap",
  "slash-config",
@@ -2914,7 +2914,7 @@ dependencies = [
 
 [[package]]
 name = "slash-command"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "proptest",
  "thiserror 2.0.18",
@@ -2922,7 +2922,7 @@ dependencies = [
 
 [[package]]
 name = "slash-config"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "proptest",
  "serde",
@@ -2933,7 +2933,7 @@ dependencies = [
 
 [[package]]
 name = "slash-core"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "aes-gcm",
  "serde",
@@ -2947,7 +2947,7 @@ dependencies = [
 
 [[package]]
 name = "slash-github"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "chrono",
  "hmac 0.13.0",
@@ -2963,7 +2963,7 @@ dependencies = [
 
 [[package]]
 name = "slash-server"
-version = "0.5.2"
+version = "0.5.3"
 dependencies = [
  "argon2",
  "axum",
