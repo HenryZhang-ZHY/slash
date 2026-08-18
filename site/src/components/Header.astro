@@ -7,7 +7,8 @@ import { SearchTrigger } from "./ui/search";
 import LanguageSwitcher from "./LanguageSwitcher.astro";
 import { config } from "virtual:nimbus/config";
 import { getSidebarSections } from "@cloudflare/nimbus-docs";
-import { withBasePath, withoutBasePath } from "@/lib/urls";
+import { basePath, withBasePath, withoutBasePath } from "@/lib/urls";
+import { getLocaleByPath, getLocalePath, getTranslations } from "@/lib/i18n";
 
 interface Props {
   /** Astro collection id for the current page, forwarded from DocsLayout. */
@@ -31,8 +32,9 @@ const { collection, showSidebar = true } = Astro.props;
 const currentSlug = withoutBasePath(Astro.url.pathname).replace(/\/$/, "") || "/";
 const sections = await getSidebarSections(currentSlug, { collection });
 const showSections = sections.length >= 2;
-const homeHref = withBasePath("/");
-const headerPath = Astro.url.pathname;
+const locale = getLocaleByPath(Astro.url.pathname, basePath);
+const t = getTranslations(locale.languageTag);
+const homeHref = getLocalePath("/", locale.languageTag, basePath);
 ---
 
 <header class="sticky top-0 z-30 border-b border-border bg-card/80 backdrop-blur-lg">
@@ -48,7 +50,7 @@ const headerPath = Astro.url.pathname;
       </a>
 
       {showSections && (
-        <nav aria-label="Sections" class="hidden md:flex items-center gap-1 ml-4 pl-4 border-l border-border h-6">
+        <nav aria-label={t.navigation.sections} class="hidden md:flex items-center gap-1 ml-4 pl-4 border-l border-border h-6">
           {sections.map((section) => (
             <a
               href={withBasePath(section.href)}
@@ -68,7 +70,7 @@ const headerPath = Astro.url.pathname;
     </div>
 
     <div class="flex items-center gap-2">
-      <LanguageSwitcher currentPath={headerPath} />
+      <LanguageSwitcher />
       {config.search !== false && <SearchTrigger />}
       {config.github && (
         <LinkButton
@@ -91,7 +93,7 @@ const headerPath = Astro.url.pathname;
           shape="square"
           size="sm"
           icon="ph:list"
-          aria-label="Open navigation"
+          aria-label={t.navigation.open}
           data-menu-btn
           class="lg:hidden text-muted-foreground"
         />

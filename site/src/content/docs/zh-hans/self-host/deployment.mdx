@@ -112,7 +112,7 @@ GitHub 首次登录按稳定 numeric user ID 创建一个不带密码凭据的 S
 - `slash_dispatch_failures_total{class}` —— 以 `dispatch_failed` 结束的 dispatch，
   按失败类别。
 
-**已知缺口**（参见 [已知限制](/zh/limitations/)）：还没有
+**已知缺口**（参见 [已知限制](/zh-hans/limitations/)）：还没有
 `slash_github_api_calls_total`/rate-limit-remaining 指标 —— GitHub API 调用量和
 剩余 rate-limit 预算目前无法通过 `/metrics` 观测。用应用日志里的 `sweeper: failed
 to mint token` / API 错误告警作为临时信号。
@@ -137,7 +137,7 @@ to mint token` / API 错误告警作为临时信号。
 滥用）：
 
 1. **停止服务器进程。** 目前没有按安装或全局的 kill switch（记录在案，参见
-   [已知限制](/zh/limitations/)）；停止进程是立即暂停*所有*跨安装 dispatch 活动的
+   [已知限制](/zh-hans/limitations/)）；停止进程是立即暂停*所有*跨安装 dispatch 活动的
    唯一办法。进行中的 `claimed`/`dispatched` invocation 会持久留在 Postgres 里，
    服务器重启后通过 sweeper 的正常超时路径自行解决 —— 停止它不会丢任何东西。
 2. **如果凭据疑似泄露**：立即轮换私钥和 webhook secret（见上），并考虑从 GitHub

@@ -1,16 +1,20 @@
 ---
-import BaseLayout from "../layouts/BaseLayout.astro";
-import Header from "../components/Header.astro";
-import { withBasePath } from "@/lib/urls";
+import BaseLayout from "@/layouts/BaseLayout.astro";
+import { getLocalePath } from "@/lib/i18n";
+import { basePath } from "@/lib/urls";
 
-const homeHref = withBasePath("/");
-import { config } from "virtual:nimbus/config";
+const englishHome = getLocalePath("/", "en", basePath);
+const simplifiedChineseHome = getLocalePath("/", "zh-Hans", basePath);
 ---
 
-<BaseLayout title={`Page not found · ${config.title}`} description="The page you're looking for doesn't exist.">
-  <div class="flex flex-col min-h-screen">
-    <Header />
-    <main class="flex-1 mx-auto max-w-2xl w-full px-6 py-24 text-center">
+<BaseLayout
+  title="Page not found"
+  description="The requested page does not exist. 页面不存在。"
+  noindex
+  lang="en"
+>
+  <main id="main-content" class="grid min-h-screen place-items-center px-6 py-16">
+    <div class="w-full max-w-lg text-center">
       <p class="text-sm font-medium text-muted-foreground">404</p>
       <h1
         class="mt-2 text-foreground leading-tight"
@@ -18,15 +22,23 @@ import { config } from "virtual:nimbus/config";
       >
         Page not found
       </h1>
-      <p class="mt-2 text-[1.0625rem] text-muted-foreground leading-relaxed">
-        The page you're looking for doesn't exist or has moved.
+      <p lang="zh-Hans" class="mt-2 text-lg font-medium text-foreground">页面不存在</p>
+      <p class="mt-4 text-[1.0625rem] text-muted-foreground leading-relaxed">
+        The requested page does not exist or has moved.<br />
+        <span lang="zh-Hans">请求的页面不存在或已移动。</span>
       </p>
-      <a
-        href={homeHref}
-        class="mt-8 inline-block rounded-lg border border-border px-4 py-2 font-medium text-foreground no-underline transition-colors hover:border-border-strong"
-      >
-        Back home
-      </a>
-    </main>
-  </div>
+      <div class="mt-8 flex flex-col justify-center gap-3 sm:flex-row">
+        <a
+          href={englishHome}
+          lang="en"
+          class="rounded-lg border border-border px-4 py-2 font-medium text-foreground no-underline transition-colors hover:border-border-strong hover:bg-accent"
+        >English docs</a>
+        <a
+          href={simplifiedChineseHome}
+          lang="zh-Hans"
+          class="rounded-lg border border-border px-4 py-2 font-medium text-foreground no-underline transition-colors hover:border-border-strong hover:bg-accent"
+        >返回中文文档</a>
+      </div>
+    </div>
+  </main>
 </BaseLayout>

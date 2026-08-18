@@ -23,7 +23,7 @@ export default defineConfig({
   base: basePath,
   output: "static",
   i18n: {
-    locales: ["en", "zh"],
+    locales: ["en", { path: "zh-hans", codes: ["zh-Hans"] }],
     defaultLocale: "en",
     routing: {
       prefixDefaultLocale: true,

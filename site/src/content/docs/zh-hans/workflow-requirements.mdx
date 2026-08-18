@@ -82,7 +82,7 @@ jobs:
 ```
 
 参数值被限制在安全字符集内，正是为了让 `env:` 传入的值永远无法逃出 shell 命令
-（见 [`.slash/` 参考](/zh/slash-config-reference/#value-charset)）。在 `run:`
+（见 [`.slash/` 参考](/zh-hans/slash-config-reference/#value-charset)）。在 `run:`
 内联 `${{ }}` 插值会完全绕过这层保护 —— GitHub 会在 shell 脚本运行前把原始字符串
 替换进去，所以任何通过你的命令权限门的人都可能注入任意 shell。只有当参数的
 workflow 完全通过 `env:` 消费它时，才把它排除在安全字符集之外（`free_text: true`）。
@@ -108,5 +108,5 @@ Slash 关联 dispatch 与其结果 run，靠的是 dispatch 响应里 run 自己
 PR 修订都运行该命令，或者把它当作刻意的手动合并门禁 —— 它不是那种默认就该打开的
 东西。
 
-参见 [已知限制](/zh/limitations/) 了解相关缺口：Slash 不会像某些 CI bot 那样在
+参见 [已知限制](/zh-hans/limitations/) 了解相关缺口：Slash 不会像某些 CI bot 那样在
 `synchronize` 时自动重新触发命令；Re-run 按钮是目前替代方案。

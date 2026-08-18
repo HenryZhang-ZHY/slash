@@ -15,6 +15,8 @@ import Icon from "@cloudflare/nimbus-docs/components/Icon.astro";
 import { cn } from "@/lib/cn";
 import type { HTMLAttributes } from "astro/types";
 import type { TOCItem } from "@cloudflare/nimbus-docs/types";
+import { basePath } from "@/lib/urls";
+import { getLocaleByPath, getTranslations } from "@/lib/i18n";
 
 interface Props extends HTMLAttributes<"nav"> {
   headings: TOCItem[];
@@ -23,22 +25,23 @@ interface Props extends HTMLAttributes<"nav"> {
 const { headings, class: className, ...attrs } = Astro.props;
 
 const hasHeadings = headings.length > 0;
+const t = getTranslations(getLocaleByPath(Astro.url.pathname, basePath).languageTag);
 ---
 
 {
   hasHeadings && (
     <nav
       data-nb-mobile-toc
-      aria-label="On this page"
+      aria-label={t.navigation.onThisPage}
       class={cn("relative", className)}
       {...attrs}
     >
       <select
         data-nb-mobile-toc-select
-        aria-label="Jump to section"
+        aria-label={t.navigation.jumpToSection}
         class="w-full appearance-none rounded-md border border-border bg-background py-2.5 pl-3 pr-9 text-sm font-medium text-foreground transition-colors hover:border-foreground/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
       >
-        <option value="_top">Overview</option>
+        <option value="_top">{t.navigation.overview}</option>
         {headings.map((heading) => (
           <option value={heading.slug}>
             {`${" ".repeat(Math.max(0, heading.depth - 2))}${heading.text}`}

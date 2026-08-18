@@ -11,7 +11,7 @@ Ingestion 端点使用按套件的 collection token：
 Authorization: Bearer collection-token-value
 ```
 
-token 通过 [Test Engine 管理 API](/zh/api/test-engine/) 签发。token 决定目标套件；
+token 通过 [Test Engine 管理 API](/zh-hans/api/test-engine/) 签发。token 决定目标套件；
 客户端不在上传体里发送套件 ID。每个被接受的批次在一个数据库事务里提交。
 
 成功的上传返回 `200 OK` 和空 body。缺失、格式错误、未知或已吊销的 token 返回

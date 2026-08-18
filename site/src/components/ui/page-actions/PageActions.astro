@@ -2,6 +2,8 @@
 import Icon from "@cloudflare/nimbus-docs/components/Icon.astro";
 import { cn } from "@/lib/cn";
 import type { HTMLAttributes } from "astro/types";
+import { basePath } from "@/lib/urls";
+import { getLocaleByPath, getTranslations } from "@/lib/i18n";
 
 interface Props extends HTMLAttributes<"div"> {
   markdownUrl?: string;
@@ -9,12 +11,14 @@ interface Props extends HTMLAttributes<"div"> {
 }
 
 const { markdownUrl, lastUpdated, class: className, ...attrs } = Astro.props;
+const locale = getLocaleByPath(Astro.url.pathname, basePath).languageTag;
+const t = getTranslations(locale);
 
 const baseBtn =
   "inline-flex cursor-pointer items-center gap-1.5 rounded-md bg-transparent px-2 py-1 text-muted-foreground no-underline transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring focus-visible:outline-offset-2";
 
 const formattedDate = lastUpdated
-  ? new Intl.DateTimeFormat(undefined, { year: "numeric", month: "short", day: "numeric" }).format(lastUpdated)
+  ? new Intl.DateTimeFormat(locale, { year: "numeric", month: "short", day: "numeric" }).format(lastUpdated)
   : null;
 ---
 
@@ -22,13 +26,16 @@ const formattedDate = lastUpdated
   <div
     data-nb-page-actions
     data-md-url={markdownUrl}
+    data-copy-label={t.pageActions.copyPage}
+    data-copied-label={t.pageActions.copied}
+    data-copy-failed-label={t.pageActions.copyFailed}
     class={cn("not-prose -ml-2 flex flex-wrap items-center gap-y-1 text-[0.8125rem]", className)}
     {...attrs}
   >
     {lastUpdated && (
       <span class="inline-flex items-center gap-1.5 px-2 py-1 text-muted-foreground">
         <Icon name="ph:clock" class="w-3.5 h-3.5" />
-        Updated <time datetime={lastUpdated.toISOString()}>{formattedDate}</time>
+        {t.pageActions.updated} <time datetime={lastUpdated.toISOString()}>{formattedDate}</time>
       </span>
     )}
 
@@ -41,7 +48,7 @@ const formattedDate = lastUpdated
         <button type="button" data-nb-page-actions-copy class={baseBtn}>
           <Icon name="ph:copy" class="w-3.5 h-3.5" data-nb-page-actions-copy-icon />
           <Icon name="ph:check" class="hidden w-3.5 h-3.5 text-success" data-nb-page-actions-check-icon />
-          <span data-nb-page-actions-label aria-live="polite">Copy page</span>
+          <span data-nb-page-actions-label aria-live="polite">{t.pageActions.copyPage}</span>
         </button>
 
         <span aria-hidden="true" class="select-none text-muted-foreground/40">|</span>
@@ -53,7 +60,7 @@ const formattedDate = lastUpdated
           class={baseBtn}
         >
           <Icon name="ph:markdown-logo" class="w-3.5 h-3.5" />
-          View as Markdown
+          {t.pageActions.viewMarkdown}
         </a>
       </>
     )}

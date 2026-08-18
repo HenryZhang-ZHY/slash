@@ -21,7 +21,8 @@ import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/component
 import SidebarLink from "./SidebarLink.astro";
 import { Badge } from "@/components/ui/badge";
 import type { SidebarItem, SidebarBadge } from "@cloudflare/nimbus-docs/types";
-import { withBasePath } from "@/lib/urls";
+import { basePath, withBasePath } from "@/lib/urls";
+import { getLocaleByPath, getTranslations } from "@/lib/i18n";
 
 interface Props extends HTMLAttributes<"div"> {
   label: string;
@@ -63,6 +64,7 @@ function hasActiveDescendant(items: SidebarItem[]): boolean {
 
 const hasActive = Boolean(indexIsCurrent) || hasActiveDescendant(items);
 const isOpen = Boolean(hasActive || collapsed === false || collapsed === undefined);
+const t = getTranslations(getLocaleByPath(Astro.url.pathname, basePath).languageTag);
 
 // Shared classes for the row that holds the label + caret in both
 // rendering modes (landing-as-link vs. label-as-trigger).
@@ -134,7 +136,7 @@ const caretClass =
         )}
         data-nb-state={isOpen ? "open" : "closed"}
         aria-expanded={isOpen ? "true" : "false"}
-        aria-label={`Toggle ${label} section`}
+        aria-label={t.navigation.toggleSection(label)}
       >
         <Icon name="ph:caret-right" class={caretClass} data-nb-caret />
       </CollapsibleTrigger>

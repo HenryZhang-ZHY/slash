@@ -13,8 +13,8 @@ Slash 是一个 GitHub App：在拉取请求上评论 `/deploy staging`，Slash 
 
 Slash 以托管服务的形式运行 —— 在 Slash 控制台登录（或注册新账户），按 onboarding
 创建你的第一个团队。登录和 onboarding 流程见
-[Web 控制台](/zh/web-console/)。如果你想在自己的基础设施上运行 Slash，参见
-[自托管](/zh/self-host/)。
+[Web 控制台](/zh-hans/web-console/)。如果你想在自己的基础设施上运行 Slash，参见
+[自托管](/zh-hans/self-host/)。
 
 ## 2. 创建 GitHub App
 
@@ -24,7 +24,7 @@ Slash 以托管服务的形式运行 —— 在 Slash 控制台登录（或注�
 - **Webhook secret**：一个随机值
 - **权限**：`checks: write`、`actions: write`、`contents: read`、
   `pull_requests: write`、`issues: write`、`metadata: read`（参见
-  [权限](/zh/permissions/) 了解每个权限的用途 —— 尤其是
+  [权限](/zh-hans/permissions/) 了解每个权限的用途 —— 尤其是
   `issues: write` 很容易被低估，缺了它整个产品都无法工作）
 - **订阅事件**：`issue_comment`、`workflow_run`、`check_run`、
   `pull_request`
@@ -45,15 +45,15 @@ args:
     free_text: true
 ```
 
-完整的 schema 参见 [`.slash/` 参考](/zh/slash-config-reference/)；你也可以在
+完整的 schema 参见 [`.slash/` 参考](/zh-hans/slash-config-reference/)；你也可以在
 自己的 CI 里运行 `slash validate .slash/`，在合并到默认分支之前发现错误（参见
-[已知限制](/zh/limitations/) —— Slash 目前不会在 push 时自行校验 `.slash/`）。
+[已知限制](/zh-hans/limitations/) —— Slash 目前不会在 push 时自行校验 `.slash/`）。
 
 ## 4. 添加 workflow
 
 同样在默认分支上添加 `.github/workflows/echo.yml`（GitHub 只从默认分支注册
 `workflow_dispatch` 目标 —— 参见
-[workflow 要求](/zh/workflow-requirements/)）：
+[workflow 要求](/zh-hans/workflow-requirements/)）：
 
 ```yaml
 name: echo
@@ -89,11 +89,11 @@ workflow run 结束后达到终态，附上该 run 的链接。
 
 ## 下一步
 
-- [`.slash/` 参考](/zh/slash-config-reference/) —— 完整的 `.slash/*.yml` schema
-- [Workflow 要求](/zh/workflow-requirements/) —— 注入的 inputs、
+- [`.slash/` 参考](/zh-hans/slash-config-reference/) —— 完整的 `.slash/*.yml` schema
+- [Workflow 要求](/zh-hans/workflow-requirements/) —— 注入的 inputs、
   `env:`-而非-`${{ }}` 规则、required status check 的注意事项
-- [权限](/zh/permissions/) —— 谁能调用什么
-- [Web 控制台](/zh/web-console/) —— 登录、创建团队、管理 Test Engine
-- [Test Engine](/zh/test-engine/) —— 收集测试结果并隔离 flaky 测试
-- [自托管](/zh/self-host/) —— 在你自己的基础设施上运行 Slash
-- [已知限制](/zh/limitations/) —— Slash 目前刻意不做的事情
+- [权限](/zh-hans/permissions/) —— 谁能调用什么
+- [Web 控制台](/zh-hans/web-console/) —— 登录、创建团队、管理 Test Engine
+- [Test Engine](/zh-hans/test-engine/) —— 收集测试结果并隔离 flaky 测试
+- [自托管](/zh-hans/self-host/) —— 在你自己的基础设施上运行 Slash
+- [已知限制](/zh-hans/limitations/) —— Slash 目前刻意不做的事情
