@@ -70,11 +70,24 @@ pub struct TeamView {
     pub role: String,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubConnectionView {
+    pub login: String,
+    pub email: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ConnectionsView {
+    pub github: Option<GithubConnectionView>,
+}
+
 /// `{ user, teams }` — the onboarding /auth/me surface the Web App consumes.
 #[derive(Debug, Serialize)]
 pub struct MePayload {
     pub user: UserView,
     pub teams: Vec<TeamView>,
+    pub connections: ConnectionsView,
 }
 
 /// `{ user }` — the register/login surface.
@@ -219,9 +232,14 @@ pub async fn me(
         _ => return api_error(StatusCode::UNAUTHORIZED, "unknown user"),
     };
     let teams = load_teams(&state.pool, id).await.unwrap_or_default();
+    let github = match load_github_connection(&state.pool, id).await {
+        Ok(connection) => connection,
+        Err(_) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, "could not load account"),
+    };
     Json(MePayload {
         user: user_view(id, &email, &display_name),
         teams,
+        connections: ConnectionsView { github },
     })
     .into_response()
 }
@@ -395,6 +413,23 @@ async fn load_teams(pool: &PgPool, user_id: Uuid) -> Result<Vec<TeamView>, sqlx:
             role: r.get("role"),
         })
         .collect())
+}
+
+async fn load_github_connection(
+    pool: &PgPool,
+    user_id: Uuid,
+) -> Result<Option<GithubConnectionView>, sqlx::Error> {
+    sqlx::query_as::<_, (String, String)>(
+        "SELECT provider_login, provider_email
+         FROM user_identities
+         WHERE user_id = $1 AND provider = 'github'",
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await
+    .map(|row| {
+        row.map(|(login, email)| GithubConnectionView { login, email })
+    })
 }
 
 // ---- auth extractor -----------------------------------------------------------
@@ -791,6 +826,42 @@ mod tests {
         let state = app_state(pool.clone());
         let resp = me(State(state), UserId(uuid::Uuid::new_v4())).await;
         assert_eq!(response_status(&resp), StatusCode::UNAUTHORIZED);
+    }
+
+    #[serial_test::serial(db)]
+    #[tokio::test]
+    async fn me_connection_state_comes_from_the_identity_record() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        let user_id = Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO users (id, email, password_hash, display_name, status)
+             VALUES ($1, 'connected@example.com', 'hash', 'Connected', 'active')",
+        )
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(load_github_connection(&pool, user_id).await.unwrap().is_none());
+
+        sqlx::query(
+            "INSERT INTO user_identities
+                (id, user_id, provider, provider_subject, provider_login, provider_email)
+             VALUES ($1, $2, 'github', '42', 'octocat', 'octocat@example.com')",
+        )
+        .bind(Uuid::new_v4())
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let github = load_github_connection(&pool, user_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(github.login, "octocat");
+        assert_eq!(github.email, "octocat@example.com");
     }
 
     #[test]

@@ -115,14 +115,13 @@ pub async fn run() {
     };
 
     let web_dir = std::env::var("SLASH_WEB_DIR").unwrap_or_else(|_| DEFAULT_WEB_DIR.to_string());
-    let base_url = std::env::var("SLASH_BASE_URL").ok().map(Arc::from);
     let github_oauth = config.github_client_id.as_ref().map(|client_id| {
-        github_oauth::OauthState {
-            client_id: Arc::from(client_id.as_str()),
-            client_secret: Arc::from(config.github_client_secret.as_deref().unwrap_or_default()),
-            base_url: base_url.clone(),
-            auth_secret: auth::AuthSecret(Arc::from(config.auth_secret.as_str())),
-        }
+        github_oauth::OauthState::new(
+            Arc::from(client_id.as_str()),
+            Arc::from(config.github_client_secret.as_deref().unwrap_or_default()),
+            Arc::from(config.github_base_url.as_deref().unwrap_or_default()),
+            auth::AuthSecret(Arc::from(config.auth_secret.as_str())),
+        )
     });
     let state = AppState {
         pool: pool.clone(),
@@ -168,14 +167,17 @@ pub async fn run() {
         .route("/api/auth/login", post(userapi::login))
         .route("/api/auth/logout", post(userapi::logout))
         .route("/api/auth/me", get(userapi::me))
-        .route("/api/auth/github", get(github_oauth::start_github_login))
+        .route(
+            "/api/auth/github/sign-in",
+            get(github_oauth::start_github_sign_in),
+        )
         .route(
             "/api/auth/github/callback",
             get(github_oauth::handle_github_callback),
         )
         .route(
-            "/api/auth/github/link",
-            post(github_oauth::start_github_link),
+            "/api/auth/github/connect",
+            post(github_oauth::start_github_connect),
         )
         .route("/api/teams", post(userapi::create_team))
         .route(

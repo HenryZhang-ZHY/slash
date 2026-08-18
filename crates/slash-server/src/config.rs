@@ -26,6 +26,8 @@ pub struct ServerConfig {
     /// GitHub OAuth App client secret (file-only, same convention as other
     /// secrets). `None` when OAuth login is not configured.
     pub github_client_secret: Option<String>,
+    /// Public origin used to construct the exact OAuth callback URI.
+    pub github_base_url: Option<String>,
 }
 
 impl ServerConfig {
@@ -65,6 +67,10 @@ impl ServerConfig {
             Some(_) => Some(resolve_secret(lookup, &mut read_file, "SLASH_GITHUB_CLIENT_SECRET_PATH")?),
             None => None,
         };
+        let github_base_url = match github_client_id {
+            Some(_) => Some(require(lookup, "SLASH_BASE_URL")?),
+            None => None,
+        };
 
         Ok(Self {
             github_app_id,
@@ -74,6 +80,7 @@ impl ServerConfig {
             auth_secret,
             github_client_id,
             github_client_secret,
+            github_base_url,
         })
     }
 }
@@ -259,6 +266,49 @@ mod tests {
         );
         let config = load(&env).unwrap();
         assert_eq!(config.database_url, "postgres://user:pass@db/slash");
+    }
+
+    #[test]
+    fn github_oauth_requires_an_explicit_public_base_url() {
+        let mut env = env_of(&[
+            ("SLASH_GITHUB_APP_ID", "42"),
+            ("SLASH_GITHUB_PRIVATE_KEY_PATH", "/key.pem"),
+            ("SLASH_GITHUB_CLIENT_ID", "client-id"),
+        ]);
+        let mut env = file_env(&mut env);
+        env.insert(
+            "SLASH_GITHUB_CLIENT_SECRET_PATH".to_string(),
+            secret_file("client-secret"),
+        );
+        match load(&env) {
+            Err(ConfigError::MissingEnvVar("SLASH_BASE_URL")) => {}
+            _ => panic!("expected a missing public base URL error"),
+        }
+    }
+
+    #[test]
+    fn github_oauth_loads_as_one_complete_configuration() {
+        let mut env = env_of(&[
+            ("SLASH_GITHUB_APP_ID", "42"),
+            ("SLASH_GITHUB_PRIVATE_KEY_PATH", "/key.pem"),
+            ("SLASH_GITHUB_CLIENT_ID", "client-id"),
+            ("SLASH_BASE_URL", "https://slash.example.com"),
+        ]);
+        let mut env = file_env(&mut env);
+        env.insert(
+            "SLASH_GITHUB_CLIENT_SECRET_PATH".to_string(),
+            secret_file("client-secret"),
+        );
+        let config = load(&env).unwrap();
+        assert_eq!(config.github_client_id.as_deref(), Some("client-id"));
+        assert_eq!(
+            config.github_base_url.as_deref(),
+            Some("https://slash.example.com")
+        );
+        assert_eq!(
+            config.github_client_secret.as_deref(),
+            Some("client-secret")
+        );
     }
 
     #[test]

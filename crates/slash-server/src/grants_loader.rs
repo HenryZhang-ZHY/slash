@@ -107,7 +107,12 @@ pub async fn preload_grants(
 
     // Resolve actor -> slash user, then repo -> org, then load grants.
     let actor_row = sqlx::query_scalar::<_, uuid::Uuid>(
-        "SELECT id FROM users WHERE github_user_id = $1 AND status = 'active'",
+        "SELECT u.id
+         FROM users u
+         JOIN user_identities ui ON ui.user_id = u.id
+         WHERE ui.provider = 'github'
+           AND ui.provider_subject = $1::TEXT
+           AND u.status = 'active'",
     )
     .bind(github_user_id)
     .fetch_optional(pool)
@@ -297,7 +302,12 @@ pub async fn authorize_command_grants(
 
     // 1. Resolve the actor -> slash user (non-onboarded = no grants = deny).
     let actor_row = sqlx::query_scalar::<_, uuid::Uuid>(
-        "SELECT id FROM users WHERE github_user_id = $1 AND status = 'active'",
+        "SELECT u.id
+         FROM users u
+         JOIN user_identities ui ON ui.user_id = u.id
+         WHERE ui.provider = 'github'
+           AND ui.provider_subject = $1::TEXT
+           AND u.status = 'active'",
     )
     .bind(github_user_id)
     .fetch_optional(pool)
@@ -355,9 +365,17 @@ mod authz_tests {
             .execute(p).await.unwrap();
         let uid = uuid::Uuid::new_v4();
         sqlx::query(
-            "INSERT INTO users (id, email, password_hash, display_name, status, github_user_id)
-             VALUES ($1,'a@b.com','x','A','active',$2)",
+            "INSERT INTO users (id, email, password_hash, display_name, status)
+             VALUES ($1,'a@b.com','x','A','active')",
         )
+        .bind(uid)
+        .execute(p).await.unwrap();
+        sqlx::query(
+            "INSERT INTO user_identities
+                (id, user_id, provider, provider_subject, provider_login, provider_email)
+             VALUES ($1, $2, 'github', $3::TEXT, 'a', 'a@b.com')",
+        )
+        .bind(uuid::Uuid::new_v4())
         .bind(uid)
         .bind(github_id)
         .execute(p).await.unwrap();

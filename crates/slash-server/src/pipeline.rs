@@ -697,9 +697,17 @@ mod tests {
         .execute(pool).await.unwrap();
         let uid = uuid::Uuid::new_v4();
         sqlx::query(
-            "INSERT INTO users (id, email, password_hash, display_name, status, github_user_id)
-             VALUES ($1, 'alice@example.com', 'x', 'Alice', 'active', $2)",
+            "INSERT INTO users (id, email, password_hash, display_name, status)
+             VALUES ($1, 'alice@example.com', 'x', 'Alice', 'active')",
         )
+        .bind(uid)
+        .execute(pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO user_identities
+                (id, user_id, provider, provider_subject, provider_login, provider_email)
+             VALUES ($1, $2, 'github', $3::TEXT, 'alice', 'alice@example.com')",
+        )
+        .bind(uuid::Uuid::new_v4())
         .bind(uid)
         .bind(github_user_id)
         .execute(pool).await.unwrap();
