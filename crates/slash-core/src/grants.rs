@@ -163,19 +163,40 @@ mod tests {
 
     #[test]
     fn no_grants_is_denied() {
-        assert_eq!(decide(&[], "acme/widgets", "deploy", Permission::Write), Decision::Denied);
+        assert_eq!(
+            decide(&[], "acme/widgets", "deploy", Permission::Write),
+            Decision::Denied
+        );
     }
 
     #[test]
     fn org_write_allows_write_command() {
-        let g = [cmdgrants(GrantScope::Org, None, None, Permission::Write, GrantEffect::Allow)];
-        assert_eq!(decide(&g, "acme/widgets", "deploy", Permission::Write), Decision::Allow);
+        let g = [cmdgrants(
+            GrantScope::Org,
+            None,
+            None,
+            Permission::Write,
+            GrantEffect::Allow,
+        )];
+        assert_eq!(
+            decide(&g, "acme/widgets", "deploy", Permission::Write),
+            Decision::Allow
+        );
     }
 
     #[test]
     fn org_write_does_not_allow_maintain_command() {
-        let g = [cmdgrants(GrantScope::Org, None, None, Permission::Write, GrantEffect::Allow)];
-        assert_eq!(decide(&g, "acme/widgets", "release", Permission::Admin), Decision::Denied);
+        let g = [cmdgrants(
+            GrantScope::Org,
+            None,
+            None,
+            Permission::Write,
+            GrantEffect::Allow,
+        )];
+        assert_eq!(
+            decide(&g, "acme/widgets", "release", Permission::Admin),
+            Decision::Denied
+        );
     }
 
     #[test]
@@ -187,8 +208,14 @@ mod tests {
             Permission::Admin,
             GrantEffect::Allow,
         )];
-        assert_eq!(decide(&g, "acme/widgets", "deploy", Permission::Write), Decision::Allow);
-        assert_eq!(decide(&g, "acme/other", "deploy", Permission::Write), Decision::Denied);
+        assert_eq!(
+            decide(&g, "acme/widgets", "deploy", Permission::Write),
+            Decision::Allow
+        );
+        assert_eq!(
+            decide(&g, "acme/other", "deploy", Permission::Write),
+            Decision::Denied
+        );
     }
 
     #[test]
@@ -200,14 +227,26 @@ mod tests {
             Permission::Admin,
             GrantEffect::Allow,
         )];
-        assert_eq!(decide(&g, "acme/widgets", "deploy", Permission::Write), Decision::Allow);
-        assert_eq!(decide(&g, "acme/widgets", "release", Permission::Write), Decision::Denied);
+        assert_eq!(
+            decide(&g, "acme/widgets", "deploy", Permission::Write),
+            Decision::Allow
+        );
+        assert_eq!(
+            decide(&g, "acme/widgets", "release", Permission::Write),
+            Decision::Denied
+        );
     }
 
     #[test]
     fn deny_wins_over_allow() {
         let g = [
-            cmdgrants(GrantScope::Org, None, None, Permission::Admin, GrantEffect::Allow),
+            cmdgrants(
+                GrantScope::Org,
+                None,
+                None,
+                Permission::Admin,
+                GrantEffect::Allow,
+            ),
             cmdgrants(
                 GrantScope::Command,
                 Some("acme/widgets"),
@@ -216,14 +255,23 @@ mod tests {
                 GrantEffect::Deny,
             ),
         ];
-        assert_eq!(decide(&g, "acme/widgets", "deploy", Permission::Write), Decision::Denied);
+        assert_eq!(
+            decide(&g, "acme/widgets", "deploy", Permission::Write),
+            Decision::Denied
+        );
     }
 
     #[test]
     fn highest_allow_across_user_and_team_grants_wins() {
         // team grants write, user direct grant admin → admin reachable.
         let g = [
-            cmdgrants(GrantScope::Org, None, None, Permission::Write, GrantEffect::Allow),
+            cmdgrants(
+                GrantScope::Org,
+                None,
+                None,
+                Permission::Write,
+                GrantEffect::Allow,
+            ),
             cmdgrants(
                 GrantScope::Command,
                 Some("acme/widgets"),
@@ -257,7 +305,10 @@ mod tests {
             ),
         ];
         // None match acme/widgets deploy → denied.
-        assert_eq!(decide(&g, "acme/widgets", "deploy", Permission::Write), Decision::Denied);
+        assert_eq!(
+            decide(&g, "acme/widgets", "deploy", Permission::Write),
+            Decision::Denied
+        );
     }
 
     #[test]

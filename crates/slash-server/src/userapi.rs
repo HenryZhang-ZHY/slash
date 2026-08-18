@@ -4,11 +4,11 @@
 //! the same axum server as the GitHub webhook control plane. Sessions are
 //! stateless HMAC tokens in an HttpOnly cookie (see [`crate::auth`]).
 
+use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::http::header::{HeaderValue, SET_COOKIE};
 use axum::response::{IntoResponse, Response};
-use axum::Json;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sqlx::PgPool;
@@ -26,8 +26,7 @@ const DEFAULT_MEMBER_ROLE: &str = "maintainer";
 /// real account (closes the user-enumeration side channel). The password it
 /// encodes is random and never issued to anyone; it's only the *cost* that
 /// matters, never the content.
-const DUMMY_HASH_FOR_TIMING: &str =
-    "$argon2id$v=19$m=19456,t=2,p=1$AQBxsd/1YH74zla8A5ymdQ$k+VQwhXnpFIX1lsK0a/Aqb1fEWcywY/Lci0Ytn4nCM4";
+const DUMMY_HASH_FOR_TIMING: &str = "$argon2id$v=19$m=19456,t=2,p=1$AQBxsd/1YH74zla8A5ymdQ$k+VQwhXnpFIX1lsK0a/Aqb1fEWcywY/Lci0Ytn4nCM4";
 
 #[derive(Debug, Deserialize)]
 pub struct RegisterRequest {
@@ -101,15 +100,15 @@ pub struct AuthPayload {
 pub fn set_token_cookie(resp: &mut axum::response::Response, token: &str) {
     // Our Set-Cookie values are fixed, ASCII, attacker-non-influenced.
     #[allow(clippy::expect_used)]
-    let value = HeaderValue::from_str(&auth::set_cookie_value(token))
-        .expect("Set-Cookie value is ASCII");
+    let value =
+        HeaderValue::from_str(&auth::set_cookie_value(token)).expect("Set-Cookie value is ASCII");
     resp.headers_mut().insert(SET_COOKIE, value);
 }
 
 fn clear_token_cookie(resp: &mut axum::response::Response) {
     #[allow(clippy::expect_used)]
-    let value = HeaderValue::from_str(&auth::clear_cookie_value())
-        .expect("Set-Cookie value is ASCII");
+    let value =
+        HeaderValue::from_str(&auth::clear_cookie_value()).expect("Set-Cookie value is ASCII");
     resp.headers_mut().insert(SET_COOKIE, value);
 }
 
@@ -154,14 +153,27 @@ pub async fn register(
     match result {
         Ok(_) => {}
         Err(e) if is_unique_violation(&e) => {
-            return api_error(StatusCode::CONFLICT, "an account with this email already exists")
+            return api_error(
+                StatusCode::CONFLICT,
+                "an account with this email already exists",
+            );
         }
-        Err(_) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, "could not create account"),
+        Err(_) => {
+            return api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "could not create account",
+            );
+        }
     }
     // Registration logs the user in.
     let token = match auth::sign_token(&state.auth_secret, id) {
         Ok(t) => t,
-        Err(_) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, "could not create session"),
+        Err(_) => {
+            return api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "could not create session",
+            );
+        }
     };
     let mut resp = Json(AuthPayload {
         user: user_view(id, &email, body.display_name.trim()),
@@ -200,7 +212,12 @@ pub async fn login(
     }
     let token = match auth::sign_token(&state.auth_secret, id) {
         Ok(t) => t,
-        Err(_) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, "could not create session"),
+        Err(_) => {
+            return api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "could not create session",
+            );
+        }
     };
     let mut resp = Json(AuthPayload {
         user: user_view(id, &email, &display_name),
@@ -216,10 +233,7 @@ pub async fn logout() -> Response {
     resp
 }
 
-pub async fn me(
-    State(state): State<crate::AppState>,
-    auth_user: UserId,
-) -> Response {
+pub async fn me(State(state): State<crate::AppState>, auth_user: UserId) -> Response {
     let id = auth_user.0;
     let row = sqlx::query_as::<_, (String, String)>(
         "SELECT email, display_name FROM users WHERE id = $1",
@@ -260,12 +274,15 @@ pub async fn create_team(
             return api_error(
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "slug must be lowercase letters/digits/hyphens",
-            )
+            );
         }
         None => slugify(name),
     };
     if slug.is_empty() {
-        return api_error(StatusCode::UNPROCESSABLE_ENTITY, "could not derive a valid slug");
+        return api_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "could not derive a valid slug",
+        );
     }
 
     let team_id = Uuid::new_v4();
@@ -275,9 +292,10 @@ pub async fn create_team(
             let teams = load_teams(&state.pool, user_id).await.unwrap_or_default();
             match teams.iter().find(|t| t.id == team_id) {
                 Some(team) => Json(json!({ "team": team })).into_response(),
-                None => {
-                    api_error(StatusCode::INTERNAL_SERVER_ERROR, "team created but not readable")
-                }
+                None => api_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "team created but not readable",
+                ),
             }
         }
         Err(CreateTeamError::SlugTaken) => {
@@ -351,15 +369,13 @@ async fn create_team_tx(
         Err(_) => return Err(CreateTeamError::Other),
     }
 
-    sqlx::query(
-        "INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, $3)",
-    )
-    .bind(team_id)
-    .bind(user_id)
-    .bind(DEFAULT_MEMBER_ROLE)
-    .execute(&mut *tx)
-    .await
-    .map_err(|_| CreateTeamError::Other)?;
+    sqlx::query("INSERT INTO team_members (team_id, user_id, role) VALUES ($1, $2, $3)")
+        .bind(team_id)
+        .bind(user_id)
+        .bind(DEFAULT_MEMBER_ROLE)
+        .execute(&mut *tx)
+        .await
+        .map_err(|_| CreateTeamError::Other)?;
 
     // De-specialized org lifecycle (M3 #22): the user who creates their org
     // becomes its **owner** (in addition to their first team's maintainer).
@@ -427,9 +443,7 @@ async fn load_github_connection(
     .bind(user_id)
     .fetch_optional(pool)
     .await
-    .map(|row| {
-        row.map(|(login, email)| GithubConnectionView { login, email })
-    })
+    .map(|row| row.map(|(login, email)| GithubConnectionView { login, email }))
 }
 
 // ---- auth extractor -----------------------------------------------------------
@@ -460,7 +474,7 @@ impl axum::extract::FromRequestParts<crate::AppState> for UserId {
             let user_id = match auth::verify_token(&state.auth_secret, &token) {
                 Ok(id) => id,
                 Err(AuthError::ExpiredToken) => {
-                    return Err(api_error(StatusCode::UNAUTHORIZED, "session expired"))
+                    return Err(api_error(StatusCode::UNAUTHORIZED, "session expired"));
                 }
                 Err(_) => return Err(api_error(StatusCode::UNAUTHORIZED, "invalid session")),
             };
@@ -544,7 +558,6 @@ mod tests {
     }
 
     #[serial_test::serial(db)]
-
     #[tokio::test]
     async fn register_creates_the_user_and_returns_the_auth_payload() {
         let Some(pool) = test_pool().await else {
@@ -574,7 +587,6 @@ mod tests {
     }
 
     #[serial_test::serial(db)]
-
     #[tokio::test]
     async fn register_duplicate_email_is_conflict() {
         let Some(pool) = test_pool().await else {
@@ -603,7 +615,6 @@ mod tests {
     }
 
     #[serial_test::serial(db)]
-
     #[tokio::test]
     async fn register_rejects_short_password() {
         let Some(pool) = test_pool().await else {
@@ -623,7 +634,6 @@ mod tests {
     }
 
     #[serial_test::serial(db)]
-
     #[tokio::test]
     async fn login_happy_path_verifies_password_and_returns_user() {
         let Some(pool) = test_pool().await else {
@@ -660,7 +670,6 @@ mod tests {
     }
 
     #[serial_test::serial(db)]
-
     #[tokio::test]
     async fn login_wrong_password_is_unauthorized() {
         let Some(pool) = test_pool().await else {
@@ -688,7 +697,6 @@ mod tests {
     }
 
     #[serial_test::serial(db)]
-
     #[tokio::test]
     async fn login_unknown_email_is_unauthorized() {
         let Some(pool) = test_pool().await else {
@@ -707,7 +715,6 @@ mod tests {
     }
 
     #[serial_test::serial(db)]
-
     #[tokio::test]
     async fn create_team_onboards_org_team_and_maintainer_membership() {
         let Some(pool) = test_pool().await else {
@@ -729,10 +736,14 @@ mod tests {
                 .await
                 .unwrap();
 
-        let resp = create_team(State(state.clone()), UserId(uid), Json(CreateTeamRequest {
-            name: "Acme".into(),
-            slug: None,
-        }))
+        let resp = create_team(
+            State(state.clone()),
+            UserId(uid),
+            Json(CreateTeamRequest {
+                name: "Acme".into(),
+                slug: None,
+            }),
+        )
         .await;
         assert_eq!(response_status(&resp), StatusCode::OK);
 
@@ -768,7 +779,6 @@ mod tests {
     }
 
     #[serial_test::serial(db)]
-
     #[tokio::test]
     async fn create_team_slug_conflict_is_conflict() {
         let Some(pool) = test_pool().await else {
@@ -784,11 +794,12 @@ mod tests {
             }),
         )
         .await;
-        let uid: uuid::Uuid =
-            sqlx::query_scalar::<_, uuid::Uuid>("SELECT id FROM users WHERE email = 'gina@example.com'")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let uid: uuid::Uuid = sqlx::query_scalar::<_, uuid::Uuid>(
+            "SELECT id FROM users WHERE email = 'gina@example.com'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
 
         // First create succeeds and onboards an org; reusing the same user
         // keeps the org stable so the second same-slug insert conflicts on
@@ -817,7 +828,6 @@ mod tests {
     }
 
     #[serial_test::serial(db)]
-
     #[tokio::test]
     async fn me_for_unknown_user_is_unauthorized() {
         let Some(pool) = test_pool().await else {
@@ -843,7 +853,12 @@ mod tests {
         .execute(&pool)
         .await
         .unwrap();
-        assert!(load_github_connection(&pool, user_id).await.unwrap().is_none());
+        assert!(
+            load_github_connection(&pool, user_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
 
         sqlx::query(
             "INSERT INTO user_identities
@@ -872,7 +887,10 @@ mod tests {
         let parsed = argon2::PasswordHash::new(DUMMY_HASH_FOR_TIMING);
         assert!(parsed.is_ok(), "dummy hash must be valid PHC");
         // Any password fails against it, but the *cost* is what matters.
-        assert!(!crate::auth::verify_password("anything", DUMMY_HASH_FOR_TIMING));
+        assert!(!crate::auth::verify_password(
+            "anything",
+            DUMMY_HASH_FOR_TIMING
+        ));
     }
 
     #[test]

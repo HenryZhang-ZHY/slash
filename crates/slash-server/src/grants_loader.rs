@@ -9,8 +9,8 @@
 //! Wired into the permission gate by M2-4 (the authorize path in pipeline.rs);
 //! the loader functions have real callers now.
 
-use slash_core::{GrantEffect, GrantRow, GrantScope};
 use slash_config::Permission;
+use slash_core::{GrantEffect, GrantRow, GrantScope};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -160,10 +160,12 @@ mod tests {
         let url = crate::test_support::test_database_url()?;
         let pool = db::connect(&url).await.unwrap();
         db::migrate(&pool).await.unwrap();
-        sqlx::query("TRUNCATE grants, org_members, team_members, teams, organizations, users CASCADE")
-            .execute(&pool)
-            .await
-            .unwrap();
+        sqlx::query(
+            "TRUNCATE grants, org_members, team_members, teams, organizations, users CASCADE",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
         Some(pool)
     }
 
@@ -171,10 +173,14 @@ mod tests {
         // (org_id, user_id, user_id2, team_id)
         let org = Uuid::new_v4();
         let org_slug = format!("op-{}", Uuid::new_v4());
-        sqlx::query("INSERT INTO organizations (id, slug, name, state) VALUES ($1,$2,'T','active')")
-            .bind(org)
-            .bind(&org_slug)
-            .execute(pool).await.unwrap();
+        sqlx::query(
+            "INSERT INTO organizations (id, slug, name, state) VALUES ($1,$2,'T','active')",
+        )
+        .bind(org)
+        .bind(&org_slug)
+        .execute(pool)
+        .await
+        .unwrap();
         let u1 = Uuid::new_v4();
         let u2 = Uuid::new_v4();
         let team = Uuid::new_v4();
@@ -188,7 +194,9 @@ mod tests {
         .bind(u2)
         .bind(&u1_email)
         .bind(&u2_email)
-        .execute(pool).await.unwrap();
+        .execute(pool)
+        .await
+        .unwrap();
         sqlx::query(
             "INSERT INTO teams (id, organization_id, name, slug, is_default_team, default_member_role)
              VALUES ($1,$2,'eng','eng',false,'member')",
@@ -199,12 +207,13 @@ mod tests {
         sqlx::query("INSERT INTO team_members (team_id, user_id, role) VALUES ($1,$2,'member')")
             .bind(team)
             .bind(u2)
-            .execute(pool).await.unwrap();
+            .execute(pool)
+            .await
+            .unwrap();
         (org, u1, u2, team)
     }
 
     #[serial_test::serial(db)]
-
     #[tokio::test]
     async fn loads_direct_and_team_grants_and_flags_grants_only() {
         let Some(pool) = test_pool().await else {
@@ -245,7 +254,6 @@ mod tests {
     }
 
     #[serial_test::serial(db)]
-
     #[tokio::test]
     async fn repo_with_no_grants_is_not_grants_only() {
         let Some(pool) = test_pool().await else {
@@ -257,7 +265,6 @@ mod tests {
     }
 
     #[serial_test::serial(db)]
-
     #[tokio::test]
     async fn deny_grant_for_a_repo_is_loaded() {
         let Some(pool) = test_pool().await else {
@@ -340,17 +347,19 @@ pub async fn authorize_command_grants(
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod authz_tests {
     use super::*;
-    use slash_core::TrustGate;
     use crate::db;
+    use slash_core::TrustGate;
 
     async fn pool() -> PgPool {
         let url = crate::test_support::test_database_url().unwrap();
         let p = db::connect(&url).await.unwrap();
         db::migrate(&p).await.unwrap();
-        sqlx::query("TRUNCATE grants, org_members, team_members, teams, organizations, users CASCADE")
-            .execute(&p)
-            .await
-            .unwrap();
+        sqlx::query(
+            "TRUNCATE grants, org_members, team_members, teams, organizations, users CASCADE",
+        )
+        .execute(&p)
+        .await
+        .unwrap();
         p
     }
 
@@ -369,7 +378,9 @@ mod authz_tests {
              VALUES ($1,'a@b.com','x','A','active')",
         )
         .bind(uid)
-        .execute(p).await.unwrap();
+        .execute(p)
+        .await
+        .unwrap();
         sqlx::query(
             "INSERT INTO user_identities
                 (id, user_id, provider, provider_subject, provider_login, provider_email)
@@ -378,7 +389,9 @@ mod authz_tests {
         .bind(uuid::Uuid::new_v4())
         .bind(uid)
         .bind(github_id)
-        .execute(p).await.unwrap();
+        .execute(p)
+        .await
+        .unwrap();
         (org, uid)
     }
 
@@ -394,14 +407,62 @@ mod authz_tests {
         )
         .bind(uuid::Uuid::new_v4()).bind(org).bind(uid)
         .execute(&p).await.unwrap();
-        assert!(authorize_command_grants(&p, 111, 9, "acme", "widgets", "deploy", slash_config::Permission::Write).await.unwrap());
+        assert!(
+            authorize_command_grants(
+                &p,
+                111,
+                9,
+                "acme",
+                "widgets",
+                "deploy",
+                slash_config::Permission::Write
+            )
+            .await
+            .unwrap()
+        );
         // required admin > granted write -> deny
-        assert!(!authorize_command_grants(&p, 111, 9, "acme", "widgets", "deploy", slash_config::Permission::Admin).await.unwrap());
+        assert!(
+            !authorize_command_grants(
+                &p,
+                111,
+                9,
+                "acme",
+                "widgets",
+                "deploy",
+                slash_config::Permission::Admin
+            )
+            .await
+            .unwrap()
+        );
         // unknown repo (same org) -> no grant for that repo (org-scope still matches) -> allow actually; use a different check:
         // non-onboarded actor (no users row) -> deny
-        assert!(!authorize_command_grants(&p, 999, 9, "acme", "widgets", "deploy", slash_config::Permission::Write).await.unwrap());
+        assert!(
+            !authorize_command_grants(
+                &p,
+                999,
+                9,
+                "acme",
+                "widgets",
+                "deploy",
+                slash_config::Permission::Write
+            )
+            .await
+            .unwrap()
+        );
         // unknown installation -> no org -> deny
-        assert!(!authorize_command_grants(&p, 111, 12345, "acme", "widgets", "deploy", slash_config::Permission::Write).await.unwrap());
+        assert!(
+            !authorize_command_grants(
+                &p,
+                111,
+                12345,
+                "acme",
+                "widgets",
+                "deploy",
+                slash_config::Permission::Write
+            )
+            .await
+            .unwrap()
+        );
     }
 
     #[serial_test::serial(db)]
@@ -416,14 +477,44 @@ mod authz_tests {
         .bind(uuid::Uuid::new_v4()).bind(org).bind(uid)
         .execute(&p).await.unwrap();
 
-        let actor = slash_core::pipeline::Actor { login: "alice".into(), github_user_id: 111 };
+        let actor = slash_core::pipeline::Actor {
+            login: "alice".into(),
+            github_user_id: 111,
+        };
         let gate = crate::grants_trust_gate::GrantsTrustGate;
         let grants = preload_grants(&p, 111, 9, "acme", "widgets").await.unwrap();
-        assert!(gate.check(&grants, &actor, "deploy", slash_config::Permission::Write).is_granted());
-        assert!(!gate.check(&grants, &actor, "release", slash_config::Permission::Admin).is_granted());
+        assert!(
+            gate.check(&grants, &actor, "deploy", slash_config::Permission::Write)
+                .is_granted()
+        );
+        assert!(
+            !gate
+                .check(&grants, &actor, "release", slash_config::Permission::Admin)
+                .is_granted()
+        );
         let no_grants = preload_grants(&p, 999, 9, "acme", "widgets").await.unwrap();
-        assert!(!gate.check(&no_grants, &actor, "deploy", slash_config::Permission::Write).is_granted());
-        let no_grants2 = preload_grants(&p, 111, 12345, "acme", "widgets").await.unwrap();
-        assert!(!gate.check(&no_grants2, &actor, "deploy", slash_config::Permission::Write).is_granted());
+        assert!(
+            !gate
+                .check(
+                    &no_grants,
+                    &actor,
+                    "deploy",
+                    slash_config::Permission::Write
+                )
+                .is_granted()
+        );
+        let no_grants2 = preload_grants(&p, 111, 12345, "acme", "widgets")
+            .await
+            .unwrap();
+        assert!(
+            !gate
+                .check(
+                    &no_grants2,
+                    &actor,
+                    "deploy",
+                    slash_config::Permission::Write
+                )
+                .is_granted()
+        );
     }
 }

@@ -5,9 +5,9 @@
 //! async by the server (`load_for_repo`) and handed in as `&[ResolvedGrant]`;
 //! this stage is sync and IO-free (R2 Option B).
 
+use slash_config::Permission;
 use slash_core::Decision;
 use slash_core::pipeline::{Actor, ResolvedGrant, TrustGate, TrustOutcome};
-use slash_config::Permission;
 
 /// A `TrustGate` that decides via `slash_core::grants::decide`.
 ///
@@ -47,8 +47,9 @@ impl TrustGate for GrantsTrustGate {
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
+    use slash_core::pipeline::Actor;
     use slash_core::{GrantEffect, GrantScope};
-    use slash_core::pipeline::Actor;    fn rg(scope: GrantScope, effect: GrantEffect, permission: Permission) -> ResolvedGrant {
+    fn rg(scope: GrantScope, effect: GrantEffect, permission: Permission) -> ResolvedGrant {
         ResolvedGrant {
             scope,
             effect,
@@ -68,21 +69,31 @@ mod tests {
     }
 
     fn actor() -> Actor {
-        Actor { login: "alice".into(), github_user_id: 1 }
+        Actor {
+            login: "alice".into(),
+            github_user_id: 1,
+        }
     }
 
     #[test]
     fn org_write_tier_allows_write_command() {
         let gate = GrantsTrustGate;
         let grants = [rg(GrantScope::Org, GrantEffect::Allow, Permission::Write)];
-        assert!(gate.check(&grants, &actor(), "deploy", Permission::Write).is_granted());
+        assert!(
+            gate.check(&grants, &actor(), "deploy", Permission::Write)
+                .is_granted()
+        );
     }
 
     #[test]
     fn org_write_tier_denies_admin_command() {
         let gate = GrantsTrustGate;
         let grants = [rg(GrantScope::Org, GrantEffect::Allow, Permission::Write)];
-        assert!(!gate.check(&grants, &actor(), "release", Permission::Admin).is_granted());
+        assert!(
+            !gate
+                .check(&grants, &actor(), "release", Permission::Admin)
+                .is_granted()
+        );
     }
 
     #[test]
@@ -92,7 +103,11 @@ mod tests {
             rg(GrantScope::Org, GrantEffect::Allow, Permission::Admin),
             rgc("deploy", GrantEffect::Deny, Permission::Write),
         ];
-        assert!(!gate.check(&grants, &actor(), "deploy", Permission::Write).is_granted());
+        assert!(
+            !gate
+                .check(&grants, &actor(), "deploy", Permission::Write)
+                .is_granted()
+        );
     }
 
     #[test]
@@ -104,8 +119,15 @@ mod tests {
             rg(GrantScope::Org, GrantEffect::Allow, Permission::Admin),
             rgc("deploy", GrantEffect::Deny, Permission::Write),
         ];
-        assert!(!gate.check(&grants, &actor(), "deploy", Permission::Write).is_granted());
-        assert!(gate.check(&grants, &actor(), "release", Permission::Write).is_granted());
+        assert!(
+            !gate
+                .check(&grants, &actor(), "deploy", Permission::Write)
+                .is_granted()
+        );
+        assert!(
+            gate.check(&grants, &actor(), "release", Permission::Write)
+                .is_granted()
+        );
     }
 
     #[test]
@@ -114,6 +136,10 @@ mod tests {
         // org-scope allow only; a command-scope den y for a different command
         // doesn't matter; anything not allowed is denied.
         let grants: &[ResolvedGrant] = &[];
-        assert!(!gate.check(grants, &actor(), "deploy", Permission::Write).is_granted());
+        assert!(
+            !gate
+                .check(grants, &actor(), "deploy", Permission::Write)
+                .is_granted()
+        );
     }
 }

@@ -9,12 +9,12 @@
 
 use std::sync::Arc;
 
-use argon2::password_hash::{rand_core::OsRng, SaltString};
+use argon2::password_hash::{SaltString, rand_core::OsRng};
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use hmac::{Hmac, Mac};
 use hmac::digest::KeyInit;
+use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
@@ -30,8 +30,8 @@ pub struct AuthSecret(pub Arc<str>);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SessionClaims {
-    pub sub: uuid::Uuid,   // user id
-    pub exp: u64,          // unix seconds
+    pub sub: uuid::Uuid, // user id
+    pub exp: u64,        // unix seconds
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -96,9 +96,7 @@ pub fn sign_token(secret: &AuthSecret, user_id: uuid::Uuid) -> Result<String, Au
 /// Verify a session token and return its `user_id`. Fails closed on any
 /// tampering, expiry, or signature mismatch.
 pub fn verify_token(secret: &AuthSecret, token: &str) -> Result<uuid::Uuid, AuthError> {
-    let (payload, mac_str) = token
-        .split_once('.')
-        .ok_or(AuthError::InvalidToken)?;
+    let (payload, mac_str) = token.split_once('.').ok_or(AuthError::InvalidToken)?;
     // Constant-time compare on the MAC.
     let expected = hmac(secret, payload.as_bytes());
     let actual_bytes = URL_SAFE_NO_PAD
@@ -127,9 +125,7 @@ pub fn verify_token(secret: &AuthSecret, token: &str) -> Result<uuid::Uuid, Auth
 
 /// Build a `Set-Cookie` value for the session cookie.
 pub fn set_cookie_value(token: &str) -> String {
-    format!(
-        "{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={TOKEN_TTL_SECS}"
-    )
+    format!("{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={TOKEN_TTL_SECS}")
 }
 
 /// Build a `Set-Cookie` value that clears the session cookie (logout).
@@ -237,7 +233,10 @@ mod tests {
         assert!(v.starts_with("slash_session=abc;"));
         assert!(v.contains("HttpOnly"));
         let header = "something=1; slash_session=thetoken; other=2";
-        assert_eq!(session_token_from_header(Some(header)).as_deref(), Some("thetoken"));
+        assert_eq!(
+            session_token_from_header(Some(header)).as_deref(),
+            Some("thetoken")
+        );
         assert_eq!(session_token_from_header(None), None);
     }
 }
