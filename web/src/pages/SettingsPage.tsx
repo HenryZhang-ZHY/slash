@@ -4,6 +4,7 @@ import { useOutletContext, useSearchParams } from 'react-router-dom'
 import { CheckCircle2 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
+import { AccessTokensSection } from '@/components/AccessTokensSection'
 import type { DashboardContext } from '@/components/AppShell'
 import { githubErrorKey } from '@/lib/authFlow'
 
@@ -103,6 +104,8 @@ export function SettingsPage() {
             </div>
           ) : null}
         </section>
+
+        <AccessTokensSection />
       </div>
     </div>
   )

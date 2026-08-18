@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { api, testEngineApi } from "./api";
+import { accessTokenApi, api, testEngineApi } from "./api";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -174,6 +174,50 @@ describe("authentication API", () => {
     await expect(api.me()).rejects.toMatchObject({
       message: "not signed in",
       status: 401,
+    });
+  });
+});
+
+describe("accessTokenApi", () => {
+  it("creates a named token with the selected expiry", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          accessToken: {
+            id: "token-1",
+            name: "Claude agent",
+            createdAt: "2026-08-18T13:00:00Z",
+            lastUsedAt: null,
+            expiresAt: "2026-11-16T13:00:00Z",
+          },
+          token: "slash_pat_secret",
+        }),
+        { status: 201, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await accessTokenApi.create("Claude agent", 90);
+
+    expect(result.token).toBe("slash_pat_secret");
+    expect(fetchMock).toHaveBeenCalledWith("/api/access-tokens", {
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      method: "POST",
+      body: JSON.stringify({ name: "Claude agent", expiresInDays: 90 }),
+    });
+  });
+
+  it("revokes a token by id", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await accessTokenApi.revoke("token-1");
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/access-tokens/token-1", {
+      credentials: "same-origin",
+      headers: undefined,
+      method: "DELETE",
     });
   });
 });

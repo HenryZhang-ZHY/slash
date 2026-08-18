@@ -39,6 +39,10 @@ Engine 等 Slash 原生产品；slash command 权限由 GitHub 仓库权限独�
 `/settings` 从 `GET /api/auth/me` 读取真实连接状态。邮箱密码用户可以通过
 `POST /api/auth/github/connect` 显式连接 GitHub；已连接用户会看到 GitHub login。
 
+同一页面允许每个用户为 Agent 和 REST API 客户端创建、查看和撤销个人 Access Token。
+明文只在创建后显示一次；列表会展示创建、最近使用和到期状态，不会再次暴露凭据。
+详见[个人 Access Token](/zh/api/access-tokens/)。
+
 ## Test Engine 控制台
 
 `/tests` 页面是 Test Engine 控制面板。你可以：

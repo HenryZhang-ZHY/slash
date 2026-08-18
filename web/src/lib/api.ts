@@ -83,6 +83,32 @@ export const api = {
     }),
 }
 
+export interface AccessToken {
+  id: string
+  name: string
+  createdAt: string
+  lastUsedAt: string | null
+  expiresAt: string | null
+}
+
+export interface IssuedAccessToken {
+  accessToken: AccessToken
+  token: string
+}
+
+export const accessTokenApi = {
+  list: () => request<AccessToken[]>('/api/access-tokens'),
+  create: (name: string, expiresInDays?: number) =>
+    request<IssuedAccessToken>('/api/access-tokens', {
+      method: 'POST',
+      body: JSON.stringify({ name, expiresInDays }),
+    }),
+  revoke: (id: string) =>
+    request<void>(`/api/access-tokens/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
+}
+
 // --- Test Engine console API (docs/test-engine.md) ---
 
 export interface TestSuiteSummary {
