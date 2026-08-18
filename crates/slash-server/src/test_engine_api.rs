@@ -17,7 +17,7 @@ use crate::test_engine;
 use crate::userapi::UserId;
 
 /// The installation the manual-testing console shows (tenant scoping is a
-/// follow-up once org/grants grants land). The first/primary installation the
+/// follow-up once repository selection lands). The first/primary installation the
 /// instance is installed on.
 const CONSOLE_INSTALLATION_ID: i64 = 1;
 

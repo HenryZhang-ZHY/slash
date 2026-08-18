@@ -14,9 +14,6 @@ pub mod db;
 pub mod deliveries;
 pub mod flaky;
 pub mod github_oauth;
-pub mod grants_admin;
-pub mod grants_loader;
-pub mod grants_trust_gate;
 pub mod ingestion;
 pub mod installations;
 pub mod invocations;
@@ -180,15 +177,6 @@ pub async fn run() {
             post(github_oauth::start_github_connect),
         )
         .route("/api/teams", post(userapi::create_team))
-        .route(
-            "/api/grants",
-            get(grants_admin::list_grants).post(grants_admin::create_grant),
-        )
-        .route(
-            "/api/grants/{id}",
-            axum::routing::delete(grants_admin::delete_grant),
-        )
-        .route("/api/org/members", get(grants_admin::org_members))
         .route(
             "/api/test-engine/suites",
             get(test_engine_api::list_suites).post(test_engine_api::create_suite),
