@@ -198,7 +198,7 @@ pub async fn login(
     // Timing-safe login: when no row matches we still run an Argon2 verify
     // against a fixed dummy hash, so a non-existent email costs the same as
     // a valid email with a wrong password. This closes the user-enumeration
-    // side channel (SlashLead review note) without changing the behavior.
+    // side channel without changing the behavior.
     let (id, phc_hash, display_name): (Uuid, String, String) = match row {
         Ok(Some(r)) => r,
         Ok(None) => {

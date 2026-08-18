@@ -34,8 +34,9 @@ are implemented. The remaining step is demonstrating the design's success
 criteria end-to-end against a live GitHub App on a real repository (see
 [site/src/content/docs/limitations.mdx](site/src/content/docs/limitations.mdx)).
 
-- [Product & technical spec](docs/design/0.0.1-spec.md)
-- [Implementation plan](docs/design/0.0.1-implementation-plan.md)
+- [Architecture](docs/architecture.md)
+- [Test Engine architecture](docs/test-engine.md)
+- [Design decisions](docs/design/)
 - [User documentation](site/src/content/docs/)
 
 ## License

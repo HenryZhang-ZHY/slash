@@ -1,5 +1,5 @@
-//! `POST /v1/test-engine/upload` — the M1 ingestion endpoint (docs/design/
-//! 1.0-test-engine.md §4, §5). Accepts a normalized raw-JSON batch of test
+//! `POST /v1/test-engine/upload` — the ingestion endpoint
+//! (`docs/test-engine.md`). Accepts a normalized raw-JSON batch of test
 //! executions, authenticated by a per-suite collection token (design §4),
 //! and writes it durably into the test engine record. This is the slim,
 //! server-side collector form pinned by §8 Q2 — no compiled client binary.

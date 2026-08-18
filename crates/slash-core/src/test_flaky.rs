@@ -1,5 +1,5 @@
-//! Test-engine flaky detection — the *pure* part (docs/design/1.0-test-engine.md
-//! §5, @Quality P3 / R9). Lives in `slash-core` because the decision —
+//! Test-engine flaky detection — the pure part (`docs/test-engine.md`). Lives
+//! in `slash-core` because the decision —
 //! "does this execution sequence constitute a flaky test?" — is pure
 //! computation over a status sequence, with zero network or database IO.
 //! The server layer collects the executions and drives the reconcile; it

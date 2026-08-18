@@ -4,7 +4,7 @@
 //! onboarding Web App. Password hashing via Argon2 (PHC string, stored in
 //! `users.password_hash`); sessions are stateless HMAC-SHA256-signed tokens
 //! carried in an HttpOnly cookie (`slash_session`). Stateless tokens are a
-//! deliberate MVP choice (@SlashLead-approved): zero session-table overhead
+//! deliberate MVP choice: zero session-table overhead
 //! and fail-closed discipline; revocation can be added additively later.
 
 use std::sync::Arc;

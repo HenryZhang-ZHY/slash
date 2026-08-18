@@ -1,5 +1,5 @@
-//! Test-engine collection-token crypto — the *pure* part (docs/design/
-//! 1.0-test-engine.md §4). Lives in `slash-core` because the token
+//! Test-engine collection-token crypto — the pure part (`docs/test-engine.md`).
+//! Lives in `slash-core` because the token
 //! encrypt/decrypt/hash logic is pure computation over a secret, with zero
 //! network or database IO. The server layer stores the ciphertext/hash and
 //! maps the opaque `AuthSecret` onto the raw secret bytes here.

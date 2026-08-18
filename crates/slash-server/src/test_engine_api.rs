@@ -1,4 +1,4 @@
-//! Test Engine console read API (docs/design/1.0-test-engine.md §6 M2, UI).
+//! Test Engine console API (`docs/test-engine.md`).
 //! A small set of authenticated read endpoints that back the manual-testing
 //! console page (`/tests` in `web/`): list suites + tests with their current
 //! disposition so a human can eyeball what's been ingested / quarantined.

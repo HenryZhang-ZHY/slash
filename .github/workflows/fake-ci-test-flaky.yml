@@ -1,14 +1,14 @@
 name: Fake CI Test Flaky
 
-# Dogfood the M1 Test Engine closed loop (docs/design/1.0-test-engine.md §5) as
+# Dogfood the Test Engine closed loop (docs/test-engine.md) as
 # a "ready to wire" template. The jobs in this workflow:
 #
 #   1. Run a fake test that is *deterministically flaky*: it fails on odd
 #      `github.run_number`s and passes on even ones. Over repeated invocations
-#      this produces the fail→pass recovery that the flaky detector (§8 Q4:
+#      this produces the fail→pass recovery that the flaky detector requires:
 #      >=3 executions in a rolling 7-day window) uses to mute the test.
 #   2. Upload the result to the server's ingestion endpoint
-#      (`/v1/test-engine/upload`, server-side collector form per §8 Q2),
+#      (`/v1/test-engine/upload`, using the server-side collector),
 #      authenticated by a per-suite collection token.
 #   3. Consult the disposal endpoint (`/v1/test-engine/quarantined`) and, once
 #      the fake test has been muted/skipped, stop letting it fail the PR — the

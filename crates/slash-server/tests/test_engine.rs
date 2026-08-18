@@ -1,5 +1,5 @@
 //! Postgres-backed integration tests for the Test Engine durable record
-//! (docs/design/1.0-test-engine.md §3, §4, §5). These exercise the real
+//! (`docs/test-engine.md`). These exercise the real
 //! repository + flaky reconcile against a local Postgres and are gated on
 //! `SLASH_TEST_DATABASE_URL` — they skip cleanly when it is absent (plan M4),
 //! mirroring the unit-test `test_pool` convention.

@@ -1,3 +1,11 @@
+---
+outline:
+  - explicit authentication intents
+  - identity and account ownership
+  - onboarding and team boundary
+  - security and conflict behavior
+---
+
 # GitHub authentication and account connection
 
 Status: accepted for implementation (2026-08-18)
@@ -75,6 +83,15 @@ share account-resolution policy.
 
 Email is profile and contact data, not an external identity key. GitHub login
 and rename stability come from the numeric GitHub user id.
+
+## Account and team boundary
+
+Users own their credentials, profile, external identities, and Test Engine
+suites. Organizations are a namespace for Slash-native collaboration; teams
+provide that collaboration boundary and determine whether onboarding is
+complete. GitHub command authorization is independent of Slash organizations
+and teams, as defined in
+[GitHub command authorization](github-command-authorization.md).
 
 ## Persistence and API surface
 

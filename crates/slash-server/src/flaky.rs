@@ -1,5 +1,5 @@
-//! Flaky test detector — the level-triggered reconcile (docs/design/
-//! 1.0-test-engine.md §5). Runs over the durable execution record, never from
+//! Flaky test detector — the level-triggered reconcile (`docs/test-engine.md`).
+//! Runs over the durable execution record, never from
 //! events directly, and transitions `tests.state` with a guarded CAS so manual
 //! state edits and concurrent reconciles can't race destructively.
 //!
@@ -85,7 +85,7 @@ pub async fn reconcile(pool: &PgPool) -> Result<usize, sqlx::Error> {
 
 /// Returns the observed execution status as core's pure status view. This is
 /// the only seam between the storage-layer status enum and `slash_core`'s
-/// IO-free decision module (docs/design/1.0-test-engine.md §5, P3/R9).
+/// IO-free decision module described in `docs/test-engine.md`.
 fn to_observed(executions: &[ExecutionStatus]) -> Vec<slash_core::ObservedStatus> {
     executions
         .iter()

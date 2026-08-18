@@ -1,5 +1,5 @@
-//! Postgres repository for the Test Engine durable record (docs/design/
-//! 1.0-test-engine.md §3, §3.1): test_suites, tests, test_runs,
+//! Postgres repository for the Test Engine durable record
+//! (`docs/test-engine.md`): test_suites, tests, test_runs,
 //! test_executions. Mirrors the `invocations` module's conventions — guarded
 //! compare-and-swap on `tests.state`, tenancy-scoped identities, Postgres-only
 //! via sqlx.
@@ -288,7 +288,7 @@ pub const RECONCILE_PAGE_SIZE: i64 = 256;
 /// `id`, picking up strictly after `after_id`. A cursor sweep (`after_id`
 /// advancing across pages) replaces the full-table scan of `all_tests` so the
 /// reconcile stays bounded on memory as the `tests` table grows and is
-/// naturally tenancy-neutral to batch (SlashLead review note, design §5).
+/// naturally tenancy-neutral to batch.
 ///
 /// Pass `None` for the first page; stop when a page is shorter than the page
 /// size (or empty).

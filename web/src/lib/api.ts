@@ -84,7 +84,7 @@ export const api = {
     }),
 }
 
-// --- Test Engine console API (docs/design/1.0-test-engine.md §6) ---
+// --- Test Engine console API (docs/test-engine.md) ---
 
 export interface TestSuiteSummary {
   id: string
