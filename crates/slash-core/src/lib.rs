@@ -21,7 +21,7 @@ pub use grants::{
     Decision, GrantEffect, GrantRow, GrantScope, decide, resolve_grant_rows, tier_meets,
 };
 pub use invocation::InvocationStatus;
-pub use permission::{ResolvedRole, meets};
+pub use permission::{ResolvedRole, authorizes_command, meets};
 pub use pipeline::{
     Actor, PipelineContext, PipelineStage, ResolvedGrant, StageOutput, TerminalReason, TrustGate,
     TrustOutcome,
