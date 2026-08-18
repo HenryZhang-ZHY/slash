@@ -1,9 +1,11 @@
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useOutletContext } from 'react-router-dom'
+import { useOutletContext, useSearchParams } from 'react-router-dom'
 import { CheckCircle2 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import type { DashboardContext } from '@/components/AppShell'
+import { githubErrorKey } from '@/lib/authFlow'
 
 function GithubIcon({ className }: { className?: string }) {
   return (
@@ -16,9 +18,16 @@ function GithubIcon({ className }: { className?: string }) {
 export function SettingsPage() {
   const { me } = useOutletContext<DashboardContext>()
   const { t } = useTranslation()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const [githubResult] = useState(() => searchParams.get('github'))
+  const [githubError] = useState(() => searchParams.get('reason'))
+  const github = me.connections.github
 
-  const params = new URLSearchParams(window.location.search)
-  const githubLinked = params.get('github') === 'linked'
+  useEffect(() => {
+    if (searchParams.has('github') || searchParams.has('reason')) {
+      setSearchParams({}, { replace: true })
+    }
+  }, [searchParams, setSearchParams])
 
   return (
     <div className="mx-auto w-full max-w-[1680px] px-4 py-6 md:px-8 md:py-8">
@@ -59,22 +68,36 @@ export function SettingsPage() {
                 <div>
                   <div className="text-sm font-medium">GitHub</div>
                   <div className="text-xs text-muted-foreground">
-                    {t('settings.githubDescription')}
+                    {github
+                      ? t('settings.githubConnectedAs', { login: github.login, email: github.email })
+                      : t('settings.githubDescription')}
                   </div>
                 </div>
               </div>
-              <form method="POST" action="/api/auth/github/link">
-                <Button type="submit" variant="outline" size="sm">
-                  {t('settings.connectGitHub')}
-                </Button>
-              </form>
+              {github ? (
+                <span className="flex items-center gap-1.5 text-xs font-medium text-emerald-700">
+                  <CheckCircle2 className="size-4" />
+                  {t('settings.connected')}
+                </span>
+              ) : (
+                <form method="POST" action="/api/auth/github/connect">
+                  <Button type="submit" variant="outline" size="sm">
+                    {t('settings.connectGitHub')}
+                  </Button>
+                </form>
+              )}
             </div>
           </div>
 
-          {githubLinked ? (
+          {githubResult === 'connected' ? (
             <div className="mt-3 flex items-center gap-2 border-l-2 border-emerald-500 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
               <CheckCircle2 className="size-4" />
               {t('settings.githubLinkedSuccess')}
+            </div>
+          ) : null}
+          {githubResult === 'error' ? (
+            <div className="mt-3 border-l-2 border-red-500 bg-red-50 px-3 py-2 text-sm text-red-700">
+              {t(githubErrorKey(githubError))}
             </div>
           ) : null}
         </section>
