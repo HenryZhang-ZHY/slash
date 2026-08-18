@@ -16,7 +16,8 @@ JSON 响应里的时间戳是 RFC 3339 字符串。
 
 | 表面 | 认证 |
 | --- | --- |
-| 账户、团队和 Test Engine 管理 | register 或 login 签发的 `slash_session` cookie |
+| 账户、团队和 Test Engine 管理 | `slash_session` cookie 或个人 Bearer token |
+| 个人 Access Token 管理 | 仅 `slash_session` cookie |
 | 测试结果 ingestion 与隔离查询 | `Authorization: Bearer <collection-token>` |
 | GitHub webhook | `X-Hub-Signature-256` HMAC 签名 |
 | 健康与指标 | 无 |
@@ -34,6 +35,14 @@ JSON 响应里的时间戳是 RFC 3339 字符串。
 | `POST` | `/api/auth/logout` | 清除当前会话 |
 | `GET` | `/api/auth/me` | 读取当前用户和团队 |
 | `POST` | `/api/teams` | 创建团队 |
+
+### [个人 Access Token](/zh/api/access-tokens/)
+
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| `GET` | `/api/access-tokens` | 列出当前用户的 token |
+| `POST` | `/api/access-tokens` | 创建并一次性显示 token |
+| `DELETE` | `/api/access-tokens/{id}` | 撤销 token |
 
 ### [Test Engine 管理](/zh/api/test-engine/)
 

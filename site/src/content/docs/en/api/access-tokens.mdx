@@ -1,0 +1,73 @@
+---
+title: Personal access tokens
+description: "Create and revoke credentials for agents and REST API clients."
+sidebar:
+  order: 2
+---
+
+Personal access tokens let agents and other programs call authenticated Slash
+REST APIs as the user who created the token. They do not add permissions: every
+request still uses the user's current teams and repository authorization.
+
+Send the token in the Authorization header:
+
+```sh
+curl -H "Authorization: Bearer $SLASH_ACCESS_TOKEN" \
+  https://slash.example.com/api/auth/me
+```
+
+Token-management endpoints require a `slash_session` browser cookie. A personal
+access token cannot create or revoke credentials.
+
+## POST `/api/access-tokens`
+
+Creates a token. The plaintext `token` is returned only in this response.
+
+```sh
+curl -b cookies.txt \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Claude agent","expiresInDays":90}' \
+  https://slash.example.com/api/access-tokens
+```
+
+`name` must contain 1-100 characters after trimming. `expiresInDays` is
+optional; when present it must be from 1 through 365. Omit it for no expiry.
+
+Success: `201 Created`.
+
+```json
+{
+  "accessToken": {
+    "id": "1165fc2c-64f4-49f6-b77c-15317cf59fb8",
+    "name": "Claude agent",
+    "createdAt": "2026-08-18T13:00:00Z",
+    "lastUsedAt": null,
+    "expiresAt": "2026-11-16T13:00:00Z"
+  },
+  "token": "slash_pat_..."
+}
+```
+
+## GET `/api/access-tokens`
+
+Lists the current user's non-revoked tokens, newest first. The plaintext is
+never returned. Expired tokens remain visible; compare `expiresAt` with the
+current time. `lastUsedAt` is updated at most once every five minutes.
+
+```sh
+curl -b cookies.txt https://slash.example.com/api/access-tokens
+```
+
+Success: `200 OK` with an array of `accessToken` objects shown above.
+
+## DELETE `/api/access-tokens/{id}`
+
+Immediately revokes one token owned by the current user.
+
+```sh
+curl -b cookies.txt -X DELETE \
+  https://slash.example.com/api/access-tokens/1165fc2c-64f4-49f6-b77c-15317cf59fb8
+```
+
+Success is `204 No Content`. An unknown token or a token owned by another user
+returns `404` without revealing ownership.

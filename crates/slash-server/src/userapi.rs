@@ -477,9 +477,40 @@ async fn load_github_connection(
 
 // ---- auth extractor -----------------------------------------------------------
 
-/// Extracted authenticated user id from the session cookie.
+/// Extracted authenticated user id from either a personal Bearer token or the
+/// browser session cookie. An explicit Authorization header always wins and
+/// fails closed instead of falling back to a cookie.
 #[derive(Clone, Copy)]
 pub struct UserId(pub Uuid);
+
+/// Browser-session-only identity for credential-management endpoints. A
+/// personal access token cannot mint or revoke other credentials.
+#[derive(Clone, Copy)]
+pub struct SessionUserId(pub Uuid);
+
+#[derive(Debug)]
+enum RequestAuthError {
+    MissingSession,
+    ExpiredSession,
+    InvalidSession,
+    InvalidAccessToken,
+    AccessTokenDatabase,
+}
+
+impl RequestAuthError {
+    fn into_response(self) -> Response {
+        match self {
+            Self::MissingSession => api_error(StatusCode::UNAUTHORIZED, "not signed in"),
+            Self::ExpiredSession => api_error(StatusCode::UNAUTHORIZED, "session expired"),
+            Self::InvalidSession => api_error(StatusCode::UNAUTHORIZED, "invalid session"),
+            Self::InvalidAccessToken => api_error(StatusCode::UNAUTHORIZED, "invalid access token"),
+            Self::AccessTokenDatabase => api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "could not authenticate access token",
+            ),
+        }
+    }
+}
 
 // The axum `FromRequestParts` trait requires an `impl Future` return, which
 // clippy's `manual_async_fn` would otherwise suggest rewriting as `async fn`.
@@ -494,21 +525,66 @@ impl axum::extract::FromRequestParts<crate::AppState> for UserId {
         state: &crate::AppState,
     ) -> impl std::future::Future<Output = Result<Self, Self::Rejection>> + Send {
         async move {
-            let cookie = parts
-                .headers
-                .get(axum::http::header::COOKIE)
-                .and_then(|v| v.to_str().ok());
-            let token = auth::session_token_from_header(cookie)
-                .ok_or_else(|| api_error(StatusCode::UNAUTHORIZED, "not signed in"))?;
-            let user_id = match auth::verify_token(&state.auth_secret, &token) {
-                Ok(id) => id,
-                Err(AuthError::ExpiredToken) => {
-                    return Err(api_error(StatusCode::UNAUTHORIZED, "session expired"));
-                }
-                Err(_) => return Err(api_error(StatusCode::UNAUTHORIZED, "invalid session")),
-            };
-            Ok(UserId(user_id))
+            resolve_user_id(&parts.headers, state)
+                .await
+                .map(UserId)
+                .map_err(RequestAuthError::into_response)
         }
+    }
+}
+
+#[allow(clippy::manual_async_fn)]
+impl axum::extract::FromRequestParts<crate::AppState> for SessionUserId {
+    type Rejection = Response;
+
+    fn from_request_parts(
+        parts: &mut axum::http::request::Parts,
+        state: &crate::AppState,
+    ) -> impl std::future::Future<Output = Result<Self, Self::Rejection>> + Send {
+        async move {
+            resolve_session_user_id(&parts.headers, state)
+                .map(SessionUserId)
+                .map_err(RequestAuthError::into_response)
+        }
+    }
+}
+
+async fn resolve_user_id(
+    headers: &axum::http::HeaderMap,
+    state: &crate::AppState,
+) -> Result<Uuid, RequestAuthError> {
+    if let Some(value) = headers.get(axum::http::header::AUTHORIZATION) {
+        let token = value
+            .to_str()
+            .ok()
+            .and_then(|header| header.strip_prefix("Bearer "))
+            .filter(|token| !token.is_empty())
+            .ok_or(RequestAuthError::InvalidAccessToken)?;
+        return match crate::access_tokens::authenticate(&state.pool, &state.auth_secret, token)
+            .await
+        {
+            Ok(user_id) => Ok(user_id),
+            Err(crate::access_tokens::AccessTokenError::Database(_)) => {
+                Err(RequestAuthError::AccessTokenDatabase)
+            }
+            Err(_) => Err(RequestAuthError::InvalidAccessToken),
+        };
+    }
+    resolve_session_user_id(headers, state)
+}
+
+fn resolve_session_user_id(
+    headers: &axum::http::HeaderMap,
+    state: &crate::AppState,
+) -> Result<Uuid, RequestAuthError> {
+    let cookie = headers
+        .get(axum::http::header::COOKIE)
+        .and_then(|value| value.to_str().ok());
+    let token = auth::session_token_from_header(cookie).ok_or(RequestAuthError::MissingSession)?;
+    match auth::verify_token(&state.auth_secret, &token) {
+        Ok(id) => Ok(id),
+        Err(AuthError::ExpiredToken) => Err(RequestAuthError::ExpiredSession),
+        Err(_) => Err(RequestAuthError::InvalidSession),
     }
 }
 
@@ -926,6 +1002,59 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(github.login, "octocat");
+    }
+
+    #[serial_test::serial(db)]
+    #[tokio::test]
+    async fn bearer_access_token_authenticates_without_a_session_cookie() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        let user_id = Uuid::new_v4();
+        sqlx::query("INSERT INTO users (id, display_name) VALUES ($1, 'API user')")
+            .bind(user_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let state = app_state(pool.clone());
+        let issued =
+            crate::access_tokens::issue(&pool, &state.auth_secret, user_id, "Agent token", None)
+                .await
+                .unwrap();
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            format!("Bearer {}", issued.token).parse().unwrap(),
+        );
+
+        assert_eq!(resolve_user_id(&headers, &state).await.unwrap(), user_id);
+    }
+
+    #[serial_test::serial(db)]
+    #[tokio::test]
+    async fn invalid_authorization_header_does_not_fall_back_to_cookie() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        let user_id = Uuid::new_v4();
+        sqlx::query("INSERT INTO users (id, display_name) VALUES ($1, 'Browser user')")
+            .bind(user_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let state = app_state(pool);
+        let session = crate::auth::sign_token(&state.auth_secret, user_id).unwrap();
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Bearer invalid".parse().unwrap(),
+        );
+        headers.insert(
+            axum::http::header::COOKIE,
+            format!("slash_session={session}").parse().unwrap(),
+        );
+
+        assert!(resolve_user_id(&headers, &state).await.is_err());
     }
 
     #[test]

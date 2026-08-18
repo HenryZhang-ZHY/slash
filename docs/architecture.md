@@ -131,6 +131,11 @@ profile fields never merge accounts. Protocol adapters normalize provider
 responses before the provider-neutral persistence layer. The complete contract
 is in [Authentication and external identities](design/authentication.md).
 
+Personal access tokens authenticate REST API clients as their owning user and
+never copy authorization state. Plaintext tokens are shown once and only a
+keyed digest is persisted. Credential management remains browser-session-only;
+the complete lifecycle is in [Personal access tokens](design/personal-access-tokens.md).
+
 Instance administration is a separate secret-gated trust boundary. It is
 disabled when its file-backed secret is absent and grants no repository or
 organization role. The operational surface and installation reconciliation
