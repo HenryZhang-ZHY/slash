@@ -9,7 +9,7 @@ Turn broad simplification requests into a small set of evidence-backed changes t
 
 ## Establish the constraints
 
-Read `AGENTS.md`, the relevant files in `docs/design/`, and `.agents/skills/pre-push-checks/SKILL.md`. Treat `docs/design/0.0.1-spec.md` as the default architecture authority, but compare it with shipped code and newer accepted design documents before assuming it is current.
+Read `AGENTS.md`, `docs/architecture.md`, the relevant files in `docs/design/`, and `.agents/skills/pre-push-checks/SKILL.md`. Treat the architecture document as the default system authority, but compare it with shipped code and newer accepted design decisions before assuming every detail is current.
 
 Preserve these invariants unless the user explicitly requests a redesign and the replacement is documented:
 
@@ -119,4 +119,5 @@ Before pushing, summarize:
 - behavior or compatibility deliberately given up;
 - checks passed and any known baseline warning.
 
-Use a PR and leave merging to `@SlashLead`.
+Open or update the requested PR after validation; do not merge unless the user
+explicitly asks for it.

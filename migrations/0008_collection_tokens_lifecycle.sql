@@ -1,5 +1,5 @@
--- Test Engine collection-token lifecycle (docs/design/1.0-test-engine.md §4,
--- task M2-4 / token management). Adds an active/revoked status so a token can
+-- Test Engine collection-token lifecycle (docs/test-engine.md). Adds an
+-- active/revoked status so a token can
 -- be rotated/revoked (the mint+revoke admin surface), while keeping the
 -- existing `token_hash` unique and the sha256-hash-only storage invariant.
 --

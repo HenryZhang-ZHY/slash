@@ -134,7 +134,7 @@ pub async fn sweep_once(
     sweep_stale_dispatched(pool, app, config, metrics).await;
     sweep_run_deadline(pool, app, config).await;
 
-    // Test Engine flaky reconcile (docs/design/1.0-test-engine.md §5): a
+    // Test Engine flaky reconcile (`docs/test-engine.md`): a
     // level-triggered pass over the durable execution record. It runs on the
     // sweeper's existing heartbeat (not a separate timer), so replicas need no
     // leader election and a crashed pass is re-run on the next interval. Failures

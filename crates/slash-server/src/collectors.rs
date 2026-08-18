@@ -1,6 +1,6 @@
-//! Buildkite-collector JSON → normalized execution mapping (docs/design/
-//! 1.0-test-engine.md §6 M2, task M2-2). Per the "极可能抄 Buildkite"
-//! strategy, the open-source Buildkite collectors (rust / vitest) are reused as
+//! Buildkite-collector JSON → normalized execution mapping
+//! (`docs/test-engine.md`). The open-source Buildkite collectors (Rust and
+//! Vitest) are reused as
 //! the client side; slash only implements the *server-side receiving logic*:
 //! parse their on-the-wire JSON dialect and normalize it into the same
 //! `NormalizedExecution` shape the raw-JSON ingestion path already writes.

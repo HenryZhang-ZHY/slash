@@ -5,7 +5,7 @@
 -- call in the authorize path). Fail-closed / deny-by-default is enforced in
 -- code (slash-core grants), not by schema; the schema only stores the facts.
 --
--- Two-tier default semantics (docs/design/1.0-org-grants.md):
+-- Historical two-tier grant semantics:
 --   * a repo with no grants keeps current behavior (fall back to the GitHub
 --     collaborator API is the *default fallback*, not an allow here);
 --   * a repo with grants is strictly grants-only + deny-by-default, enabled

@@ -1,10 +1,10 @@
 # Slash — agent working conventions
 
 Slash is a GitHub-PR slash-command control plane (Rust workspace). These
-conventions apply to every agent working in this repository. Design authority
-lives in `docs/design/` (the `0.0.1-spec.md` is the source of truth for
-architecture invariants); lane-specific ownership is documented in each
-agent's own runtime, not here.
+conventions apply to every agent working in this repository. System invariants
+live in `docs/architecture.md`; current topic-specific decisions live in
+`docs/design/`. Lane-specific ownership is documented in each agent's own
+runtime, not here.
 
 ## Working language
 
@@ -28,15 +28,17 @@ Run the full local gate before pushing, so CI does not fail on something you
 could have caught locally — see
 [`.agents/skills/pre-push-checks/SKILL.md`](.agents/skills/pre-push-checks/SKILL.md).
 
+## Documentation ownership
+
+Keep stable system invariants in `docs/architecture.md`, implemented
+topic-specific decisions in `docs/design/`, and operator or user procedures in
+their audience-specific directories. Do not commit review transcripts,
+temporary implementation plans, or milestone checklists as durable product
+documentation. Link code comments to a stable document by name instead of to
+section numbers that will drift.
+
 ## Secrets are file-only
 
 Every secret is configured via a `*_PATH` env var pointing at a file read
 byte-for-byte at startup — never an inline env var, and never trimmed. There
 is exactly one way to configure a secret: the secure one.
-
-## Review gate
-
-@SlashLead is the single merge gate. PRs are squash-merged through the GitHub
-PR interface; do not local-merge. The merge rule and 0.0.1-spec invariants
-(fail-closed permission gate, durable-record + level-triggered reconcile,
-write-ahead dispatch) are non-negotiable.

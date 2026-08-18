@@ -1,11 +1,10 @@
--- Test Engine durable record (docs/design/1.0-test-engine.md §3, §3.1),
--- extending the spec §7.2 state model: a durable record plus level-triggered
+-- Test Engine durable record (docs/test-engine.md), extending the durable
+-- state model with level-triggered
 -- reconciliation. Test results are events from CI; slash normalizes them into
 -- these tables and reconciles derived state (quarantine) from the record, never
 -- from the events directly.
 --
--- Schema lands in M1 (task M1-1); the flaky detector / ingestion that populate
--- it are M1-2/M1-3.
+-- The flaky detector and ingestion pipeline populate this schema.
 
 -- A named collection of tests, scoped to a tenancy + repo (design §3).
 CREATE TABLE test_suites (
@@ -36,9 +35,9 @@ CREATE TABLE tests (
     state TEXT NOT NULL DEFAULT 'enabled' CHECK (state IN ('enabled', 'muted', 'skipped')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     -- Set manually by `set_test_state` (guarded CAS), not by a trigger. No
-    -- `updated_at` index in M1: the flaky reconcile sweeps `test_executions`
+    -- `updated_at` index: the flaky reconcile sweeps `test_executions`
     -- by (test_id, captured_at), not `tests.updated_at`. Revisit (trigger +
-    -- index) only if that sweep becomes a hot path (SlashLead review note).
+    -- index) only if that sweep becomes a measured hot path.
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     -- Suite + name identity (design §3).
     CONSTRAINT tests_suite_name_unique UNIQUE (suite_id, name)
@@ -64,8 +63,8 @@ CREATE TABLE test_runs (
 
 CREATE INDEX test_runs_suite_idx ON test_runs (suite_id);
 
--- One observed result of a test, append-only (design §3). Immutable once
--- recorded; retention purges after 120 days (Buildkite parity, design §3.1).
+-- One observed result of a test, append-only and immutable once recorded.
+-- No execution-retention job is currently implemented.
 CREATE TABLE test_executions (
     id UUID PRIMARY KEY,
     test_id UUID NOT NULL REFERENCES tests(id) ON DELETE CASCADE,

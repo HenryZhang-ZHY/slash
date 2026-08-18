@@ -1,5 +1,5 @@
-//! JUnit XML → normalized execution parser (docs/design/1.0-test-engine.md §6
-//! M2, task M2-1). Accepts the widely-produced JUnit XML report format
+//! JUnit XML → normalized execution parser (`docs/test-engine.md`). Accepts
+//! the widely-produced JUnit XML report format
 //! (`<testsuite>`/`<testcase>` with `<failure>`/`<error>`/`<skipped>` children,
 //! `time` attributes) and normalizes it into the ingestion batch shape already
 //! understood by the test-engine data model (§3) — the same schema as the
@@ -297,11 +297,11 @@ mod tests {
         assert_eq!(batch.executions[0].duration_ms, 12);
     }
 
-    /// Realistic `vitest --reporter=junit` output (Buildkite-style collectors,
-    /// SlashLead M2-2 note): a `<testsuites>` root wrapping nested
-    /// `<testsuite>` elements, each with `<testcase>` children. Our parser is
-    /// root-agnostic (it finds every `<testcase>` in document order), so this
-    /// nests cleanly and every testcase maps to the correct status.
+    /// Realistic `vitest --reporter=junit` output: a `<testsuites>` root
+    /// wrapping nested `<testsuite>` elements, each with `<testcase>` children.
+    /// Our parser is root-agnostic (it finds every `<testcase>` in document
+    /// order), so this nests cleanly and every testcase maps to the correct
+    /// status.
     #[test]
     fn vitest_junit_report_parses_cleanly() {
         let xml = br#"<?xml version="1.0" encoding="UTF-8" ?>

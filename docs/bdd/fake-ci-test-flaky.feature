@@ -1,6 +1,6 @@
 Feature: Run a fake flaky CI command that exercises the Test Engine dogfood loop
 
-  The Test Engine closed loop (docs/design/1.0-test-engine.md §5) dogfooded on
+  The Test Engine closed loop (docs/test-engine.md) dogfooded on
   the slash repo itself: a fake *flaky* test is ingested, auto-quarantined by
   the flaky detector, and then skipped/soft-failed by the disposal hook so it
   stops flipping a PR's required check. "Ready to wire": needs a Test Engine
