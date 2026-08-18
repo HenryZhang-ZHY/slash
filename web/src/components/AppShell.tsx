@@ -72,6 +72,8 @@ export function AppShell() {
       ? t('app.settings')
       : t('app.overview')
   const primaryTeam = me.teams[0]
+  const accountLabel = me.user.email ?? me.connections.github?.login ?? me.user.displayName ?? t('app.personalWorkspace')
+  const accountIdentity = me.user.email ?? (me.connections.github ? `@${me.connections.github.login}` : me.user.displayName)
 
   return (
     <div className="min-h-screen bg-[#f7f7f7] md:grid md:grid-cols-[232px_minmax(0,1fr)]">
@@ -86,11 +88,11 @@ export function AppShell() {
         <div className="border-b px-3 py-3">
           <div className="flex items-center gap-2 px-2 py-1.5">
             <div className="flex size-7 items-center justify-center border bg-white text-xs font-semibold">
-              {(primaryTeam?.name ?? me.user.email).slice(0, 1).toUpperCase()}
+              {(primaryTeam?.name ?? accountLabel).slice(0, 1).toUpperCase()}
             </div>
             <div className="min-w-0">
               <div className="truncate text-sm font-medium">{primaryTeam?.name ?? t('app.personalWorkspace')}</div>
-              <div className="truncate text-xs text-muted-foreground">{primaryTeam?.slug ?? me.user.email}</div>
+              <div className="truncate text-xs text-muted-foreground">{primaryTeam?.slug ?? accountIdentity}</div>
             </div>
           </div>
         </div>
@@ -123,7 +125,7 @@ export function AppShell() {
         </nav>
 
         <div className="border-t p-3">
-          <div className="mb-2 truncate px-2 text-xs text-muted-foreground">{me.user.email}</div>
+          <div className="mb-2 truncate px-2 text-xs text-muted-foreground">{accountIdentity}</div>
           <Button className="w-full justify-start" variant="ghost" onClick={logout}>
             <LogOut />
             {t('app.signOut')}
@@ -162,7 +164,7 @@ export function AppShell() {
                 )
               })}
             </div>
-            <div className="hidden text-xs text-muted-foreground md:block">{me.user.email}</div>
+            <div className="hidden text-xs text-muted-foreground md:block">{accountIdentity}</div>
           </div>
         </header>
         <main className="min-w-0">

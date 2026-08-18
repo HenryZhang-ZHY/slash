@@ -82,9 +82,9 @@ generic error; the response does not reveal whether the email exists.
 
 `GET /api/auth/github/sign-in` starts GitHub sign-in. If the stable GitHub
 user id is already connected, Slash signs in its owner. Otherwise Slash
-creates a user from GitHub's verified primary email. An email collision never
-merges accounts: the callback returns to `/login` and the user must sign in
-with their existing password before connecting GitHub.
+creates a credential-free user linked to that identity. Slash does not request
+GitHub email access and never matches or merges accounts by email. A user with
+an existing password account must sign in to it before connecting GitHub.
 
 `POST /api/auth/github/connect` starts connection for the current Slash user.
 The callback requires a valid session for that same user. A GitHub identity
@@ -138,14 +138,14 @@ Success: `200 OK`.
   ],
   "connections": {
     "github": {
-      "login": "octocat",
-      "email": "octocat@example.com"
+      "login": "octocat"
     }
   }
 }
 ```
 
 `connections.github` is `null` when the user has not connected GitHub.
+For a GitHub-only account, `user.email` is `null`.
 
 Missing, invalid, expired, or unknown sessions return `401` with a JSON
 `error` message.

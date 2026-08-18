@@ -41,14 +41,16 @@ export function SettingsPage() {
         <section>
           <h2 className="mb-3 text-sm font-semibold">{t('settings.profile')}</h2>
           <div className="border">
-            <div className="flex items-center justify-between px-4 py-3">
-              <div>
-                <div className="text-xs text-muted-foreground">{t('auth.email')}</div>
-                <div className="mt-0.5 text-sm">{me.user.email}</div>
+            {me.user.email ? (
+              <div className="flex items-center justify-between px-4 py-3">
+                <div>
+                  <div className="text-xs text-muted-foreground">{t('auth.email')}</div>
+                  <div className="mt-0.5 text-sm">{me.user.email}</div>
+                </div>
               </div>
-            </div>
+            ) : null}
             {me.user.displayName ? (
-              <div className="flex items-center justify-between border-t px-4 py-3">
+              <div className={`flex items-center justify-between px-4 py-3 ${me.user.email ? 'border-t' : ''}`}>
                 <div>
                   <div className="text-xs text-muted-foreground">{t('settings.displayName')}</div>
                   <div className="mt-0.5 text-sm">{me.user.displayName}</div>
@@ -69,7 +71,7 @@ export function SettingsPage() {
                   <div className="text-sm font-medium">GitHub</div>
                   <div className="text-xs text-muted-foreground">
                     {github
-                      ? t('settings.githubConnectedAs', { login: github.login, email: github.email })
+                      ? t('settings.githubConnectedAs', { login: github.login })
                       : t('settings.githubDescription')}
                   </div>
                 </div>

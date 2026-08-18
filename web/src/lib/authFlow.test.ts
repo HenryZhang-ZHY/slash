@@ -22,7 +22,6 @@ describe('authentication product flow', () => {
   })
 
   it('maps bounded GitHub callback errors without reflecting unknown input', () => {
-    expect(githubErrorKey('account_exists')).toBe('auth.githubErrorAccountExists')
     expect(githubErrorKey('identity_in_use')).toBe('auth.githubErrorIdentityInUse')
     expect(githubErrorKey('attacker-controlled-message')).toBe('auth.githubErrorGeneric')
     expect(githubErrorKey(null)).toBe('auth.githubErrorGeneric')

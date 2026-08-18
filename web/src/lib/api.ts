@@ -5,7 +5,7 @@
 
 export interface User {
   id: string
-  email: string
+  email: string | null
   displayName: string
 }
 
@@ -17,7 +17,6 @@ export interface Team {
 
 export interface GithubConnection {
   login: string
-  email: string
 }
 
 export interface MeResponse {

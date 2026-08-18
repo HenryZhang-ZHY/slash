@@ -2,7 +2,8 @@
 //!
 //! account/password authN owned by slash (not GitHub-coupled) for the
 //! onboarding Web App. Password hashing via Argon2 (PHC string, stored in
-//! `users.password_hash`); sessions are stateless HMAC-SHA256-signed tokens
+//! `password_credentials.password_hash`); sessions are stateless
+//! HMAC-SHA256-signed tokens
 //! carried in an HttpOnly cookie (`slash_session`). Stateless tokens are a
 //! deliberate MVP choice: zero session-table overhead
 //! and fail-closed discipline; revocation can be added additively later.
@@ -55,7 +56,8 @@ pub enum AuthError {
 }
 
 /// Hash a password with a freshly generated salt (Argon2id, default params).
-/// Output is the PHC string stored verbatim in `users.password_hash`.
+/// Output is the PHC string stored verbatim in
+/// `password_credentials.password_hash`.
 pub fn hash_password(password: &str) -> Result<String, AuthError> {
     let salt = SaltString::generate(&mut OsRng);
     let params = argon2::Params::default();

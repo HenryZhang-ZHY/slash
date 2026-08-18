@@ -75,6 +75,16 @@ curl -i -c cookies.txt \
 成功：`200 OK`，一个 `Set-Cookie` 头，以及注册返回的同一 `{ "user": ... }` 形状。
 无效凭据返回 `401` 和通用错误；响应不会透露邮箱是否存在。
 
+## GitHub 登录与连接
+
+`GET /api/auth/github/sign-in` 按稳定 GitHub numeric user ID 登录；新身份会创建一个
+不带邮箱密码凭据的 Slash 账户。Slash 不申请 GitHub 邮箱权限，也绝不按邮箱匹配或
+合并账户。已有邮箱密码账户必须先登录，再调用
+`POST /api/auth/github/connect` 显式连接 GitHub。
+
+两个入口都由 GitHub 回到 `GET /api/auth/github/callback`。callback 使用 state、PKCE
+和当前会话校验，不会把 GitHub token 返回给浏览器。
+
 ## POST `/api/auth/logout`
 
 清除浏览器会话 cookie。
@@ -89,7 +99,8 @@ curl -i -b cookies.txt -X POST \
 
 ## GET `/api/auth/me`
 
-返回当前用户以及该用户所属的每个团队。
+返回当前用户、所属团队和外部身份连接状态。GitHub-only 账户的 `user.email` 为
+`null`。
 
 ```sh
 curl -b cookies.txt https://slash.example.com/api/auth/me
@@ -112,7 +123,12 @@ curl -b cookies.txt https://slash.example.com/api/auth/me
       "slug": "platform",
       "role": "maintainer"
     }
-  ]
+  ],
+  "connections": {
+    "github": {
+      "login": "octocat"
+    }
+  }
 }
 ```
 

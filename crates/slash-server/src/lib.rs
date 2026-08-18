@@ -14,6 +14,7 @@ pub mod db;
 pub mod deliveries;
 pub mod flaky;
 pub mod github_oauth;
+mod identity;
 pub mod ingestion;
 pub mod installations;
 pub mod invocations;
@@ -60,7 +61,7 @@ pub struct AppState {
     pub auth_secret: auth::AuthSecret,
     /// Root directory of the built SPA (`web/dist`).
     pub web_dir: Arc<str>,
-    /// GitHub OAuth config. `None` when OAuth login is not configured.
+    /// GitHub App user-auth config. `None` when it is not configured.
     pub github_oauth: Option<github_oauth::OauthState>,
 }
 

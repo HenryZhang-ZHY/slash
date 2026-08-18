@@ -51,9 +51,9 @@ a bad migration never leaves the process half-started.
 | `SLASH_GITHUB_APP_ID` | yes | The GitHub App's numeric ID. |
 | `SLASH_GITHUB_PRIVATE_KEY_PATH` | yes | Path to the App's private key **file** (not the key inline) — mount it read-only, mode `0400` if your platform supports setting it. |
 | `SLASH_AUTH_SECRET_PATH` | yes | Path to a file containing the HMAC session-signing secret, read byte-for-byte. File-only, like the other secrets. |
-| `SLASH_GITHUB_CLIENT_ID` | no | GitHub OAuth App client ID. Enables "Sign in with GitHub" on the login page. |
-| `SLASH_GITHUB_CLIENT_SECRET_PATH` | no | Path to a file containing the GitHub OAuth App client secret (file-only, same convention as other secrets). Required when `SLASH_GITHUB_CLIENT_ID` is set. |
-| `SLASH_BASE_URL` | with GitHub OAuth | Public base URL of the server (e.g. `https://slash.example.com`). Required with `SLASH_GITHUB_CLIENT_ID`; it constructs the exact OAuth callback URI. |
+| `SLASH_GITHUB_CLIENT_ID` | no | Client ID of the same GitHub App used by the control plane. Enables "Sign in with GitHub". |
+| `SLASH_GITHUB_CLIENT_SECRET_PATH` | no | Path to a file containing that GitHub App's client secret. Required when `SLASH_GITHUB_CLIENT_ID` is set. |
+| `SLASH_BASE_URL` | with GitHub user auth | Public base URL of the server (e.g. `https://slash.example.com`). Used to construct the exact callback URI. |
 | `SLASH_WEB_DIR` | no | Root directory of the built web console SPA. Defaults to `web/dist` (relative to the server's working directory). |
 | `RUST_LOG` | no | `tracing_subscriber` env-filter syntax, e.g. `info` or `slash_server=debug`. |
 
@@ -73,31 +73,27 @@ environment variable — only a file path — and the config struct has no
 `Debug`/`Display` implementation, so neither the webhook secret nor the
 database URL (which may embed a password) can leak via a stray log line.
 
-### GitHub OAuth login (optional)
+### GitHub App user authentication (optional)
 
-Slash supports "Sign in with GitHub" via GitHub's
-[OAuth 2.0 web application flow](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps).
-This is OAuth, not OpenID Connect: Slash receives an access token and reads
-the authenticated user through GitHub's REST API; GitHub does not issue Slash
-an ID token. When configured, a GitHub button appears on the login page;
-existing email/password accounts can connect GitHub from **Settings**.
+Slash uses the same GitHub App for repository automation and user sign-in.
+GitHub's web authorization transport returns a short-lived GitHub App user
+access token; unlike a traditional OAuth App token, it uses fine-grained App
+permissions rather than scopes. Slash reads only the authenticated `/user`
+profile and does not request access to GitHub email addresses.
 
 **Setup steps:**
 
-1. **Create a GitHub OAuth App** in your GitHub organization's
-   [Developer settings](https://github.com/organizations/YOUR_ORG/settings/applications/new):
-   - **Application name**: anything (e.g. `Slash`)
-   - **Homepage URL**: your Slash base URL (e.g. `https://slash.example.com`)
-   - **Authorization callback URL**: `{base_url}/api/auth/github/callback`
-     (must match exactly)
-2. Note the **Client ID** and generate a **Client Secret**.
-3. Set the environment variables:
+1. Open the settings for the GitHub App already used by Slash.
+2. Add `{base_url}/api/auth/github/callback` as a callback URL. It must match
+   exactly. No account-level email permission is required.
+3. Note the GitHub App **Client ID** and generate a **Client Secret**.
+4. Set the environment variables:
    ```sh
    SLASH_GITHUB_CLIENT_ID=<client_id>
    SLASH_GITHUB_CLIENT_SECRET_PATH=/run/secrets/github-oauth-secret
    SLASH_BASE_URL=https://slash.example.com   # required
    ```
-4. Store the client secret in the file (same byte-for-byte convention as
+5. Store the client secret in the file (same byte-for-byte convention as
    other secrets):
    ```sh
    echo -n 'ghp_xxxxxxxxxxxx' > /run/secrets/github-oauth-secret
@@ -106,12 +102,8 @@ existing email/password accounts can connect GitHub from **Settings**.
 
 The login flow:
 
-- **New users**: clicking "Sign in with GitHub" creates a Slash account
-  linked to the stable numeric GitHub user id and a
-  [verified primary email](https://docs.github.com/en/rest/users/emails#list-email-addresses-for-the-authenticated-user).
-- **Email conflict**: Slash never merges accounts by email. If the verified
-  GitHub email already belongs to a Slash account, sign in with that
-  account's password and connect GitHub explicitly from Settings.
+- **New users**: clicking "Sign in with GitHub" creates a credential-free
+  Slash account linked to the stable numeric GitHub user id.
 - **Existing users**: sign in with email/password, then go to **Settings →
   Connect GitHub**. The callback succeeds only while the same Slash user is
   still signed in, and neither side may already belong to a different
@@ -130,9 +122,9 @@ used only during the callback and are not stored.
 | `POST /api/auth/login`         | Sign in with email/password. |
 | `POST /api/auth/logout`        | Clear the session cookie. |
 | `GET /api/auth/me`             | Return the authenticated user, teams, and connections. |
-| `GET /api/auth/github/sign-in` | Initiate GitHub OAuth sign-in (unauthenticated). |
+| `GET /api/auth/github/sign-in` | Initiate GitHub App user sign-in (unauthenticated). |
 | `POST /api/auth/github/connect`| Initiate explicit GitHub connection (authenticated). |
-| `GET /api/auth/github/callback`| GitHub OAuth callback for both intents. |
+| `GET /api/auth/github/callback`| GitHub App user-auth callback for both intents. |
 | `GET /healthz`                 | Liveness check; always returns `200 ok` once the process is up. |
 | `GET /metrics`                 | Prometheus text-format metrics — see below. |
 

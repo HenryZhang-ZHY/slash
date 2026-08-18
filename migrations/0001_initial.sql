@@ -69,11 +69,11 @@ CREATE TABLE installations (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Slash accounts and external identities.
+-- Authentication separates the internal account, login credentials, contact
+-- data, configured trust domains, and external identities. Provider subjects
+-- are meaningful only inside one auth connection.
 CREATE TABLE users (
     id UUID PRIMARY KEY,
-    email TEXT NOT NULL UNIQUE,
-    password_hash TEXT NOT NULL,
     display_name TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'active'
         CHECK (status IN ('active', 'invited', 'disabled')),
@@ -81,19 +81,64 @@ CREATE TABLE users (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+CREATE TABLE password_credentials (
+    user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    normalized_email TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE user_emails (
+    id UUID PRIMARY KEY,
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    normalized_email TEXT NOT NULL,
+    verified_at TIMESTAMPTZ,
+    verification_source TEXT,
+    purpose TEXT NOT NULL DEFAULT 'contact'
+        CHECK (purpose IN ('contact', 'recovery')),
+    is_primary BOOLEAN NOT NULL DEFAULT false,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT user_emails_user_email_unique UNIQUE (user_id, normalized_email)
+);
+
+CREATE UNIQUE INDEX user_emails_one_primary_per_user
+    ON user_emails (user_id) WHERE is_primary;
+
+CREATE TABLE auth_connections (
+    id UUID PRIMARY KEY,
+    connection_key TEXT NOT NULL UNIQUE,
+    kind TEXT NOT NULL,
+    protocol TEXT NOT NULL,
+    issuer TEXT NOT NULL,
+    tenant_id UUID,
+    configuration JSONB NOT NULL DEFAULT '{}'::jsonb,
+    enabled BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+INSERT INTO auth_connections
+    (id, connection_key, kind, protocol, issuer)
+VALUES
+    ('00000000-0000-0000-0000-000000000001', 'github', 'github_app', 'oauth2', 'https://github.com');
+
 CREATE TABLE user_identities (
     id UUID PRIMARY KEY,
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    provider TEXT NOT NULL,
-    provider_subject TEXT NOT NULL,
-    provider_login TEXT NOT NULL,
-    provider_email TEXT NOT NULL,
+    connection_id UUID NOT NULL REFERENCES auth_connections(id),
+    subject TEXT NOT NULL,
+    username TEXT NOT NULL,
+    display_name TEXT NOT NULL DEFAULT '',
+    profile JSONB NOT NULL DEFAULT '{}'::jsonb,
+    last_authenticated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT user_identities_provider_subject_unique
-        UNIQUE (provider, provider_subject),
-    CONSTRAINT user_identities_user_provider_unique
-        UNIQUE (user_id, provider)
+    CONSTRAINT user_identities_connection_subject_unique
+        UNIQUE (connection_id, subject),
+    CONSTRAINT user_identities_user_connection_unique
+        UNIQUE (user_id, connection_id)
 );
 
 CREATE INDEX user_identities_user_idx ON user_identities (user_id);

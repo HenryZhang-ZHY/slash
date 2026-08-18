@@ -45,6 +45,9 @@ docker run -p 8080:8080 \
 | `SLASH_GITHUB_APP_ID` | 是 | GitHub App 的数字 ID。 |
 | `SLASH_GITHUB_PRIVATE_KEY_PATH` | 是 | App 私钥的**文件**路径（不是内联密钥）—— 只读挂载，平台支持时 mode `0400`。 |
 | `SLASH_AUTH_SECRET_PATH` | 是 | 包含会话签名 HMAC secret 的文件路径，逐字节读取。和其他 secret 一样仅文件方式。 |
+| `SLASH_GITHUB_CLIENT_ID` | 否 | 同一个 GitHub App 的 Client ID；开启“使用 GitHub 登录”。 |
+| `SLASH_GITHUB_CLIENT_SECRET_PATH` | 否 | 包含该 GitHub App Client Secret 的文件路径；设置 Client ID 时必填。 |
+| `SLASH_BASE_URL` | 开启 GitHub 用户认证时 | 服务公开 base URL，用来生成精确 callback URI。 |
 | `SLASH_WEB_DIR` | 否 | 构建好的 web 控制台 SPA 的根目录。默认 `web/dist`（相对服务器工作目录）。 |
 | `RUST_LOG` | 否 | `tracing_subscriber` env-filter 语法，例如 `info` 或 `slash_server=debug`。 |
 
@@ -60,11 +63,31 @@ docker run -p 8080:8080 \
 没有 `Debug`/`Display` 实现，所以 webhook secret 和数据库 URL（可能内嵌密码）都
 不会通过一行 stray 日志泄漏。
 
+### GitHub App 用户认证（可选）
+
+Slash 使用同一个 GitHub App 完成仓库自动化和用户登录。GitHub 的 web authorization
+流程返回 GitHub App user access token；它使用 App 的细粒度权限而不是传统 OAuth
+scope。Slash 只读取 `/user`，不申请 GitHub 邮箱权限。
+
+1. 打开 Slash 所用 GitHub App 的设置。
+2. 添加 `{base_url}/api/auth/github/callback` 作为 callback URL，必须精确匹配。
+3. 记录该 App 的 Client ID，并生成 Client Secret。
+4. 配置 `SLASH_GITHUB_CLIENT_ID`、`SLASH_GITHUB_CLIENT_SECRET_PATH` 和
+   `SLASH_BASE_URL`。
+
+GitHub 首次登录按稳定 numeric user ID 创建一个不带密码凭据的 Slash 账户。已有邮箱
+密码账户必须先登录，再从 Settings 显式连接 GitHub；Slash 永远不会按邮箱自动合并。
+
 ### 端点
 
 | 端点         | 用途 |
 |------------------|---------|
 | `POST /webhook`  | GitHub App 的 webhook URL。 |
+| `POST /api/auth/register` | 创建邮箱密码账户。 |
+| `POST /api/auth/login` | 使用邮箱密码登录。 |
+| `GET /api/auth/github/sign-in` | 开始 GitHub App 用户登录。 |
+| `POST /api/auth/github/connect` | 为当前账户显式连接 GitHub。 |
+| `GET /api/auth/github/callback` | GitHub App 用户认证 callback。 |
 | `GET /healthz`   | 存活检查；进程起来后总是返回 `200 ok`。 |
 | `GET /metrics`   | Prometheus 文本格式指标 —— 见下。 |
 
