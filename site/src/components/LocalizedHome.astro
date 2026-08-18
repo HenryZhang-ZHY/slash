@@ -1,0 +1,44 @@
+---
+import { config } from "virtual:nimbus/config";
+import BaseLayout from "@/layouts/BaseLayout.astro";
+import Header from "@/components/Header.astro";
+import { basePath } from "@/lib/urls";
+import { getLocalePath, getTranslations, type Locale } from "@/lib/i18n";
+
+interface Props {
+  locale: Locale;
+}
+
+const { locale } = Astro.props;
+const t = getTranslations(locale);
+const docsHref = (slug: string) => getLocalePath(`/${slug}/`, locale, basePath);
+---
+
+<BaseLayout title={config.title} description={t.home.description} lang={locale}>
+  <div class="flex flex-col min-h-screen">
+    <Header />
+    <main id="main-content" class="flex-1 mx-auto max-w-2xl w-full px-6 py-24">
+      <h1
+        class="text-foreground leading-tight"
+        style="font-size: var(--nb-h1-size); font-weight: var(--nb-h1-weight); letter-spacing: var(--nb-h1-tracking);"
+      >
+        {config.title}
+      </h1>
+      <p class="mt-3 max-w-xl text-[1.0625rem] text-muted-foreground leading-relaxed">
+        {t.home.description}
+      </p>
+
+      <div class="mt-10 grid grid-cols-1 gap-3 sm:grid-cols-2">
+        {t.home.cards.map(([slug, title, description]) => (
+          <a
+            href={docsHref(slug)}
+            class="block rounded-lg border border-border p-4 transition-colors hover:border-border-strong no-underline"
+          >
+            <div class="font-medium text-foreground">{title}</div>
+            <div class="mt-0.5 text-sm text-muted-foreground">{description}</div>
+          </a>
+        ))}
+      </div>
+    </main>
+  </div>
+</BaseLayout>

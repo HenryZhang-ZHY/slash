@@ -62,6 +62,17 @@ const translations = {
       viewMarkdown: "View as Markdown",
     },
     language: { select: "Select language" },
+    home: {
+      description: "Slash commands for GitHub pull requests, done right.",
+      cards: [
+        ["getting-started", "Get started", "Install and connect the GitHub App"],
+        ["slash-config-reference", "Configure commands", "Define arguments and permissions"],
+        ["test-engine", "Test Engine", "Collect results and quarantine flaky tests"],
+        ["permissions", "Permissions", "Understand private and public repository policy"],
+        ["self-host", "Self Hosting", "Run Slash on your own infrastructure"],
+        ["api", "API reference", "Integrate with every server endpoint"],
+      ],
+    },
     editPage: "Edit this page",
     draft: "Draft",
     forHumans: "For humans",
@@ -106,6 +117,17 @@ const translations = {
       viewMarkdown: "查看 Markdown",
     },
     language: { select: "选择语言" },
+    home: {
+      description: "正确实现 GitHub Pull Request 的 Slash Commands。",
+      cards: [
+        ["getting-started", "快速开始", "安装并连接 GitHub App"],
+        ["slash-config-reference", "配置命令", "定义参数与权限"],
+        ["test-engine", "Test Engine", "收集测试结果并隔离 flaky 测试"],
+        ["permissions", "命令权限", "了解私有与公共仓库的权限策略"],
+        ["self-host", "自托管（Self Hosting）", "在你自己的基础设施上运行 Slash"],
+        ["api", "API 参考", "接入全部服务端接口"],
+      ],
+    },
     editPage: "编辑此页",
     draft: "草稿",
     forHumans: "面向读者",
@@ -133,6 +155,15 @@ export function getLocaleByPath(pathname: string, basePath = ""): LocaleDefiniti
     : pathname;
   const segment = path.split(/[?#]/, 1)[0].split("/").filter(Boolean)[0]?.toLowerCase();
   return localeList.find((locale) => locale.path === segment) ?? LOCALES[DEFAULT_LOCALE];
+}
+
+export function hasLocalePath(pathname: string, basePath = ""): boolean {
+  const base = normalizeBasePath(basePath);
+  const path = base && (pathname === base || pathname.startsWith(`${base}/`))
+    ? pathname.slice(base.length)
+    : pathname;
+  const segment = path.split(/[?#]/, 1)[0].split("/").filter(Boolean)[0]?.toLowerCase();
+  return localeList.some((locale) => locale.path === segment);
 }
 
 export function getLocalePath(value: string, target: Locale, basePath = ""): string {

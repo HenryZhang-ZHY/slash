@@ -37,3 +37,33 @@ test("scopes the search index to the page language", () => {
   assert.match(english, /data-pagefind-filter="[^"]*language:en/);
   assert.match(simplifiedChinese, /data-pagefind-filter="[^"]*language:zh-hans/);
 });
+
+test("emits locale-correct social, structured, and alternate metadata", () => {
+  const html = builtPage("zh-hans/getting-started");
+
+  assert.match(html, /<meta property="og:locale" content="zh_CN">/);
+  assert.match(html, /"inLanguage":"zh-Hans"/);
+  assert.match(html, /rel="alternate" hreflang="en" href="https:\/\/henryzhang-zhy\.github\.io\/slash\/en\/getting-started\/"/);
+  assert.match(html, /rel="alternate" hreflang="zh-Hans" href="https:\/\/henryzhang-zhy\.github\.io\/slash\/zh-hans\/getting-started\/"/);
+  assert.match(html, /rel="alternate" hreflang="x-default" href="https:\/\/henryzhang-zhy\.github\.io\/slash\/en\/getting-started\/"/);
+  assert.doesNotMatch(html, /property="og:locale" content="en"/);
+});
+
+test("renders an accessible root language gateway instead of a meta refresh", () => {
+  const html = builtPage("");
+
+  assert.match(html, /^<!DOCTYPE html><html/);
+  assert.match(html, /href="\/slash\/en\/"/);
+  assert.match(html, /href="\/slash\/zh-hans\/"/);
+  assert.match(html, /docs-locale/);
+  assert.match(html, /navigator\.languages/);
+  assert.doesNotMatch(html, /http-equiv="refresh"/);
+});
+
+test("uses localized homepage metadata and copy", () => {
+  const html = builtPage("zh-hans");
+
+  assert.match(html, /<meta name="description" content="正确实现 GitHub Pull Request 的 Slash Commands。">/);
+  assert.match(html, />安装并连接 GitHub App</);
+  assert.doesNotMatch(html, /Slash commands for GitHub pull requests, done right\./);
+});

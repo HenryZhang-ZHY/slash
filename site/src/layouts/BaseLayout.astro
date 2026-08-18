@@ -10,7 +10,14 @@ import { SearchDialog } from "@/components/ui/search";
 import NimbusHead from "@cloudflare/nimbus-docs/components/NimbusHead.astro";
 import type { BasePageProps } from "@cloudflare/nimbus-docs/types";
 import { basePath, siteUrl } from "@/lib/urls";
-import { getLocaleByPath, getTranslations, type Locale } from "@/lib/i18n";
+import {
+  getLocaleByPath,
+  getLocalePath,
+  getTranslations,
+  hasLocalePath,
+  LOCALES,
+  type Locale,
+} from "@/lib/i18n";
 
 type Props = BasePageProps & {
   /** Override the page's BCP 47 language tag. */
@@ -32,6 +39,16 @@ const {
 
 const locale = langOverride ?? getLocaleByPath(Astro.url.pathname, basePath).languageTag;
 const t = getTranslations(locale);
+const localizedPage = hasLocalePath(Astro.url.pathname, basePath);
+const alternateUrls = localizedPage
+  ? Object.values(LOCALES).map((alternateLocale) => ({
+      locale: alternateLocale,
+      href: siteUrl(getLocalePath(Astro.url.pathname, alternateLocale.languageTag, basePath)),
+    }))
+  : [];
+const defaultAlternateUrl = localizedPage
+  ? siteUrl(getLocalePath(Astro.url.pathname, "en", basePath))
+  : null;
 // Per-page agent-index pointer. For pages in non-primary or version
 // collections, this resolves to `/<prefix>/llms.txt` (e.g. `/v0/llms.txt`
 // for a v0 docs page, `/blog/llms.txt` for a blog post). Falls back to
@@ -101,7 +118,15 @@ const llmsUrl = siteUrl(llmsIndexPath);
       head={pageHead}
       collection={collection}
       entryId={entryId}
+      locale={locale}
+      ogLocale={LOCALES[locale].ogLocale}
     />
+    {alternateUrls.map(({ locale: alternateLocale, href }) => (
+      <link rel="alternate" hreflang={alternateLocale.languageTag} href={href} />
+    ))}
+    {defaultAlternateUrl && (
+      <link rel="alternate" hreflang="x-default" href={defaultAlternateUrl} />
+    )}
   </head>
   <body class="min-h-screen bg-background text-foreground antialiased">
     <a

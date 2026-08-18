@@ -7,6 +7,7 @@ import {
   getLocaleByPath,
   getLocalePath,
   getTranslations,
+  hasLocalePath,
 } from "./i18n.ts";
 
 test("uses short BCP 47 tags and a dedicated URL path", () => {
@@ -20,6 +21,8 @@ test("resolves locales behind the configured Astro base path", () => {
   assert.equal(getLocaleByPath("/slash/en/getting-started/", "/slash").languageTag, "en");
   assert.equal(getLocaleByPath("/slash/zh-hans/getting-started/", "/slash").languageTag, "zh-Hans");
   assert.equal(getLocaleByPath("/slash/", "/slash").languageTag, "en");
+  assert.equal(hasLocalePath("/slash/zh-hans/getting-started/", "/slash"), true);
+  assert.equal(hasLocalePath("/slash/", "/slash"), false);
 });
 
 test("switches locale without losing the route, query, hash, base path, or trailing slash", () => {
