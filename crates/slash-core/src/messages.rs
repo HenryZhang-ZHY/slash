@@ -5,6 +5,7 @@
 //! identity.
 
 const MAX_ESCAPED_LEN: usize = 200;
+const MAX_HELP_BODY_BYTES: usize = 60_000;
 
 /// Strips control characters and newlines, truncates to 200 characters, and
 /// wraps the result in a code fence longer than any backtick run it
@@ -147,10 +148,112 @@ pub fn unknown_command_suggestion(typed: &str, configured: &[String]) -> String 
     )
 }
 
+/// Renders the repository's default-branch command catalog as GitHub-safe
+/// Markdown. Complete command sections are kept together and the response is
+/// capped below GitHub's comment limit.
+pub fn command_help(commands: &[slash_config::ValidatedCommand]) -> String {
+    let mut sorted: Vec<_> = commands.iter().collect();
+    sorted.sort_by(|left, right| left.command.cmp(&right.command));
+
+    let mut body = "## Available Slash commands\n".to_string();
+    let mut omitted = 0usize;
+    for command in sorted {
+        let section = command_help_section(command);
+        if body.len() + section.len() > MAX_HELP_BODY_BYTES {
+            omitted += 1;
+            continue;
+        }
+        body.push_str(&section);
+    }
+    if omitted > 0 {
+        body.push_str(&format!(
+            "\n_{omitted} additional command(s) were omitted because the catalog is too large for one GitHub comment._\n"
+        ));
+    }
+    body
+}
+
+fn command_help_section(command: &slash_config::ValidatedCommand) -> String {
+    let mut usage = format!("/{}", command.command);
+    for arg in &command.args {
+        if arg.required {
+            usage.push_str(&format!(" <{}>", arg.name));
+        } else {
+            usage.push_str(&format!(" [--{}=<{}>]", arg.name, arg.name));
+        }
+    }
+
+    let permission = match command.permission {
+        slash_config::Permission::Read => "read",
+        slash_config::Permission::Write => "write",
+        slash_config::Permission::Admin => "admin",
+    };
+    let mut section = format!("\n### {}\n", escape_user_text(&usage));
+    if let Some(description) = &command.description {
+        section.push_str(&escape_user_text(description));
+        section.push_str("\n\n");
+    }
+    section.push_str(&format!("Permission: `{permission}`  \n"));
+    if let Some(example) = command_example(command) {
+        section.push_str("Example: ");
+        section.push_str(&escape_user_text(&example));
+        section.push('\n');
+    }
+
+    if !command.args.is_empty() {
+        section.push_str("\nArguments:\n");
+        for arg in &command.args {
+            let requirement = if arg.required { "required" } else { "optional" };
+            let mut attributes = vec![requirement.to_string()];
+            if let Some(choices) = &arg.choices {
+                let mut rendered: Vec<_> = choices
+                    .iter()
+                    .take(5)
+                    .map(|choice| escape_user_text(choice))
+                    .collect();
+                if choices.len() > rendered.len() {
+                    rendered.push("…".to_string());
+                }
+                attributes.push(format!("choices: {}", rendered.join(", ")));
+            }
+            if let Some(default) = &arg.default {
+                attributes.push(format!("default: {}", escape_user_text(default)));
+            }
+            section.push_str(&format!(
+                "- {} ({})",
+                escape_user_text(&arg.name),
+                attributes.join("; ")
+            ));
+            if let Some(description) = &arg.description {
+                section.push_str(" — ");
+                section.push_str(&escape_user_text(description));
+            }
+            section.push('\n');
+        }
+    }
+    section
+}
+
+fn command_example(command: &slash_config::ValidatedCommand) -> Option<String> {
+    let mut example = format!("/{}", command.command);
+    for arg in command.args.iter().filter(|arg| arg.required) {
+        let value = match &arg.choices {
+            Some(choices) => choices
+                .iter()
+                .find(|choice| slash_command::is_safe_value(choice))?,
+            None => &arg.name,
+        };
+        example.push(' ');
+        example.push_str(value);
+    }
+    Some(example)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
+    use slash_config::{Permission, ValidatedArg, ValidatedCommand};
 
     #[test]
     fn check_run_summary_includes_link_actor_and_command() {
@@ -212,6 +315,75 @@ mod tests {
             command_catalog_unavailable(),
             "Slash could not read this repository's `.slash/` configuration. Please try again later."
         );
+    }
+
+    #[test]
+    fn command_help_lists_sorted_usage_permissions_arguments_and_examples() {
+        let commands = vec![
+            ValidatedCommand {
+                command: "smoke".to_string(),
+                description: None,
+                permission: Permission::Read,
+                workflow: "smoke.yml".to_string(),
+                args: Vec::new(),
+            },
+            ValidatedCommand {
+                command: "deploy".to_string(),
+                description: Some("Deploy the PR".to_string()),
+                permission: Permission::Write,
+                workflow: "deploy.yml".to_string(),
+                args: vec![
+                    ValidatedArg {
+                        name: "env".to_string(),
+                        description: Some("Target environment".to_string()),
+                        required: true,
+                        choices: Some(vec!["staging".to_string(), "production".to_string()]),
+                        default: None,
+                        free_text: false,
+                    },
+                    ValidatedArg {
+                        name: "timeout".to_string(),
+                        description: None,
+                        required: false,
+                        choices: None,
+                        default: Some("15m".to_string()),
+                        free_text: false,
+                    },
+                ],
+            },
+        ];
+
+        assert_eq!(
+            command_help(&commands),
+            "## Available Slash commands\n\n\
+             ### ```/deploy <env> [--timeout=<timeout>]```\n\
+             ```Deploy the PR```\n\n\
+             Permission: `write`  \n\
+             Example: ```/deploy staging```\n\n\
+             Arguments:\n\
+             - ```env``` (required; choices: ```staging```, ```production```) — ```Target environment```\n\
+             - ```timeout``` (optional; default: ```15m```)\n\n\
+             ### ```/smoke```\n\
+             Permission: `read`  \n\
+             Example: ```/smoke```\n"
+        );
+    }
+
+    #[test]
+    fn command_help_escapes_repository_owned_descriptions() {
+        let commands = vec![ValidatedCommand {
+            command: "deploy".to_string(),
+            description: Some("unsafe </details>\n<script>".to_string()),
+            permission: Permission::Admin,
+            workflow: "deploy.yml".to_string(),
+            args: Vec::new(),
+        }];
+
+        let help = command_help(&commands);
+
+        assert!(!help.contains("</details>\n<script>"));
+        assert!(help.contains("```unsafe </details><script>```"));
+        assert!(help.contains("Permission: `admin`"));
     }
 
     #[test]

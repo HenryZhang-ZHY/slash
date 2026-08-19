@@ -265,6 +265,21 @@ pub async fn handle_issue_comment(
         }
     };
 
+    if parsed.name == "slash"
+        && parsed.positionals.as_slice() == ["help"]
+        && parsed.named.is_empty()
+    {
+        if can_comment {
+            let _ = client
+                .create_comment(
+                    payload.issue.number,
+                    &messages::command_help(catalog.commands()),
+                )
+                .await;
+        }
+        return Ok(());
+    }
+
     let Some(validated) = catalog.find(&parsed.name) else {
         let names = catalog.names();
         if can_comment && slash_core::should_suggest_commands(&parsed.name, &names) {
@@ -941,6 +956,64 @@ mod tests {
                 .get(),
             1
         );
+    }
+
+    #[serial_test::serial(db)]
+    #[tokio::test]
+    async fn slash_help_posts_the_default_branch_catalog_without_dispatching() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        let server = MockServer::start().await;
+        mount_common(&server, "deadbeef").await;
+        Mock::given(method("POST"))
+            .and(path("/repos/acme/widgets/issues/7/comments"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "id": 999,
+                "node_id": "IC_999",
+                "url": "https://api.github.com/repos/acme/widgets/issues/comments/999",
+                "html_url": "https://github.com/acme/widgets/pull/7#issuecomment-999",
+                "issue_url": "https://api.github.com/repos/acme/widgets/issues/7",
+                "body": "help",
+                "user": author_json("slash-app", 10),
+                "created_at": "2024-01-01T00:00:00Z",
+                "updated_at": "2024-01-01T00:00:00Z"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let app = GithubApp::with_base_uri(1, TEST_KEY_PEM, Some(&server.uri())).unwrap();
+        let metrics = Metrics::new().unwrap();
+        handle_issue_comment(
+            &ctx(&pool, &app, &server, &metrics),
+            &issue_comment_payload("/slash help"),
+        )
+        .await
+        .unwrap();
+
+        let requests = server.received_requests().await.unwrap();
+        let posted: serde_json::Value = requests
+            .iter()
+            .find(|request| request.url.path() == "/repos/acme/widgets/issues/7/comments")
+            .map(|request| serde_json::from_slice(&request.body).unwrap())
+            .unwrap();
+        let body = posted["body"].as_str().unwrap();
+        assert!(body.contains("## Available Slash commands"));
+        assert!(body.contains("### ```/echo [--message=<message>]```"));
+        assert!(body.contains("Permission: `write`"));
+        assert!(body.contains("Example: ```/echo```"));
+        assert!(!requests.iter().any(|request| {
+            request.url.path().contains("check-runs")
+                || request.url.path().contains("/actions/workflows/")
+        }));
+
+        let count: i64 =
+            sqlx::query_scalar("SELECT count(*) FROM invocations WHERE comment_id = 555")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(count, 0);
     }
 
     #[tokio::test]
