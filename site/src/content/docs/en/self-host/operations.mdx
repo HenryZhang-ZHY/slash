@@ -28,6 +28,11 @@ Slash does not currently expose per-endpoint GitHub API call counts or the
 remaining rate-limit budget. Use application logs as the supporting signal for
 GitHub API and token-minting errors.
 
+Delivery concurrency is coordinated through the shared database. Each server
+may run its configured worker count, while at most eight deliveries for one
+GitHub App installation are active across all replicas. This limit does not
+require sticky sessions or an in-memory coordinator.
+
 ## Instance admin console
 
 Set `SLASH_ADMIN_SECRET_PATH` to enable `/admin` and `/api/admin/*`. This is a

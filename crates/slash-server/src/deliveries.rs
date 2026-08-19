@@ -1,13 +1,16 @@
 //! The `deliveries` durable inbox (spec §7.3). Claiming is one short,
-//! committed statement: the worker changes an eligible row to `processing`
+//! committed transaction: the worker changes an eligible row to `processing`
 //! and receives a unique fencing token plus an expiry. The GitHub pipeline
 //! therefore never holds a database transaction or connection open. A worker
 //! may complete or fail only the lease token it owns; after expiry, a new
 //! worker can reclaim the row and the stale owner can no longer mutate it.
 
-use sqlx::PgPool;
+use sqlx::{PgPool, Postgres, Transaction};
 
 pub const DEFAULT_LEASE_DURATION: chrono::Duration = chrono::Duration::seconds(60);
+pub const MAX_ACTIVE_DELIVERIES_PER_INSTALLATION: i64 = 8;
+const INSTALLATION_LOCK_NAMESPACE: i64 = i64::MIN | 0x534c_4153_4800_0000;
+const MAX_SATURATED_INSTALLATIONS_TO_SKIP: usize = 32;
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct Delivery {
@@ -15,6 +18,8 @@ pub struct Delivery {
     pub event: String,
     pub payload: Vec<u8>,
     pub attempts: i32,
+    pub installation_id: Option<i64>,
+    pub repository_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,13 +36,27 @@ pub async fn insert_delivery(
     event: &str,
     payload: &[u8],
 ) -> Result<InsertOutcome, sqlx::Error> {
+    insert_delivery_routed(pool, guid, event, payload, None, None).await
+}
+
+pub async fn insert_delivery_routed(
+    pool: &PgPool,
+    guid: &str,
+    event: &str,
+    payload: &[u8],
+    installation_id: Option<i64>,
+    repository_id: Option<i64>,
+) -> Result<InsertOutcome, sqlx::Error> {
     let result = sqlx::query(
-        "INSERT INTO deliveries (delivery_guid, event, payload) \
-         VALUES ($1, $2, $3) ON CONFLICT (delivery_guid) DO NOTHING",
+        "INSERT INTO deliveries \
+             (delivery_guid, event, payload, installation_id, repository_id) \
+         VALUES ($1, $2, $3, $4, $5) ON CONFLICT (delivery_guid) DO NOTHING",
     )
     .bind(guid)
     .bind(event)
     .bind(payload)
+    .bind(installation_id)
+    .bind(repository_id)
     .execute(pool)
     .await?;
 
@@ -84,45 +103,115 @@ pub async fn claim_pending(pool: &PgPool) -> Result<Option<ClaimedDelivery>, sql
     claim_pending_for(pool, DEFAULT_LEASE_DURATION).await
 }
 
-/// Claims one pending or expired delivery in a single autocommit statement.
-/// `FOR UPDATE SKIP LOCKED` protects candidate selection while the update
-/// commits the lease before this function returns.
+/// Claims one pending or expired delivery in a short transaction.
+/// `FOR UPDATE SKIP LOCKED` protects candidate selection, and an
+/// installation-scoped advisory lock serializes the cross-replica limit. The
+/// lease is committed before this function returns.
 pub async fn claim_pending_for(
     pool: &PgPool,
     lease_duration: chrono::Duration,
 ) -> Result<Option<ClaimedDelivery>, sqlx::Error> {
+    claim_pending_with_limit(pool, lease_duration, MAX_ACTIVE_DELIVERIES_PER_INSTALLATION).await
+}
+
+async fn claim_pending_with_limit(
+    pool: &PgPool,
+    lease_duration: chrono::Duration,
+    max_active_per_installation: i64,
+) -> Result<Option<ClaimedDelivery>, sqlx::Error> {
+    let mut skipped_installations = Vec::new();
+    for _ in 0..MAX_SATURATED_INSTALLATIONS_TO_SKIP {
+        let mut tx = pool.begin().await?;
+        let Some(row) = select_candidate(&mut tx, &skipped_installations).await? else {
+            tx.commit().await?;
+            return Ok(None);
+        };
+
+        if let Some(installation_id) = row.installation_id {
+            let lock_key = INSTALLATION_LOCK_NAMESPACE ^ installation_id;
+            sqlx::query("SELECT pg_advisory_xact_lock($1)")
+                .bind(lock_key)
+                .execute(&mut *tx)
+                .await?;
+            let active: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM deliveries \
+                 WHERE installation_id = $1 AND state = 'processing' \
+                   AND lease_expires_at > now()",
+            )
+            .bind(installation_id)
+            .fetch_one(&mut *tx)
+            .await?;
+            if active >= max_active_per_installation {
+                skipped_installations.push(installation_id);
+                tx.commit().await?;
+                continue;
+            }
+        }
+
+        return claim_candidate(pool, tx, row, lease_duration)
+            .await
+            .map(Some);
+    }
+    Ok(None)
+}
+
+#[derive(sqlx::FromRow)]
+struct CandidateRow {
+    delivery_guid: String,
+    event: String,
+    payload: Vec<u8>,
+    attempts: i32,
+    installation_id: Option<i64>,
+    repository_id: Option<i64>,
+    recovered: bool,
+}
+
+async fn select_candidate(
+    tx: &mut Transaction<'_, Postgres>,
+    skipped_installations: &[i64],
+) -> Result<Option<CandidateRow>, sqlx::Error> {
+    sqlx::query_as::<_, CandidateRow>(
+        "SELECT d.delivery_guid, d.event, d.payload, d.attempts, \
+                d.installation_id, d.repository_id, d.state = 'processing' AS recovered \
+         FROM deliveries AS d \
+         WHERE ((d.state = 'pending' AND (d.next_attempt_at IS NULL OR d.next_attempt_at <= now())) \
+             OR (d.state = 'processing' AND d.lease_expires_at <= now())) \
+           AND (d.installation_id IS NULL OR NOT (d.installation_id = ANY($1))) \
+         ORDER BY ( \
+             SELECT count(*) FROM deliveries AS active \
+             WHERE active.installation_id = d.installation_id \
+               AND active.state = 'processing' AND active.lease_expires_at > now() \
+         ), d.received_at \
+         FOR UPDATE OF d SKIP LOCKED LIMIT 1",
+    )
+    .bind(skipped_installations)
+    .fetch_optional(&mut **tx)
+    .await
+}
+
+async fn claim_candidate(
+    pool: &PgPool,
+    mut tx: Transaction<'_, Postgres>,
+    row: CandidateRow,
+    lease_duration: chrono::Duration,
+) -> Result<ClaimedDelivery, sqlx::Error> {
     let lease_token = uuid::Uuid::new_v4();
     let lease_expires_at = chrono::Utc::now() + lease_duration;
-    #[derive(sqlx::FromRow)]
-    struct ClaimedRow {
-        delivery_guid: String,
-        event: String,
-        payload: Vec<u8>,
-        attempts: i32,
-        recovered: bool,
-    }
-
-    let row = sqlx::query_as::<_, ClaimedRow>(
-        "WITH candidate AS ( \
-             SELECT delivery_guid, state = 'processing' AS recovered FROM deliveries \
-             WHERE (state = 'pending' AND (next_attempt_at IS NULL OR next_attempt_at <= now())) \
-                OR (state = 'processing' AND lease_expires_at <= now()) \
-             ORDER BY received_at \
-             FOR UPDATE SKIP LOCKED LIMIT 1 \
-         ) \
-         UPDATE deliveries AS d \
-         SET state = 'processing', lease_token = $1, lease_expires_at = $2, \
+    let result = sqlx::query(
+        "UPDATE deliveries \
+         SET state = 'processing', lease_token = $2, lease_expires_at = $3, \
              attempts = attempts + 1 \
-         FROM candidate \
-         WHERE d.delivery_guid = candidate.delivery_guid \
-         RETURNING d.delivery_guid, d.event, d.payload, d.attempts, candidate.recovered",
+         WHERE delivery_guid = $1",
     )
+    .bind(&row.delivery_guid)
     .bind(lease_token)
     .bind(lease_expires_at)
-    .fetch_optional(pool)
+    .execute(&mut *tx)
     .await?;
+    require_owned_lease(result.rows_affected())?;
+    tx.commit().await?;
 
-    Ok(row.map(|row| ClaimedDelivery {
+    Ok(ClaimedDelivery {
         pool: pool.clone(),
         lease_token,
         recovered: row.recovered,
@@ -130,9 +219,11 @@ pub async fn claim_pending_for(
             delivery_guid: row.delivery_guid,
             event: row.event,
             payload: row.payload,
-            attempts: row.attempts,
+            attempts: row.attempts + 1,
+            installation_id: row.installation_id,
+            repository_id: row.repository_id,
         },
-    }))
+    })
 }
 
 impl ClaimedDelivery {
@@ -577,6 +668,83 @@ mod tests {
             first.delivery.delivery_guid, second.delivery.delivery_guid,
             "SKIP LOCKED must never let two concurrent workers claim the same row"
         );
+
+        first.complete().await.unwrap();
+        second.complete().await.unwrap();
+    }
+
+    #[serial_test::serial(db)]
+    #[tokio::test]
+    async fn installation_limit_is_shared_by_concurrent_claimers() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        for index in 0..4 {
+            insert_delivery_routed(
+                &pool,
+                &format!("limited-guid-{index}"),
+                "ping",
+                b"{}",
+                Some(42),
+                Some(100 + index),
+            )
+            .await
+            .unwrap();
+        }
+
+        let claims = tokio::join!(
+            claim_pending_with_limit(&pool, DEFAULT_LEASE_DURATION, 2),
+            claim_pending_with_limit(&pool, DEFAULT_LEASE_DURATION, 2),
+            claim_pending_with_limit(&pool, DEFAULT_LEASE_DURATION, 2),
+            claim_pending_with_limit(&pool, DEFAULT_LEASE_DURATION, 2),
+        );
+        let mut claimed = Vec::new();
+        for result in [claims.0, claims.1, claims.2, claims.3] {
+            if let Some(delivery) = result.unwrap() {
+                claimed.push(delivery);
+            }
+        }
+        assert_eq!(claimed.len(), 2);
+
+        let active: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM deliveries \
+             WHERE installation_id = 42 AND state = 'processing'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(active, 2);
+        for delivery in claimed {
+            delivery.complete().await.unwrap();
+        }
+    }
+
+    #[serial_test::serial(db)]
+    #[tokio::test]
+    async fn a_busy_installation_does_not_block_an_idle_installation() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        insert_delivery_routed(&pool, "busy-1", "ping", b"{}", Some(1), Some(10))
+            .await
+            .unwrap();
+        insert_delivery_routed(&pool, "busy-2", "ping", b"{}", Some(1), Some(11))
+            .await
+            .unwrap();
+        insert_delivery_routed(&pool, "idle-1", "ping", b"{}", Some(2), Some(20))
+            .await
+            .unwrap();
+
+        let first = claim_pending_with_limit(&pool, DEFAULT_LEASE_DURATION, 1)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.delivery.installation_id, Some(1));
+        let second = claim_pending_with_limit(&pool, DEFAULT_LEASE_DURATION, 1)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(second.delivery.installation_id, Some(2));
 
         first.complete().await.unwrap();
         second.complete().await.unwrap();

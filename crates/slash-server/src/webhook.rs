@@ -1,7 +1,7 @@
-//! `POST /webhook` (spec §7.3): verify raw bytes -> `INSERT INTO deliveries`
-//! -> `200`. This is the durability boundary — only after the row is
-//! committed is the delivery acknowledged. JSON is never parsed here; that
-//! happens once a worker claims the row.
+//! `POST /webhook` (spec §7.3): verify raw bytes -> extract untrusted routing
+//! hints -> `INSERT INTO deliveries` -> `200`. This is the durability
+//! boundary — only after the row is committed is the delivery acknowledged.
+//! Full typed event parsing and all policy decisions happen in a worker.
 
 use std::time::Instant;
 
@@ -12,7 +12,7 @@ use axum::http::{HeaderMap, StatusCode};
 use slash_github::{WebhookError, WebhookHeaders, verify_webhook};
 
 use crate::AppState;
-use crate::deliveries::{InsertOutcome, insert_delivery};
+use crate::deliveries::{InsertOutcome, insert_delivery_routed};
 
 fn header_str<'a>(headers: &'a HeaderMap, name: &str) -> Option<&'a str> {
     headers.get(name).and_then(|v| v.to_str().ok())
@@ -77,7 +77,17 @@ async fn handle_verified(
         return (StatusCode::BAD_REQUEST, "bad_headers");
     };
 
-    match insert_delivery(&state.pool, guid, event, body).await {
+    let (installation_id, repository_id) = routing_hints(body);
+    match insert_delivery_routed(
+        &state.pool,
+        guid,
+        event,
+        body,
+        installation_id,
+        repository_id,
+    )
+    .await
+    {
         Ok(InsertOutcome::Inserted) => (StatusCode::OK, "accepted"),
         Ok(InsertOutcome::AlreadyExists) => (StatusCode::OK, "redelivered"),
         Err(error) => {
@@ -85,6 +95,28 @@ async fn handle_verified(
             (StatusCode::INTERNAL_SERVER_ERROR, "db_error")
         }
     }
+}
+
+#[derive(serde::Deserialize)]
+struct RoutingEnvelope {
+    installation: Option<RoutingId>,
+    repository: Option<RoutingId>,
+}
+
+#[derive(serde::Deserialize)]
+struct RoutingId {
+    id: i64,
+}
+
+fn routing_hints(body: &[u8]) -> (Option<i64>, Option<i64>) {
+    serde_json::from_slice::<RoutingEnvelope>(body)
+        .map(|envelope| {
+            (
+                envelope.installation.map(|value| value.id),
+                envelope.repository.map(|value| value.id),
+            )
+        })
+        .unwrap_or((None, None))
 }
 
 #[cfg(test)]
@@ -136,6 +168,15 @@ mod tests {
         format!("sha256={hex}")
     }
 
+    #[test]
+    fn routing_hints_are_best_effort_and_never_make_policy_decisions() {
+        assert_eq!(
+            routing_hints(br#"{"installation":{"id":42},"repository":{"id":99}}"#),
+            (Some(42), Some(99))
+        );
+        assert_eq!(routing_hints(b"not json"), (None, None));
+    }
+
     fn headers(body: &[u8], guid: &str) -> HeaderMap {
         let mut headers = HeaderMap::new();
         headers.insert("x-hub-signature-256", sign(body).parse().unwrap());
@@ -150,7 +191,7 @@ mod tests {
     // should supply the real recorded fixture this eventually gets replaced
     // with.
     const ISSUE_COMMENT_JSON: &[u8] =
-        br#"{"action":"created","comment":{"id":1},"issue":{"number":1}}"#;
+        br#"{"action":"created","comment":{"id":1},"issue":{"number":1},"installation":{"id":42},"repository":{"id":99}}"#;
 
     #[serial_test::serial(db)]
     #[tokio::test]
@@ -168,6 +209,14 @@ mod tests {
             state_of(&state.pool, guid).await.unwrap().as_deref(),
             Some("pending")
         );
+        let routing: (Option<i64>, Option<i64>) = sqlx::query_as(
+            "SELECT installation_id, repository_id FROM deliveries WHERE delivery_guid = $1",
+        )
+        .bind(guid)
+        .fetch_one(&state.pool)
+        .await
+        .unwrap();
+        assert_eq!(routing, (Some(42), Some(99)));
     }
 
     #[serial_test::serial(db)]
