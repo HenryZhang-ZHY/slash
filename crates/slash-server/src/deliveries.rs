@@ -749,4 +749,153 @@ mod tests {
         first.complete().await.unwrap();
         second.complete().await.unwrap();
     }
+
+    #[serial_test::serial(db)]
+    #[tokio::test]
+    async fn three_replicas_recover_a_crash_and_drain_a_failure_burst() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+
+        let mut ingress = tokio::task::JoinSet::new();
+        for index in 0..64 {
+            let pool = pool.clone();
+            ingress.spawn(async move {
+                let started = std::time::Instant::now();
+                insert_delivery_routed(
+                    &pool,
+                    &format!("capacity-guid-{index}"),
+                    "ping",
+                    br#"{"zen":"capacity"}"#,
+                    Some(i64::from(index % 10)),
+                    Some(i64::from(index % 10)),
+                )
+                .await
+                .unwrap();
+                started.elapsed()
+            });
+        }
+        let mut ingress_latencies = Vec::new();
+        while let Some(result) = ingress.join_next().await {
+            ingress_latencies.push(result.unwrap());
+        }
+        ingress_latencies.sort_unstable();
+        assert!(
+            ingress_latencies[60] < std::time::Duration::from_millis(250),
+            "durable ingress p95 exceeded 250 ms"
+        );
+
+        // Replica A disappears after claiming eight deliveries. Its lease
+        // objects are deliberately dropped without a terminal update; the
+        // other two replicas must reclaim them after expiry.
+        let mut abandoned = Vec::new();
+        for _ in 0..8 {
+            abandoned.push(
+                claim_pending_with_limit(&pool, chrono::Duration::milliseconds(150), 8)
+                    .await
+                    .unwrap()
+                    .unwrap(),
+            );
+        }
+        drop(abandoned);
+
+        let effective_dispatches =
+            std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new()));
+        let mut survivors = tokio::task::JoinSet::new();
+        for _ in 0..16 {
+            let pool = pool.clone();
+            let effective_dispatches = effective_dispatches.clone();
+            survivors.spawn(async move {
+                let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
+                loop {
+                    let terminal: i64 = sqlx::query_scalar(
+                        "SELECT count(*) FROM deliveries WHERE state IN ('done', 'failed')",
+                    )
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+                    if terminal == 64 {
+                        return;
+                    }
+                    assert!(
+                        tokio::time::Instant::now() < deadline,
+                        "burst did not drain"
+                    );
+
+                    let Some(claimed) =
+                        claim_pending_with_limit(&pool, chrono::Duration::seconds(2), 8)
+                            .await
+                            .unwrap()
+                    else {
+                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                        continue;
+                    };
+
+                    let guid = claimed.delivery.delivery_guid.clone();
+                    let index: u64 = guid.rsplit('-').next().unwrap().parse().unwrap();
+                    if let Some(installation_id) = claimed.delivery.installation_id {
+                        let active: i64 = sqlx::query_scalar(
+                            "SELECT count(*) FROM deliveries \
+                             WHERE installation_id = $1 AND state = 'processing' \
+                               AND lease_expires_at > now()",
+                        )
+                        .bind(installation_id)
+                        .fetch_one(&pool)
+                        .await
+                        .unwrap();
+                        assert!(active <= 8, "installation concurrency exceeded eight");
+                    }
+
+                    if claimed.delivery.attempts == 1 && index.is_multiple_of(20) {
+                        // A 5xx after a non-idempotent request is ambiguous:
+                        // terminate instead of risking a second dispatch.
+                        claimed
+                            .fail("simulated ambiguous GitHub 500")
+                            .await
+                            .unwrap();
+                    } else if claimed.delivery.attempts == 1 && index.is_multiple_of(13) {
+                        // A rate-limit rejection is known not to have applied
+                        // the operation, so it is safe to retry after delay.
+                        claimed
+                            .retry_after("simulated GitHub 429", chrono::Duration::milliseconds(10))
+                            .await
+                            .unwrap();
+                    } else {
+                        let latency = 300 + (index % 8) * 100;
+                        tokio::time::sleep(std::time::Duration::from_millis(latency)).await;
+                        assert!(
+                            effective_dispatches.lock().await.insert(guid),
+                            "effective dispatch was duplicated"
+                        );
+                        claimed.complete().await.unwrap();
+                    }
+                }
+            });
+        }
+        while let Some(result) = survivors.join_next().await {
+            result.unwrap();
+        }
+
+        let (done, failed, retried, max_attempts): (i64, i64, i64, i32) = sqlx::query_as(
+            "SELECT count(*) FILTER (WHERE state = 'done'), \
+                    count(*) FILTER (WHERE state = 'failed'), \
+                    count(*) FILTER (WHERE attempts = 2), \
+                    max(attempts) \
+             FROM deliveries",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(done + failed, 64);
+        assert!(
+            failed >= 3,
+            "the deterministic 5% 500 injection did not run"
+        );
+        assert!(retried >= 8, "abandoned leases were not reclaimed");
+        assert_eq!(max_attempts, 2);
+        assert_eq!(
+            i64::try_from(effective_dispatches.lock().await.len()).unwrap(),
+            done
+        );
+    }
 }
