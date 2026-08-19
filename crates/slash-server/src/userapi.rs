@@ -1006,7 +1006,7 @@ mod tests {
 
     #[serial_test::serial(db)]
     #[tokio::test]
-    async fn bearer_access_token_authenticates_without_a_session_cookie() {
+    async fn bearer_access_token_authenticates_across_replicas() {
         let Some(pool) = test_pool().await else {
             return;
         };
@@ -1016,18 +1016,19 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        let state = app_state(pool.clone());
+        let issuer = app_state(pool.clone());
         let issued =
-            crate::access_tokens::issue(&pool, &state.auth_secret, user_id, "Agent token", None)
+            crate::access_tokens::issue(&pool, &issuer.auth_secret, user_id, "Agent token", None)
                 .await
                 .unwrap();
+        let verifier = app_state(pool.clone());
         let mut headers = axum::http::HeaderMap::new();
         headers.insert(
             axum::http::header::AUTHORIZATION,
             format!("Bearer {}", issued.token).parse().unwrap(),
         );
 
-        assert_eq!(resolve_user_id(&headers, &state).await.unwrap(), user_id);
+        assert_eq!(resolve_user_id(&headers, &verifier).await.unwrap(), user_id);
     }
 
     #[serial_test::serial(db)]

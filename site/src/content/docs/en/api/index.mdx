@@ -105,6 +105,7 @@ The tables below list every route registered by `slash-server`.
 | --- | --- | --- |
 | `POST` | `/webhook` | Receive signed GitHub webhook deliveries |
 | `GET` | `/healthz` | Liveness probe |
+| `GET` | `/readyz` | PostgreSQL-backed readiness probe |
 | `GET` | `/metrics` | Prometheus metrics |
 
 ## Error conventions

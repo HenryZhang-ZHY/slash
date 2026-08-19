@@ -202,7 +202,7 @@ mod tests {
     }
 
     #[test]
-    fn sign_and_verify_roundtrip() {
+    fn session_signed_on_one_replica_verifies_on_another() {
         let id = uuid::Uuid::new_v4();
         let token = sign_token(&secret(), id).unwrap();
         assert_eq!(verify_token(&secret(), &token).unwrap(), id);

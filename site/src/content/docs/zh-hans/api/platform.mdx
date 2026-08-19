@@ -55,6 +55,17 @@ ok
 
 handler 不查询 Postgres 或 GitHub。它表示 HTTP 进程能服务请求，而不是下游依赖健康。
 
+## GET `/readyz`
+
+供负载均衡器和编排系统使用、无需认证的就绪探针。
+
+```sh
+curl https://slash.example.com/readyz
+```
+
+只有 Slash 能查询 PostgreSQL 时才返回带 `ready` 的 `200 OK`。共享数据库不可用时，
+返回带 `not ready` 的 `503 Service Unavailable`，代理因此可以停止向该副本路由新请求。
+
 ## GET `/metrics`
 
 返回进程内指标注册表生成的无需认证的 Prometheus 文本格式输出。

@@ -564,7 +564,7 @@ mod tests {
     }
 
     #[test]
-    fn state_round_trip_keeps_explicit_intent_and_pkce_verifier() {
+    fn oauth_state_started_on_one_replica_verifies_on_another() {
         let user_id = Uuid::new_v4();
         let token = sign_state(&secret(), &claims(OauthIntent::Connect, Some(user_id))).unwrap();
         let decoded = verify_state(&secret(), &token).unwrap();

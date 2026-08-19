@@ -65,15 +65,37 @@ cannot redefine them.
 ## Durable delivery inbox
 
 Webhook handling verifies the signature against the raw request body before
-JSON parsing. A valid delivery is inserted into PostgreSQL under the unique
-`X-GitHub-Delivery` identifier before Slash returns success. Workers claim
-pending rows with `FOR UPDATE SKIP LOCKED`, making redelivery and concurrent
-replicas safe without an in-memory queue.
+JSON parsing. After verification, it extracts best-effort installation and
+repository identifiers for queue routing; these untrusted hints never make an
+authorization or policy decision. A valid delivery is inserted into PostgreSQL
+under the unique `X-GitHub-Delivery` identifier before Slash returns success.
+Workers claim
+eligible rows with `FOR UPDATE SKIP LOCKED` and commit an expiring lease before
+running the GitHub pipeline. Each lease has a unique fencing token: completion
+and failure updates succeed only for the current token, so an expired worker
+cannot overwrite a newer owner's result. A crashed worker holds no database
+transaction or connection; another replica can reclaim the delivery after the
+lease expires. This makes redelivery and concurrent replicas safe without an
+in-memory queue or transaction-spanning external I/O.
+
+Each server starts a bounded delivery-worker pool. Active workers renew their
+leases while the pipeline runs. A known-safe transient failure may return a
+delivery to the inbox with a future attempt time; failures whose side effects
+could be ambiguous are not blindly replayed.
+
+Installation-level concurrency is coordinated in PostgreSQL, not process
+memory. Claimers briefly serialize on an installation advisory lock and count
+its live delivery leases before committing new work. At most eight deliveries
+for one installation are active across all replicas; installations with fewer
+active leases are preferred so a busy tenant does not block an idle one.
 
 PostgreSQL is a deliberate coordination dependency: uniqueness constraints,
 transactions, guarded updates, and row claiming are part of correctness rather
 than replaceable storage details. Terminal deliveries are retained for 30 days
 by default before the sweeper removes them.
+
+The supported deployment baseline and failure-validation contract are recorded
+in [`docs/design/capacity.md`](design/capacity.md).
 
 ## Invocation lifecycle
 

@@ -32,6 +32,8 @@ pub struct ServerConfig {
     pub github_client_secret: Option<String>,
     /// Public origin used to construct the exact OAuth callback URI.
     pub github_base_url: Option<String>,
+    /// Number of durable delivery consumers started by this process.
+    pub delivery_workers: usize,
 }
 
 impl ServerConfig {
@@ -87,6 +89,14 @@ impl ServerConfig {
             Some(_) => Some(require(lookup, "SLASH_BASE_URL")?),
             None => None,
         };
+        let delivery_workers = match lookup("SLASH_DELIVERY_WORKERS") {
+            Some(raw) => raw
+                .parse::<usize>()
+                .ok()
+                .filter(|value| *value > 0)
+                .ok_or_else(|| ConfigError::InvalidInt("SLASH_DELIVERY_WORKERS", raw.clone()))?,
+            None => 8,
+        };
 
         Ok(Self {
             github_app_id,
@@ -98,6 +108,7 @@ impl ServerConfig {
             github_client_id,
             github_client_secret,
             github_base_url,
+            delivery_workers,
         })
     }
 }
@@ -208,6 +219,7 @@ mod tests {
         assert_eq!(config.webhook_secret, "webhook-secret");
         assert_eq!(config.database_url, "postgres://slash:slash@db/slash");
         assert_eq!(config.auth_secret, "auth-secret");
+        assert_eq!(config.delivery_workers, 8);
     }
 
     #[test]
@@ -221,6 +233,24 @@ mod tests {
             Err(ConfigError::InvalidInt("SLASH_GITHUB_APP_ID", _)) => {}
             _ => panic!("expected an InvalidInt error"),
         }
+    }
+
+    #[test]
+    fn delivery_worker_count_is_configurable_and_must_be_positive() {
+        let mut env = env_of(&[
+            ("SLASH_GITHUB_APP_ID", "42"),
+            ("SLASH_GITHUB_PRIVATE_KEY_PATH", "/key.pem"),
+            ("SLASH_DELIVERY_WORKERS", "16"),
+        ]);
+        let env = file_env(&mut env);
+        assert_eq!(load(&env).unwrap().delivery_workers, 16);
+
+        let mut invalid = env;
+        invalid.insert("SLASH_DELIVERY_WORKERS".to_string(), "0".to_string());
+        assert!(matches!(
+            load(&invalid),
+            Err(ConfigError::InvalidInt("SLASH_DELIVERY_WORKERS", _))
+        ));
     }
 
     #[test]

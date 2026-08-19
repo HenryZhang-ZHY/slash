@@ -7,8 +7,9 @@ sidebar:
 
 ## Health and metrics
 
-`GET /healthz` is the liveness probe. `GET /metrics` returns Prometheus text
-format. Monitor at least:
+`GET /healthz` is the process liveness probe. `GET /readyz` checks PostgreSQL
+and is the load-balancer readiness probe. `GET /metrics` returns Prometheus
+text format. Monitor at least:
 
 - `slash_deliveries_pending` and
   `slash_deliveries_oldest_pending_age_seconds` for a stuck or falling-behind
@@ -19,10 +20,58 @@ format. Monitor at least:
 - `slash_correlation_total{path}` to distinguish direct dispatch correlation,
   polling recovery, and timeout; and
 - `slash_dispatch_failures_total{class}` for terminal dispatch failures.
+- `slash_delivery_processing_seconds{outcome}` for worker latency,
+  `slash_delivery_retries_total{reason}` for safe retries, and
+  `slash_delivery_lease_recoveries_total` for crashed or stalled workers whose
+  leases were reclaimed.
 
 Slash does not currently expose per-endpoint GitHub API call counts or the
 remaining rate-limit budget. Use application logs as the supporting signal for
 GitHub API and token-minting errors.
+
+Delivery concurrency is coordinated through the shared database. Each server
+may run its configured worker count, while at most eight deliveries for one
+GitHub App installation are active across all replicas. This limit does not
+require sticky sessions or an in-memory coordinator.
+
+## Validate a multi-replica rollout
+
+All replicas must use the same PostgreSQL database, public base URL, and mounted
+webhook, auth, admin, OAuth, and GitHub App secrets. Release an image containing
+the database-backed `/readyz` endpoint before configuring the proxy to use it.
+Roll out one replica first, require `/readyz` to return `200`, then start the
+remaining replicas and reload Caddy. Keep proxy retries disabled for POST
+requests: after an uncertain upstream failure, GitHub's delivery retry and
+Slash's delivery GUID provide the safe retry boundary.
+
+Exercise failures with controlled test traffic before accepting production
+load:
+
+1. Send a 64-delivery burst across the representative repositories and verify
+   that the pending queue drains and its oldest age returns to zero.
+2. Stop one replica after it has claimed work. The remaining replicas should
+   continue admission and reclaim abandoned work after the 60-second lease.
+3. Inject GitHub latency and rate-limit responses. Safe retries should increase
+   `slash_delivery_retries_total`; ambiguous writes must not create a second
+   effective workflow dispatch.
+4. Briefly block database access. Every replica should return `503` from
+   `/readyz`, recover without restart when access returns, and retain every
+   delivery that was acknowledged before the interruption.
+5. Reload Caddy during the burst and confirm that each upstream returns to the
+   ready set without sticky sessions.
+
+Alert when a replica's scrape target is down for two minutes, when
+`slash_deliveries_oldest_pending_age_seconds` exceeds 120 seconds for five
+minutes, or when `slash_delivery_lease_recoveries_total` increases unexpectedly.
+Treat a sustained queue-age alert as a capacity or dependency incident, not as
+a signal to raise concurrency without checking GitHub installation limits.
+
+To roll back, stop new replicas before changing the image, preserve the shared
+database and secret files, and verify the previous binary against the current
+schema before starting it. Database migrations are forward-only; a schema
+rollback requires the backup and restore procedure for your PostgreSQL service.
+After rollback, check `/readyz`, queue age, recent terminal deliveries, and
+invocation correlation before restoring traffic.
 
 ## Instance admin console
 

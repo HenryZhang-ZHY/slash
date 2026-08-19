@@ -1,21 +1,25 @@
-//! The `deliveries` transactional inbox (spec §7.3). A claim holds the row's
-//! `FOR NO KEY UPDATE SKIP LOCKED` lock inside one open transaction that spans
-//! the whole pipeline; the weaker lock still excludes concurrent workers but
-//! permits an invocation's foreign key to reference the claimed delivery. The
-//! row is marked `done`/`failed` only as part of that same transaction's
-//! commit. If the process dies anywhere in between, the transaction is never
-//! committed, Postgres rolls it back, and the row is exactly as it was — still
-//! `pending` — for a second worker to claim. This is what makes "worker killed
-//! mid-pipeline" safe without any explicit "in-progress" state to get stuck
-//! in.
+//! The `deliveries` durable inbox (spec §7.3). Claiming is one short,
+//! committed transaction: the worker changes an eligible row to `processing`
+//! and receives a unique fencing token plus an expiry. The GitHub pipeline
+//! therefore never holds a database transaction or connection open. A worker
+//! may complete or fail only the lease token it owns; after expiry, a new
+//! worker can reclaim the row and the stale owner can no longer mutate it.
 
 use sqlx::{PgPool, Postgres, Transaction};
+
+pub const DEFAULT_LEASE_DURATION: chrono::Duration = chrono::Duration::seconds(60);
+pub const MAX_ACTIVE_DELIVERIES_PER_INSTALLATION: i64 = 8;
+const INSTALLATION_LOCK_NAMESPACE: i64 = i64::MIN | 0x534c_4153_4800_0000;
+const MAX_SATURATED_INSTALLATIONS_TO_SKIP: usize = 32;
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct Delivery {
     pub delivery_guid: String,
     pub event: String,
     pub payload: Vec<u8>,
+    pub attempts: i32,
+    pub installation_id: Option<i64>,
+    pub repository_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,13 +36,27 @@ pub async fn insert_delivery(
     event: &str,
     payload: &[u8],
 ) -> Result<InsertOutcome, sqlx::Error> {
+    insert_delivery_routed(pool, guid, event, payload, None, None).await
+}
+
+pub async fn insert_delivery_routed(
+    pool: &PgPool,
+    guid: &str,
+    event: &str,
+    payload: &[u8],
+    installation_id: Option<i64>,
+    repository_id: Option<i64>,
+) -> Result<InsertOutcome, sqlx::Error> {
     let result = sqlx::query(
-        "INSERT INTO deliveries (delivery_guid, event, payload) \
-         VALUES ($1, $2, $3) ON CONFLICT (delivery_guid) DO NOTHING",
+        "INSERT INTO deliveries \
+             (delivery_guid, event, payload, installation_id, repository_id) \
+         VALUES ($1, $2, $3, $4, $5) ON CONFLICT (delivery_guid) DO NOTHING",
     )
     .bind(guid)
     .bind(event)
     .bind(payload)
+    .bind(installation_id)
+    .bind(repository_id)
     .execute(pool)
     .await?;
 
@@ -70,56 +88,221 @@ pub(crate) async fn state_of(pool: &PgPool, guid: &str) -> Result<Option<String>
     Ok(row.map(|(state,)| state))
 }
 
-/// A pending delivery claimed under `FOR UPDATE SKIP LOCKED`, holding its
-/// transaction open. Dropping this without calling [`complete`] or [`fail`]
-/// rolls the transaction back, leaving the row `pending`.
-pub struct ClaimedDelivery<'a> {
-    tx: Transaction<'a, Postgres>,
+/// A delivery whose lease was committed before it was returned to the worker.
+/// Mutations are fenced by `lease_token`; dropping this value leaves the row
+/// `processing` until its lease expires and another worker reclaims it.
+pub struct ClaimedDelivery {
+    pool: PgPool,
+    lease_token: uuid::Uuid,
+    recovered: bool,
     pub delivery: Delivery,
 }
 
-/// Claims the oldest pending delivery, if any, skipping rows already locked
-/// by another worker/replica.
-pub async fn claim_pending(pool: &PgPool) -> Result<Option<ClaimedDelivery<'_>>, sqlx::Error> {
-    let mut tx = pool.begin().await?;
-
-    let delivery = sqlx::query_as::<_, Delivery>(
-        "SELECT delivery_guid, event, payload FROM deliveries \
-         WHERE state = 'pending' ORDER BY received_at FOR NO KEY UPDATE SKIP LOCKED LIMIT 1",
-    )
-    .fetch_optional(&mut *tx)
-    .await?;
-
-    match delivery {
-        Some(delivery) => Ok(Some(ClaimedDelivery { tx, delivery })),
-        None => {
-            tx.commit().await?;
-            Ok(None)
-        }
-    }
+/// Claims the oldest eligible delivery with the production lease duration.
+pub async fn claim_pending(pool: &PgPool) -> Result<Option<ClaimedDelivery>, sqlx::Error> {
+    claim_pending_for(pool, DEFAULT_LEASE_DURATION).await
 }
 
-impl ClaimedDelivery<'_> {
-    pub async fn complete(mut self) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            "UPDATE deliveries SET state = 'done', attempts = attempts + 1, processed_at = now() WHERE delivery_guid = $1",
-        )
-        .bind(&self.delivery.delivery_guid)
-        .execute(&mut *self.tx)
-        .await?;
-        self.tx.commit().await
+/// Claims one pending or expired delivery in a short transaction.
+/// `FOR UPDATE SKIP LOCKED` protects candidate selection, and an
+/// installation-scoped advisory lock serializes the cross-replica limit. The
+/// lease is committed before this function returns.
+pub async fn claim_pending_for(
+    pool: &PgPool,
+    lease_duration: chrono::Duration,
+) -> Result<Option<ClaimedDelivery>, sqlx::Error> {
+    claim_pending_with_limit(pool, lease_duration, MAX_ACTIVE_DELIVERIES_PER_INSTALLATION).await
+}
+
+async fn claim_pending_with_limit(
+    pool: &PgPool,
+    lease_duration: chrono::Duration,
+    max_active_per_installation: i64,
+) -> Result<Option<ClaimedDelivery>, sqlx::Error> {
+    let mut skipped_installations = Vec::new();
+    for _ in 0..MAX_SATURATED_INSTALLATIONS_TO_SKIP {
+        let mut tx = pool.begin().await?;
+        let Some(row) = select_candidate(&mut tx, &skipped_installations).await? else {
+            tx.commit().await?;
+            return Ok(None);
+        };
+
+        if let Some(installation_id) = row.installation_id {
+            let lock_key = INSTALLATION_LOCK_NAMESPACE ^ installation_id;
+            sqlx::query("SELECT pg_advisory_xact_lock($1)")
+                .bind(lock_key)
+                .execute(&mut *tx)
+                .await?;
+            let active: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM deliveries \
+                 WHERE installation_id = $1 AND state = 'processing' \
+                   AND lease_expires_at > now()",
+            )
+            .bind(installation_id)
+            .fetch_one(&mut *tx)
+            .await?;
+            if active >= max_active_per_installation {
+                skipped_installations.push(installation_id);
+                tx.commit().await?;
+                continue;
+            }
+        }
+
+        return claim_candidate(pool, tx, row, lease_duration)
+            .await
+            .map(Some);
+    }
+    Ok(None)
+}
+
+#[derive(sqlx::FromRow)]
+struct CandidateRow {
+    delivery_guid: String,
+    event: String,
+    payload: Vec<u8>,
+    attempts: i32,
+    installation_id: Option<i64>,
+    repository_id: Option<i64>,
+    recovered: bool,
+}
+
+async fn select_candidate(
+    tx: &mut Transaction<'_, Postgres>,
+    skipped_installations: &[i64],
+) -> Result<Option<CandidateRow>, sqlx::Error> {
+    sqlx::query_as::<_, CandidateRow>(
+        "SELECT d.delivery_guid, d.event, d.payload, d.attempts, \
+                d.installation_id, d.repository_id, d.state = 'processing' AS recovered \
+         FROM deliveries AS d \
+         WHERE ((d.state = 'pending' AND (d.next_attempt_at IS NULL OR d.next_attempt_at <= now())) \
+             OR (d.state = 'processing' AND d.lease_expires_at <= now())) \
+           AND (d.installation_id IS NULL OR NOT (d.installation_id = ANY($1))) \
+         ORDER BY ( \
+             SELECT count(*) FROM deliveries AS active \
+             WHERE active.installation_id = d.installation_id \
+               AND active.state = 'processing' AND active.lease_expires_at > now() \
+         ), d.received_at \
+         FOR UPDATE OF d SKIP LOCKED LIMIT 1",
+    )
+    .bind(skipped_installations)
+    .fetch_optional(&mut **tx)
+    .await
+}
+
+async fn claim_candidate(
+    pool: &PgPool,
+    mut tx: Transaction<'_, Postgres>,
+    row: CandidateRow,
+    lease_duration: chrono::Duration,
+) -> Result<ClaimedDelivery, sqlx::Error> {
+    let lease_token = uuid::Uuid::new_v4();
+    let lease_expires_at = chrono::Utc::now() + lease_duration;
+    let result = sqlx::query(
+        "UPDATE deliveries \
+         SET state = 'processing', lease_token = $2, lease_expires_at = $3, \
+             attempts = attempts + 1 \
+         WHERE delivery_guid = $1",
+    )
+    .bind(&row.delivery_guid)
+    .bind(lease_token)
+    .bind(lease_expires_at)
+    .execute(&mut *tx)
+    .await?;
+    require_owned_lease(result.rows_affected())?;
+    tx.commit().await?;
+
+    Ok(ClaimedDelivery {
+        pool: pool.clone(),
+        lease_token,
+        recovered: row.recovered,
+        delivery: Delivery {
+            delivery_guid: row.delivery_guid,
+            event: row.event,
+            payload: row.payload,
+            attempts: row.attempts + 1,
+            installation_id: row.installation_id,
+            repository_id: row.repository_id,
+        },
+    })
+}
+
+impl ClaimedDelivery {
+    pub fn was_recovered(&self) -> bool {
+        self.recovered
     }
 
-    pub async fn fail(mut self, error: &str) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            "UPDATE deliveries SET state = 'failed', attempts = attempts + 1, last_error = $2, processed_at = now() \
-             WHERE delivery_guid = $1",
+    /// Extends only the currently owned lease. A stale worker gets
+    /// `RowNotFound` and must stop processing.
+    pub async fn renew(&self, lease_duration: chrono::Duration) -> Result<(), sqlx::Error> {
+        let lease_expires_at = chrono::Utc::now() + lease_duration;
+        let result = sqlx::query(
+            "UPDATE deliveries SET lease_expires_at = $3 \
+             WHERE delivery_guid = $1 AND state = 'processing' AND lease_token = $2",
+        )
+        .bind(&self.delivery.delivery_guid)
+        .bind(self.lease_token)
+        .bind(lease_expires_at)
+        .execute(&self.pool)
+        .await?;
+        require_owned_lease(result.rows_affected())
+    }
+
+    pub async fn complete(self) -> Result<(), sqlx::Error> {
+        let result = sqlx::query(
+            "UPDATE deliveries \
+             SET state = 'done', processed_at = now(), lease_token = NULL, lease_expires_at = NULL \
+             WHERE delivery_guid = $1 AND state = 'processing' AND lease_token = $2",
+        )
+        .bind(&self.delivery.delivery_guid)
+        .bind(self.lease_token)
+        .execute(&self.pool)
+        .await?;
+        require_owned_lease(result.rows_affected())
+    }
+
+    pub async fn fail(self, error: &str) -> Result<(), sqlx::Error> {
+        let result = sqlx::query(
+            "UPDATE deliveries \
+             SET state = 'failed', last_error = $2, processed_at = now(), \
+                 lease_token = NULL, lease_expires_at = NULL \
+             WHERE delivery_guid = $1 AND state = 'processing' AND lease_token = $3",
         )
         .bind(&self.delivery.delivery_guid)
         .bind(error)
-        .execute(&mut *self.tx)
+        .bind(self.lease_token)
+        .execute(&self.pool)
         .await?;
-        self.tx.commit().await
+        require_owned_lease(result.rows_affected())
+    }
+
+    /// Releases the owned lease back to the durable queue after a delay.
+    pub async fn retry_after(
+        self,
+        error: &str,
+        delay: chrono::Duration,
+    ) -> Result<(), sqlx::Error> {
+        let next_attempt_at = chrono::Utc::now() + delay;
+        let result = sqlx::query(
+            "UPDATE deliveries \
+             SET state = 'pending', last_error = $2, next_attempt_at = $3, \
+                 lease_token = NULL, lease_expires_at = NULL \
+             WHERE delivery_guid = $1 AND state = 'processing' AND lease_token = $4",
+        )
+        .bind(&self.delivery.delivery_guid)
+        .bind(error)
+        .bind(next_attempt_at)
+        .bind(self.lease_token)
+        .execute(&self.pool)
+        .await?;
+        require_owned_lease(result.rows_affected())
+    }
+}
+
+fn require_owned_lease(rows_affected: u64) -> Result<(), sqlx::Error> {
+    if rows_affected == 1 {
+        Ok(())
+    } else {
+        Err(sqlx::Error::RowNotFound)
     }
 }
 
@@ -215,7 +398,7 @@ mod tests {
 
     #[serial_test::serial(db)]
     #[tokio::test]
-    async fn claim_pending_skips_a_row_locked_by_another_transaction() {
+    async fn an_unexpired_lease_is_not_claimed_twice() {
         let Some(pool) = test_pool().await else {
             return;
         };
@@ -224,7 +407,7 @@ mod tests {
             .unwrap();
 
         let held = claim_pending(&pool).await.unwrap().unwrap();
-        // A second, concurrent claim attempt must not see the locked row.
+        // A second worker must not see a committed but unexpired lease.
         let second_attempt = claim_pending(&pool).await.unwrap();
         assert!(second_attempt.is_none());
 
@@ -233,7 +416,7 @@ mod tests {
 
     #[serial_test::serial(db)]
     #[tokio::test]
-    async fn claim_lock_allows_recording_the_originating_invocation() {
+    async fn claim_commits_before_pipeline_database_work() {
         let Some(pool) = test_pool().await else {
             return;
         };
@@ -268,7 +451,7 @@ mod tests {
             crate::invocations::claim(&pool, &invocation),
         )
         .await
-        .expect("the delivery claim must not block its invocation foreign-key check")
+        .expect("the committed delivery lease must not block its invocation foreign-key check")
         .unwrap();
         assert_eq!(outcome, crate::invocations::ClaimOutcome::Claimed(id));
 
@@ -277,7 +460,7 @@ mod tests {
 
     #[serial_test::serial(db)]
     #[tokio::test]
-    async fn a_worker_killed_mid_pipeline_leaves_the_delivery_pending_for_a_second_worker() {
+    async fn an_expired_lease_is_reclaimed_and_fences_the_stale_worker() {
         let Some(pool) = test_pool().await else {
             return;
         };
@@ -285,20 +468,28 @@ mod tests {
             .await
             .unwrap();
 
-        {
-            let claimed = claim_pending(&pool).await.unwrap().unwrap();
-            assert_eq!(claimed.delivery.delivery_guid, "guid-4");
-            // Simulate a crash: drop the claim without calling `complete`.
-            // The transaction rolls back and the lock is released.
-        }
+        let stale = claim_pending(&pool).await.unwrap().unwrap();
+        assert_eq!(stale.delivery.delivery_guid, "guid-4");
 
         assert_eq!(
             state_of(&pool, "guid-4").await.unwrap().as_deref(),
-            Some("pending")
+            Some("processing")
         );
+
+        sqlx::query(
+            "UPDATE deliveries SET lease_expires_at = now() - interval '1 second' \
+             WHERE delivery_guid = 'guid-4'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
 
         let second_worker_claim = claim_pending(&pool).await.unwrap().unwrap();
         assert_eq!(second_worker_claim.delivery.delivery_guid, "guid-4");
+        assert!(matches!(
+            stale.complete().await,
+            Err(sqlx::Error::RowNotFound)
+        ));
         second_worker_claim.complete().await.unwrap();
 
         assert_eq!(
@@ -330,6 +521,67 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(last_error.as_deref(), Some("boom"));
+    }
+
+    #[serial_test::serial(db)]
+    #[tokio::test]
+    async fn renew_extends_only_the_current_lease() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        insert_delivery(&pool, "guid-renew", "issue_comment", b"{}")
+            .await
+            .unwrap();
+
+        let claimed = claim_pending(&pool).await.unwrap().unwrap();
+        sqlx::query(
+            "UPDATE deliveries SET lease_expires_at = now() + interval '1 second' \
+             WHERE delivery_guid = 'guid-renew'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        claimed.renew(chrono::Duration::minutes(1)).await.unwrap();
+
+        let remaining: i64 = sqlx::query_scalar(
+            "SELECT EXTRACT(EPOCH FROM (lease_expires_at - now()))::bigint \
+             FROM deliveries WHERE delivery_guid = 'guid-renew'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(remaining >= 55);
+        claimed.complete().await.unwrap();
+    }
+
+    #[serial_test::serial(db)]
+    #[tokio::test]
+    async fn retry_after_releases_the_lease_but_honors_the_delay() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        insert_delivery(&pool, "guid-retry", "issue_comment", b"{}")
+            .await
+            .unwrap();
+
+        let claimed = claim_pending(&pool).await.unwrap().unwrap();
+        assert_eq!(claimed.delivery.attempts, 1);
+        claimed
+            .retry_after("temporary", chrono::Duration::minutes(1))
+            .await
+            .unwrap();
+        assert!(claim_pending(&pool).await.unwrap().is_none());
+
+        sqlx::query(
+            "UPDATE deliveries SET next_attempt_at = now() - interval '1 second' \
+             WHERE delivery_guid = 'guid-retry'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let retried = claim_pending(&pool).await.unwrap().unwrap();
+        assert_eq!(retried.delivery.attempts, 2);
+        retried.complete().await.unwrap();
     }
 
     #[serial_test::serial(db)]
@@ -419,5 +671,231 @@ mod tests {
 
         first.complete().await.unwrap();
         second.complete().await.unwrap();
+    }
+
+    #[serial_test::serial(db)]
+    #[tokio::test]
+    async fn installation_limit_is_shared_by_concurrent_claimers() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        for index in 0..4 {
+            insert_delivery_routed(
+                &pool,
+                &format!("limited-guid-{index}"),
+                "ping",
+                b"{}",
+                Some(42),
+                Some(100 + index),
+            )
+            .await
+            .unwrap();
+        }
+
+        let claims = tokio::join!(
+            claim_pending_with_limit(&pool, DEFAULT_LEASE_DURATION, 2),
+            claim_pending_with_limit(&pool, DEFAULT_LEASE_DURATION, 2),
+            claim_pending_with_limit(&pool, DEFAULT_LEASE_DURATION, 2),
+            claim_pending_with_limit(&pool, DEFAULT_LEASE_DURATION, 2),
+        );
+        let mut claimed = Vec::new();
+        for result in [claims.0, claims.1, claims.2, claims.3] {
+            if let Some(delivery) = result.unwrap() {
+                claimed.push(delivery);
+            }
+        }
+        assert_eq!(claimed.len(), 2);
+
+        let active: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM deliveries \
+             WHERE installation_id = 42 AND state = 'processing'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(active, 2);
+        for delivery in claimed {
+            delivery.complete().await.unwrap();
+        }
+    }
+
+    #[serial_test::serial(db)]
+    #[tokio::test]
+    async fn a_busy_installation_does_not_block_an_idle_installation() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        insert_delivery_routed(&pool, "busy-1", "ping", b"{}", Some(1), Some(10))
+            .await
+            .unwrap();
+        insert_delivery_routed(&pool, "busy-2", "ping", b"{}", Some(1), Some(11))
+            .await
+            .unwrap();
+        insert_delivery_routed(&pool, "idle-1", "ping", b"{}", Some(2), Some(20))
+            .await
+            .unwrap();
+
+        let first = claim_pending_with_limit(&pool, DEFAULT_LEASE_DURATION, 1)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.delivery.installation_id, Some(1));
+        let second = claim_pending_with_limit(&pool, DEFAULT_LEASE_DURATION, 1)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(second.delivery.installation_id, Some(2));
+
+        first.complete().await.unwrap();
+        second.complete().await.unwrap();
+    }
+
+    #[serial_test::serial(db)]
+    #[tokio::test]
+    async fn three_replicas_recover_a_crash_and_drain_a_failure_burst() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+
+        let mut ingress = tokio::task::JoinSet::new();
+        for index in 0..64 {
+            let pool = pool.clone();
+            ingress.spawn(async move {
+                let started = std::time::Instant::now();
+                insert_delivery_routed(
+                    &pool,
+                    &format!("capacity-guid-{index}"),
+                    "ping",
+                    br#"{"zen":"capacity"}"#,
+                    Some(i64::from(index % 10)),
+                    Some(i64::from(index % 10)),
+                )
+                .await
+                .unwrap();
+                started.elapsed()
+            });
+        }
+        let mut ingress_latencies = Vec::new();
+        while let Some(result) = ingress.join_next().await {
+            ingress_latencies.push(result.unwrap());
+        }
+        ingress_latencies.sort_unstable();
+        assert!(
+            ingress_latencies[60] < std::time::Duration::from_millis(250),
+            "durable ingress p95 exceeded 250 ms"
+        );
+
+        // Replica A disappears after claiming eight deliveries. Its lease
+        // objects are deliberately dropped without a terminal update; the
+        // other two replicas must reclaim them after expiry.
+        let mut abandoned = Vec::new();
+        for _ in 0..8 {
+            abandoned.push(
+                claim_pending_with_limit(&pool, chrono::Duration::milliseconds(150), 8)
+                    .await
+                    .unwrap()
+                    .unwrap(),
+            );
+        }
+        drop(abandoned);
+
+        let effective_dispatches =
+            std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashSet::new()));
+        let mut survivors = tokio::task::JoinSet::new();
+        for _ in 0..16 {
+            let pool = pool.clone();
+            let effective_dispatches = effective_dispatches.clone();
+            survivors.spawn(async move {
+                let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(15);
+                loop {
+                    let terminal: i64 = sqlx::query_scalar(
+                        "SELECT count(*) FROM deliveries WHERE state IN ('done', 'failed')",
+                    )
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+                    if terminal == 64 {
+                        return;
+                    }
+                    assert!(
+                        tokio::time::Instant::now() < deadline,
+                        "burst did not drain"
+                    );
+
+                    let Some(claimed) =
+                        claim_pending_with_limit(&pool, chrono::Duration::seconds(2), 8)
+                            .await
+                            .unwrap()
+                    else {
+                        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                        continue;
+                    };
+
+                    let guid = claimed.delivery.delivery_guid.clone();
+                    let index: u64 = guid.rsplit('-').next().unwrap().parse().unwrap();
+                    if let Some(installation_id) = claimed.delivery.installation_id {
+                        let active: i64 = sqlx::query_scalar(
+                            "SELECT count(*) FROM deliveries \
+                             WHERE installation_id = $1 AND state = 'processing' \
+                               AND lease_expires_at > now()",
+                        )
+                        .bind(installation_id)
+                        .fetch_one(&pool)
+                        .await
+                        .unwrap();
+                        assert!(active <= 8, "installation concurrency exceeded eight");
+                    }
+
+                    if claimed.delivery.attempts == 1 && index.is_multiple_of(20) {
+                        // A 5xx after a non-idempotent request is ambiguous:
+                        // terminate instead of risking a second dispatch.
+                        claimed
+                            .fail("simulated ambiguous GitHub 500")
+                            .await
+                            .unwrap();
+                    } else if claimed.delivery.attempts == 1 && index.is_multiple_of(13) {
+                        // A rate-limit rejection is known not to have applied
+                        // the operation, so it is safe to retry after delay.
+                        claimed
+                            .retry_after("simulated GitHub 429", chrono::Duration::milliseconds(10))
+                            .await
+                            .unwrap();
+                    } else {
+                        let latency = 300 + (index % 8) * 100;
+                        tokio::time::sleep(std::time::Duration::from_millis(latency)).await;
+                        assert!(
+                            effective_dispatches.lock().await.insert(guid),
+                            "effective dispatch was duplicated"
+                        );
+                        claimed.complete().await.unwrap();
+                    }
+                }
+            });
+        }
+        while let Some(result) = survivors.join_next().await {
+            result.unwrap();
+        }
+
+        let (done, failed, retried, max_attempts): (i64, i64, i64, i32) = sqlx::query_as(
+            "SELECT count(*) FILTER (WHERE state = 'done'), \
+                    count(*) FILTER (WHERE state = 'failed'), \
+                    count(*) FILTER (WHERE attempts = 2), \
+                    max(attempts) \
+             FROM deliveries",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(done + failed, 64);
+        assert!(
+            failed >= 3,
+            "the deterministic 5% 500 injection did not run"
+        );
+        assert!(retried >= 8, "abandoned leases were not reclaimed");
+        assert_eq!(max_attempts, 2);
+        assert_eq!(
+            i64::try_from(effective_dispatches.lock().await.len()).unwrap(),
+            done
+        );
     }
 }

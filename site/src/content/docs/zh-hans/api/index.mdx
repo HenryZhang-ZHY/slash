@@ -101,6 +101,7 @@ JSON 响应里的时间戳是 RFC 3339 字符串。
 | --- | --- | --- |
 | `POST` | `/webhook` | 接收签名后的 GitHub webhook 投递 |
 | `GET` | `/healthz` | 存活探针 |
+| `GET` | `/readyz` | 检查 PostgreSQL 的就绪探针 |
 | `GET` | `/metrics` | Prometheus 指标 |
 
 ## 错误约定
