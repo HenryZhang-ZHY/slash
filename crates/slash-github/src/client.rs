@@ -8,6 +8,10 @@
 //! bare `204`) does not model (spec §6.3), and octocrab 0.54 has no
 //! `get`/`list` for workflow runs at all.
 
+use std::future::Future;
+use std::sync::Arc;
+use std::time::Duration;
+
 use chrono::{DateTime, Utc};
 use octocrab::Octocrab;
 use octocrab::models::CheckRunId;
@@ -110,6 +114,7 @@ pub struct RepoClient {
     octocrab: Octocrab,
     owner: String,
     repo: String,
+    rate_limit_retry_observer: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 impl RepoClient {
@@ -135,6 +140,11 @@ impl RepoClient {
                 .base_uri(uri)
                 .map_err(|e| ClientError::ClientBuild(e.to_string()))?;
         }
+        // Octocrab's default policy retries 5xx responses, including
+        // non-idempotent workflow dispatches. Slash disables it and retries
+        // only explicit 429 rejections, which are known not to have applied
+        // the request.
+        builder = builder.add_retry_config(octocrab::service::middleware::retry::RetryConfig::None);
         let octocrab = builder
             .build()
             .map_err(|e| ClientError::ClientBuild(e.to_string()))?;
@@ -143,15 +153,49 @@ impl RepoClient {
             octocrab,
             owner: owner.into(),
             repo: repo.into(),
+            rate_limit_retry_observer: None,
         })
     }
 
+    pub fn with_rate_limit_retry_observer(
+        mut self,
+        observer: impl Fn() + Send + Sync + 'static,
+    ) -> Self {
+        self.rate_limit_retry_observer = Some(Arc::new(observer));
+        self
+    }
+
+    async fn run_request<T, F, Fut>(&self, mut request: F) -> Result<T, ClientError>
+    where
+        F: FnMut() -> Fut,
+        Fut: Future<Output = Result<T, ClientError>>,
+    {
+        const MAX_ATTEMPTS: u32 = 4;
+        for attempt in 0..MAX_ATTEMPTS {
+            match request().await {
+                Ok(value) => return Ok(value),
+                Err(error) if error.status_code() == Some(429) && attempt + 1 < MAX_ATTEMPTS => {
+                    if let Some(observer) = &self.rate_limit_retry_observer {
+                        observer();
+                    }
+                    let delay = Duration::from_millis(200).saturating_mul(1 << attempt);
+                    tokio::time::sleep(delay).await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        unreachable!("bounded request loop always returns")
+    }
+
     pub async fn get_pull_request(&self, number: u64) -> Result<PullRequest, ClientError> {
-        self.octocrab
-            .pulls(&self.owner, &self.repo)
-            .get(number)
-            .await
-            .map_err(ClientError::from_octocrab)
+        self.run_request(|| async {
+            self.octocrab
+                .pulls(&self.owner, &self.repo)
+                .get(number)
+                .await
+                .map_err(ClientError::from_octocrab)
+        })
+        .await
     }
 
     /// Reads `role_name`, never the legacy top-level `permission` field
@@ -160,21 +204,27 @@ impl RepoClient {
         &self,
         username: &str,
     ) -> Result<RepoPermission, ClientError> {
-        self.octocrab
-            .repos(&self.owner, &self.repo)
-            .get_contributor_permission(username)
-            .send()
-            .await
-            .map_err(ClientError::from_octocrab)
+        self.run_request(|| async {
+            self.octocrab
+                .repos(&self.owner, &self.repo)
+                .get_contributor_permission(username)
+                .send()
+                .await
+                .map_err(ClientError::from_octocrab)
+        })
+        .await
     }
 
     pub async fn get_default_branch(&self) -> Result<String, ClientError> {
         let route = format!("/repos/{}/{}", self.owner, self.repo);
         let repository: RepositoryDefaults = self
-            .octocrab
-            .get(route, None::<&()>)
-            .await
-            .map_err(ClientError::from_octocrab)?;
+            .run_request(|| async {
+                self.octocrab
+                    .get(route.as_str(), None::<&()>)
+                    .await
+                    .map_err(ClientError::from_octocrab)
+            })
+            .await?;
         if repository.default_branch.is_empty() {
             return Err(ClientError::InvalidResponse(
                 "repository default_branch is empty".to_string(),
@@ -188,11 +238,14 @@ impl RepoClient {
         use octocrab::params::repos::Reference;
 
         let reference = self
-            .octocrab
-            .repos(&self.owner, &self.repo)
-            .get_ref(&Reference::Branch(branch.to_string()))
-            .await
-            .map_err(ClientError::from_octocrab)?;
+            .run_request(|| async {
+                self.octocrab
+                    .repos(&self.owner, &self.repo)
+                    .get_ref(&Reference::Branch(branch.to_string()))
+                    .await
+                    .map_err(ClientError::from_octocrab)
+            })
+            .await?;
         match reference.object {
             Object::Commit { sha, .. } => Ok(sha),
             Object::Tag { .. } => Err(ClientError::InvalidResponse(format!(
@@ -213,14 +266,17 @@ impl RepoClient {
         git_ref: &str,
     ) -> Result<Vec<Content>, ClientError> {
         let mut items = self
-            .octocrab
-            .repos(&self.owner, &self.repo)
-            .get_content()
-            .path(path)
-            .r#ref(git_ref)
-            .send()
-            .await
-            .map_err(ClientError::from_octocrab)?;
+            .run_request(|| async {
+                self.octocrab
+                    .repos(&self.owner, &self.repo)
+                    .get_content()
+                    .path(path)
+                    .r#ref(git_ref)
+                    .send()
+                    .await
+                    .map_err(ClientError::from_octocrab)
+            })
+            .await?;
         Ok(items.take_items())
     }
 
@@ -231,14 +287,17 @@ impl RepoClient {
         head_sha: &str,
         external_id: &str,
     ) -> Result<CheckRun, ClientError> {
-        self.octocrab
-            .checks(&self.owner, &self.repo)
-            .create_check_run(name, head_sha)
-            .status(CheckRunStatus::Queued)
-            .external_id(external_id)
-            .send()
-            .await
-            .map_err(ClientError::from_octocrab)
+        self.run_request(|| async {
+            self.octocrab
+                .checks(&self.owner, &self.repo)
+                .create_check_run(name, head_sha)
+                .status(CheckRunStatus::Queued)
+                .external_id(external_id)
+                .send()
+                .await
+                .map_err(ClientError::from_octocrab)
+        })
+        .await
     }
 
     pub async fn update_check_run(
@@ -246,27 +305,30 @@ impl RepoClient {
         check_run_id: u64,
         update: CheckRunUpdate<'_>,
     ) -> Result<CheckRun, ClientError> {
-        let handler = self.octocrab.checks(&self.owner, &self.repo);
-        let mut builder = handler.update_check_run(CheckRunId(check_run_id));
-        if let Some(status) = update.status {
-            builder = builder.status(status);
-        }
-        if let Some(conclusion) = update.conclusion {
-            builder = builder.conclusion(conclusion);
-        }
-        if let Some(details_url) = update.details_url {
-            builder = builder.details_url(details_url);
-        }
-        if let Some((title, summary)) = update.output {
-            builder = builder.output(CheckRunOutput {
-                title: title.to_string(),
-                summary: summary.to_string(),
-                text: None,
-                annotations: Vec::new(),
-                images: Vec::new(),
-            });
-        }
-        builder.send().await.map_err(ClientError::from_octocrab)
+        self.run_request(|| async {
+            let handler = self.octocrab.checks(&self.owner, &self.repo);
+            let mut builder = handler.update_check_run(CheckRunId(check_run_id));
+            if let Some(status) = update.status {
+                builder = builder.status(status);
+            }
+            if let Some(conclusion) = update.conclusion {
+                builder = builder.conclusion(conclusion);
+            }
+            if let Some(details_url) = update.details_url {
+                builder = builder.details_url(details_url);
+            }
+            if let Some((title, summary)) = update.output {
+                builder = builder.output(CheckRunOutput {
+                    title: title.to_string(),
+                    summary: summary.to_string(),
+                    text: None,
+                    annotations: Vec::new(),
+                    images: Vec::new(),
+                });
+            }
+            builder.send().await.map_err(ClientError::from_octocrab)
+        })
+        .await
     }
 
     pub async fn create_comment(
@@ -274,11 +336,14 @@ impl RepoClient {
         issue_number: u64,
         body: &str,
     ) -> Result<Comment, ClientError> {
-        self.octocrab
-            .issues(&self.owner, &self.repo)
-            .create_comment(issue_number, body)
-            .await
-            .map_err(ClientError::from_octocrab)
+        self.run_request(|| async {
+            self.octocrab
+                .issues(&self.owner, &self.repo)
+                .create_comment(issue_number, body)
+                .await
+                .map_err(ClientError::from_octocrab)
+        })
+        .await
     }
 
     /// Reacts on the *comment* (not the issue) — the triggering artifact
@@ -288,11 +353,14 @@ impl RepoClient {
         comment_id: u64,
         content: ReactionContent,
     ) -> Result<Reaction, ClientError> {
-        self.octocrab
-            .issues(&self.owner, &self.repo)
-            .create_comment_reaction(comment_id, content)
-            .await
-            .map_err(ClientError::from_octocrab)
+        self.run_request(|| async {
+            self.octocrab
+                .issues(&self.owner, &self.repo)
+                .create_comment_reaction(comment_id, content.clone())
+                .await
+                .map_err(ClientError::from_octocrab)
+        })
+        .await
     }
 
     /// Dispatches `workflow_file` on `git_ref` with `return_run_details:
@@ -322,10 +390,13 @@ impl RepoClient {
             return_run_details: true,
         };
 
-        self.octocrab
-            .post(route, Some(&body))
-            .await
-            .map_err(ClientError::from_octocrab)
+        self.run_request(|| async {
+            self.octocrab
+                .post(route.as_str(), Some(&body))
+                .await
+                .map_err(ClientError::from_octocrab)
+        })
+        .await
     }
 
     /// Re-fetches a run directly (spec §6.3: never trust the webhook body for
@@ -336,10 +407,13 @@ impl RepoClient {
             owner = self.owner,
             repo = self.repo,
         );
-        self.octocrab
-            .get(route, None::<&()>)
-            .await
-            .map_err(ClientError::from_octocrab)
+        self.run_request(|| async {
+            self.octocrab
+                .get(route.as_str(), None::<&()>)
+                .await
+                .map_err(ClientError::from_octocrab)
+        })
+        .await
     }
 
     /// The spec §6.3 missing-run-id poll: filtered by workflow file, event,
@@ -375,10 +449,13 @@ impl RepoClient {
         };
 
         let response: ListWorkflowRunsResponse = self
-            .octocrab
-            .get(route, Some(&query))
-            .await
-            .map_err(ClientError::from_octocrab)?;
+            .run_request(|| async {
+                self.octocrab
+                    .get(route.as_str(), Some(&query))
+                    .await
+                    .map_err(ClientError::from_octocrab)
+            })
+            .await?;
         Ok(response.workflow_runs)
     }
 }
@@ -396,11 +473,75 @@ pub struct CheckRunUpdate<'a> {
 #[allow(clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use wiremock::matchers::{body_json, method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
+    struct RateLimitOnce {
+        attempts: Arc<AtomicUsize>,
+    }
+
+    impl wiremock::Respond for RateLimitOnce {
+        fn respond(&self, _request: &wiremock::Request) -> ResponseTemplate {
+            if self.attempts.fetch_add(1, Ordering::SeqCst) == 0 {
+                ResponseTemplate::new(429)
+                    .set_body_json(serde_json::json!({"message":"rate limited"}))
+            } else {
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"default_branch":"main"}))
+            }
+        }
+    }
+
     async fn client_against(server: &MockServer) -> RepoClient {
         RepoClient::with_base_uri("tok_abc", "acme", "widgets", Some(&server.uri())).unwrap()
+    }
+
+    #[tokio::test]
+    async fn retries_an_explicit_rate_limit_rejection_and_reports_it() {
+        let server = MockServer::start().await;
+        let attempts = Arc::new(AtomicUsize::new(0));
+        Mock::given(method("GET"))
+            .and(path("/repos/acme/widgets"))
+            .respond_with(RateLimitOnce {
+                attempts: attempts.clone(),
+            })
+            .expect(2)
+            .mount(&server)
+            .await;
+
+        let retries = Arc::new(AtomicUsize::new(0));
+        let observed_retries = retries.clone();
+        let client = client_against(&server)
+            .await
+            .with_rate_limit_retry_observer(move || {
+                observed_retries.fetch_add(1, Ordering::SeqCst);
+            });
+
+        assert_eq!(client.get_default_branch().await.unwrap(), "main");
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        assert_eq!(retries.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn never_blindly_retries_a_server_error() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/repos/acme/widgets"))
+            .respond_with(
+                ResponseTemplate::new(500)
+                    .set_body_json(serde_json::json!({"message":"ambiguous"})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let error = client_against(&server)
+            .await
+            .get_default_branch()
+            .await
+            .unwrap_err();
+        assert_eq!(error.status_code(), Some(500));
     }
 
     #[tokio::test]

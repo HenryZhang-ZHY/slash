@@ -68,8 +68,13 @@ pub async fn handle_check_run_rerequested(
         TOKEN_PERMISSIONS,
     )
     .await?;
+    let rate_limit_retries = ctx
+        .metrics
+        .delivery_retries_total
+        .with_label_values(&["github_rate_limit"]);
     let client =
-        RepoClient::with_base_uri(&token, ctx.owner.clone(), ctx.repo.clone(), ctx.base_uri)?;
+        RepoClient::with_base_uri(&token, ctx.owner.clone(), ctx.repo.clone(), ctx.base_uri)?
+            .with_rate_limit_retry_observer(move || rate_limit_retries.inc());
 
     let permission = match client.get_collaborator_permission(&rerequester.login).await {
         Ok(permission) => permission,
