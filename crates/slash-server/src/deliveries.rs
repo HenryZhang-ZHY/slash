@@ -1,11 +1,13 @@
 //! The `deliveries` transactional inbox (spec §7.3). A claim holds the row's
-//! `FOR UPDATE SKIP LOCKED` lock inside one open transaction that spans the
-//! whole pipeline; the row is marked `done`/`failed` only as part of that
-//! same transaction's commit. If the process dies anywhere in between, the
-//! transaction is never committed, Postgres rolls it back, and the row is
-//! exactly as it was — still `pending` — for a second worker to claim. This
-//! is what makes "worker killed mid-pipeline" safe without any explicit
-//! "in-progress" state to get stuck in.
+//! `FOR NO KEY UPDATE SKIP LOCKED` lock inside one open transaction that spans
+//! the whole pipeline; the weaker lock still excludes concurrent workers but
+//! permits an invocation's foreign key to reference the claimed delivery. The
+//! row is marked `done`/`failed` only as part of that same transaction's
+//! commit. If the process dies anywhere in between, the transaction is never
+//! committed, Postgres rolls it back, and the row is exactly as it was — still
+//! `pending` — for a second worker to claim. This is what makes "worker killed
+//! mid-pipeline" safe without any explicit "in-progress" state to get stuck
+//! in.
 
 use sqlx::{PgPool, Postgres, Transaction};
 
@@ -83,7 +85,7 @@ pub async fn claim_pending(pool: &PgPool) -> Result<Option<ClaimedDelivery<'_>>,
 
     let delivery = sqlx::query_as::<_, Delivery>(
         "SELECT delivery_guid, event, payload FROM deliveries \
-         WHERE state = 'pending' ORDER BY received_at FOR UPDATE SKIP LOCKED LIMIT 1",
+         WHERE state = 'pending' ORDER BY received_at FOR NO KEY UPDATE SKIP LOCKED LIMIT 1",
     )
     .fetch_optional(&mut *tx)
     .await?;
@@ -231,6 +233,50 @@ mod tests {
 
     #[serial_test::serial(db)]
     #[tokio::test]
+    async fn claim_lock_allows_recording_the_originating_invocation() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        insert_delivery(&pool, "guid-invocation", "issue_comment", b"{}")
+            .await
+            .unwrap();
+
+        let held = claim_pending(&pool).await.unwrap().unwrap();
+        let id = uuid::Uuid::new_v4();
+        let invocation = crate::invocations::NewInvocation {
+            id,
+            installation_id: 1,
+            repository_id: 100,
+            owner: "acme",
+            repo: "widgets",
+            comment_id: 101,
+            attempt: 1,
+            pr_number: 7,
+            head_sha: "deadbeef",
+            head_branch: "feature",
+            actor: "alice",
+            actor_id: 1,
+            command: "echo",
+            raw_comment_line: "/echo hi",
+            args: serde_json::json!({}),
+            workflow_file: "echo.yml",
+            delivery_guid: Some("guid-invocation"),
+        };
+
+        let outcome = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            crate::invocations::claim(&pool, &invocation),
+        )
+        .await
+        .expect("the delivery claim must not block its invocation foreign-key check")
+        .unwrap();
+        assert_eq!(outcome, crate::invocations::ClaimOutcome::Claimed(id));
+
+        held.complete().await.unwrap();
+    }
+
+    #[serial_test::serial(db)]
+    #[tokio::test]
     async fn a_worker_killed_mid_pipeline_leaves_the_delivery_pending_for_a_second_worker() {
         let Some(pool) = test_pool().await else {
             return;
@@ -368,7 +414,7 @@ mod tests {
 
         assert_ne!(
             first.delivery.delivery_guid, second.delivery.delivery_guid,
-            "FOR UPDATE SKIP LOCKED must never let two concurrent workers claim the same row"
+            "SKIP LOCKED must never let two concurrent workers claim the same row"
         );
 
         first.complete().await.unwrap();
