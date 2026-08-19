@@ -61,6 +61,10 @@ impl CommandCatalog {
             .map(|command| command.command.clone())
             .collect()
     }
+
+    pub fn commands(&self) -> &[ValidatedCommand] {
+        &self.commands
+    }
 }
 
 #[derive(Debug)]

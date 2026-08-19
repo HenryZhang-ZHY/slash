@@ -52,6 +52,11 @@ Slash never treats an error as an empty catalog and never serves a persisted
 stale catalog. Partial catalogs are rejected because omitting one policy file
 would change authorization behavior.
 
+The built-in `/slash help` command reads that same validated default-branch
+catalog and posts its commands, usage, required GitHub role, argument details,
+and an example directly on the pull request. It never creates an invocation,
+check run, or workflow dispatch.
+
 Only the first line of a comment can be a command. Command and input names are
 bounded and validated, the `slash_` prefix is reserved, unknown configuration
 keys fail validation, and untrusted input must not reach a panic. Before
