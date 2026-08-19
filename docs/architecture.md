@@ -67,8 +67,13 @@ cannot redefine them.
 Webhook handling verifies the signature against the raw request body before
 JSON parsing. A valid delivery is inserted into PostgreSQL under the unique
 `X-GitHub-Delivery` identifier before Slash returns success. Workers claim
-pending rows with `FOR UPDATE SKIP LOCKED`, making redelivery and concurrent
-replicas safe without an in-memory queue.
+eligible rows with `FOR UPDATE SKIP LOCKED` and commit an expiring lease before
+running the GitHub pipeline. Each lease has a unique fencing token: completion
+and failure updates succeed only for the current token, so an expired worker
+cannot overwrite a newer owner's result. A crashed worker holds no database
+transaction or connection; another replica can reclaim the delivery after the
+lease expires. This makes redelivery and concurrent replicas safe without an
+in-memory queue or transaction-spanning external I/O.
 
 PostgreSQL is a deliberate coordination dependency: uniqueness constraints,
 transactions, guarded updates, and row claiming are part of correctness rather

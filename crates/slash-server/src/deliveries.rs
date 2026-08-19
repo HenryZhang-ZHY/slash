@@ -1,15 +1,13 @@
-//! The `deliveries` transactional inbox (spec §7.3). A claim holds the row's
-//! `FOR NO KEY UPDATE SKIP LOCKED` lock inside one open transaction that spans
-//! the whole pipeline; the weaker lock still excludes concurrent workers but
-//! permits an invocation's foreign key to reference the claimed delivery. The
-//! row is marked `done`/`failed` only as part of that same transaction's
-//! commit. If the process dies anywhere in between, the transaction is never
-//! committed, Postgres rolls it back, and the row is exactly as it was — still
-//! `pending` — for a second worker to claim. This is what makes "worker killed
-//! mid-pipeline" safe without any explicit "in-progress" state to get stuck
-//! in.
+//! The `deliveries` durable inbox (spec §7.3). Claiming is one short,
+//! committed statement: the worker changes an eligible row to `processing`
+//! and receives a unique fencing token plus an expiry. The GitHub pipeline
+//! therefore never holds a database transaction or connection open. A worker
+//! may complete or fail only the lease token it owns; after expiry, a new
+//! worker can reclaim the row and the stale owner can no longer mutate it.
 
-use sqlx::{PgPool, Postgres, Transaction};
+use sqlx::PgPool;
+
+pub const DEFAULT_LEASE_DURATION: chrono::Duration = chrono::Duration::seconds(60);
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct Delivery {
@@ -70,56 +68,91 @@ pub(crate) async fn state_of(pool: &PgPool, guid: &str) -> Result<Option<String>
     Ok(row.map(|(state,)| state))
 }
 
-/// A pending delivery claimed under `FOR UPDATE SKIP LOCKED`, holding its
-/// transaction open. Dropping this without calling [`complete`] or [`fail`]
-/// rolls the transaction back, leaving the row `pending`.
-pub struct ClaimedDelivery<'a> {
-    tx: Transaction<'a, Postgres>,
+/// A delivery whose lease was committed before it was returned to the worker.
+/// Mutations are fenced by `lease_token`; dropping this value leaves the row
+/// `processing` until its lease expires and another worker reclaims it.
+pub struct ClaimedDelivery {
+    pool: PgPool,
+    lease_token: uuid::Uuid,
     pub delivery: Delivery,
 }
 
-/// Claims the oldest pending delivery, if any, skipping rows already locked
-/// by another worker/replica.
-pub async fn claim_pending(pool: &PgPool) -> Result<Option<ClaimedDelivery<'_>>, sqlx::Error> {
-    let mut tx = pool.begin().await?;
-
-    let delivery = sqlx::query_as::<_, Delivery>(
-        "SELECT delivery_guid, event, payload FROM deliveries \
-         WHERE state = 'pending' ORDER BY received_at FOR NO KEY UPDATE SKIP LOCKED LIMIT 1",
-    )
-    .fetch_optional(&mut *tx)
-    .await?;
-
-    match delivery {
-        Some(delivery) => Ok(Some(ClaimedDelivery { tx, delivery })),
-        None => {
-            tx.commit().await?;
-            Ok(None)
-        }
-    }
+/// Claims the oldest eligible delivery with the production lease duration.
+pub async fn claim_pending(pool: &PgPool) -> Result<Option<ClaimedDelivery>, sqlx::Error> {
+    claim_pending_for(pool, DEFAULT_LEASE_DURATION).await
 }
 
-impl ClaimedDelivery<'_> {
-    pub async fn complete(mut self) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            "UPDATE deliveries SET state = 'done', attempts = attempts + 1, processed_at = now() WHERE delivery_guid = $1",
+/// Claims one pending or expired delivery in a single autocommit statement.
+/// `FOR UPDATE SKIP LOCKED` protects candidate selection while the update
+/// commits the lease before this function returns.
+pub async fn claim_pending_for(
+    pool: &PgPool,
+    lease_duration: chrono::Duration,
+) -> Result<Option<ClaimedDelivery>, sqlx::Error> {
+    let lease_token = uuid::Uuid::new_v4();
+    let lease_expires_at = chrono::Utc::now() + lease_duration;
+    let delivery = sqlx::query_as::<_, Delivery>(
+        "WITH candidate AS ( \
+             SELECT delivery_guid FROM deliveries \
+             WHERE (state = 'pending' AND (next_attempt_at IS NULL OR next_attempt_at <= now())) \
+                OR (state = 'processing' AND lease_expires_at <= now()) \
+             ORDER BY received_at \
+             FOR UPDATE SKIP LOCKED LIMIT 1 \
+         ) \
+         UPDATE deliveries AS d \
+         SET state = 'processing', lease_token = $1, lease_expires_at = $2, \
+             attempts = attempts + 1 \
+         FROM candidate \
+         WHERE d.delivery_guid = candidate.delivery_guid \
+         RETURNING d.delivery_guid, d.event, d.payload",
+    )
+    .bind(lease_token)
+    .bind(lease_expires_at)
+    .fetch_optional(pool)
+    .await?;
+
+    Ok(delivery.map(|delivery| ClaimedDelivery {
+        pool: pool.clone(),
+        lease_token,
+        delivery,
+    }))
+}
+
+impl ClaimedDelivery {
+    pub async fn complete(self) -> Result<(), sqlx::Error> {
+        let result = sqlx::query(
+            "UPDATE deliveries \
+             SET state = 'done', processed_at = now(), lease_token = NULL, lease_expires_at = NULL \
+             WHERE delivery_guid = $1 AND state = 'processing' AND lease_token = $2",
         )
         .bind(&self.delivery.delivery_guid)
-        .execute(&mut *self.tx)
+        .bind(self.lease_token)
+        .execute(&self.pool)
         .await?;
-        self.tx.commit().await
+        require_owned_lease(result.rows_affected())
     }
 
-    pub async fn fail(mut self, error: &str) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            "UPDATE deliveries SET state = 'failed', attempts = attempts + 1, last_error = $2, processed_at = now() \
-             WHERE delivery_guid = $1",
+    pub async fn fail(self, error: &str) -> Result<(), sqlx::Error> {
+        let result = sqlx::query(
+            "UPDATE deliveries \
+             SET state = 'failed', last_error = $2, processed_at = now(), \
+                 lease_token = NULL, lease_expires_at = NULL \
+             WHERE delivery_guid = $1 AND state = 'processing' AND lease_token = $3",
         )
         .bind(&self.delivery.delivery_guid)
         .bind(error)
-        .execute(&mut *self.tx)
+        .bind(self.lease_token)
+        .execute(&self.pool)
         .await?;
-        self.tx.commit().await
+        require_owned_lease(result.rows_affected())
+    }
+}
+
+fn require_owned_lease(rows_affected: u64) -> Result<(), sqlx::Error> {
+    if rows_affected == 1 {
+        Ok(())
+    } else {
+        Err(sqlx::Error::RowNotFound)
     }
 }
 
@@ -215,7 +248,7 @@ mod tests {
 
     #[serial_test::serial(db)]
     #[tokio::test]
-    async fn claim_pending_skips_a_row_locked_by_another_transaction() {
+    async fn an_unexpired_lease_is_not_claimed_twice() {
         let Some(pool) = test_pool().await else {
             return;
         };
@@ -224,7 +257,7 @@ mod tests {
             .unwrap();
 
         let held = claim_pending(&pool).await.unwrap().unwrap();
-        // A second, concurrent claim attempt must not see the locked row.
+        // A second worker must not see a committed but unexpired lease.
         let second_attempt = claim_pending(&pool).await.unwrap();
         assert!(second_attempt.is_none());
 
@@ -233,7 +266,7 @@ mod tests {
 
     #[serial_test::serial(db)]
     #[tokio::test]
-    async fn claim_lock_allows_recording_the_originating_invocation() {
+    async fn claim_commits_before_pipeline_database_work() {
         let Some(pool) = test_pool().await else {
             return;
         };
@@ -268,7 +301,7 @@ mod tests {
             crate::invocations::claim(&pool, &invocation),
         )
         .await
-        .expect("the delivery claim must not block its invocation foreign-key check")
+        .expect("the committed delivery lease must not block its invocation foreign-key check")
         .unwrap();
         assert_eq!(outcome, crate::invocations::ClaimOutcome::Claimed(id));
 
@@ -277,7 +310,7 @@ mod tests {
 
     #[serial_test::serial(db)]
     #[tokio::test]
-    async fn a_worker_killed_mid_pipeline_leaves_the_delivery_pending_for_a_second_worker() {
+    async fn an_expired_lease_is_reclaimed_and_fences_the_stale_worker() {
         let Some(pool) = test_pool().await else {
             return;
         };
@@ -285,20 +318,28 @@ mod tests {
             .await
             .unwrap();
 
-        {
-            let claimed = claim_pending(&pool).await.unwrap().unwrap();
-            assert_eq!(claimed.delivery.delivery_guid, "guid-4");
-            // Simulate a crash: drop the claim without calling `complete`.
-            // The transaction rolls back and the lock is released.
-        }
+        let stale = claim_pending(&pool).await.unwrap().unwrap();
+        assert_eq!(stale.delivery.delivery_guid, "guid-4");
 
         assert_eq!(
             state_of(&pool, "guid-4").await.unwrap().as_deref(),
-            Some("pending")
+            Some("processing")
         );
+
+        sqlx::query(
+            "UPDATE deliveries SET lease_expires_at = now() - interval '1 second' \
+             WHERE delivery_guid = 'guid-4'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
 
         let second_worker_claim = claim_pending(&pool).await.unwrap().unwrap();
         assert_eq!(second_worker_claim.delivery.delivery_guid, "guid-4");
+        assert!(matches!(
+            stale.complete().await,
+            Err(sqlx::Error::RowNotFound)
+        ));
         second_worker_claim.complete().await.unwrap();
 
         assert_eq!(
