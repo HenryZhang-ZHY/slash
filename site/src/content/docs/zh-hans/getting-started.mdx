@@ -1,40 +1,25 @@
 ---
-title: 快速开始
-description: "创建账户、连接 GitHub App 并运行你的第一条命令。"
+title: 运行第一条命令
+description: "添加一条命令和对应 workflow，然后从拉取请求中运行它。"
 sidebar:
   order: 1
 ---
 
-Slash 是一个 GitHub App：在拉取请求上评论 `/deploy staging`，Slash 就会在你
-自己的 GitHub Actions 上触发 `workflow_dispatch`，并把它的状态以 check run 的
-形式同步回 PR。
+本教程从一个已经可访问的 Slash 部署开始，以 GitHub check run 成功结束为目标。
+你将在仓库中添加 `/echo` 命令，并从同仓库分支创建的拉取请求中运行它。
 
-## 1. 创建账户
+## 开始之前
 
-Slash 以托管服务的形式运行 —— 在 Slash 控制台登录（或注册新账户），按 onboarding
-创建你的第一个团队。登录和 onboarding 流程见
-[Web 控制台](/zh-hans/web-console/)。如果你想在自己的基础设施上运行 Slash，参见
-[自托管](/zh-hans/self-host/)。
+请确认：
 
-## 2. 创建 GitHub App
+- Slash 已配置为接收该仓库的 GitHub 事件；
+- 你可以把文件合并到仓库默认分支；
+- GitHub Actions 已启用；以及
+- 用于测试的拉取请求 head 分支属于同一仓库，而不是 fork。
 
-在 GitHub 上创建一个 GitHub App（个人账户或组织均可），并配置：
+## 1. 定义命令
 
-- **Webhook URL**：你的 Slash 部署提供的 webhook 端点（云服务或自托管）
-- **Webhook secret**：一个随机值
-- **权限**：`checks: write`、`actions: write`、`contents: read`、
-  `pull_requests: write`、`issues: write`、`metadata: read`（参见
-  [权限](/zh-hans/permissions/) 了解每个权限的用途 —— 尤其是
-  `issues: write` 很容易被低估，缺了它整个产品都无法工作）
-- **订阅事件**：`issue_comment`、`workflow_run`、`check_run`、
-  `pull_request`
-
-为 App 生成私钥。在你希望运行命令的仓库（或仓库们）上安装这个 App，然后在 Slash
-控制台里连接它，让 Slash 能收到它的 webhook。
-
-## 3. 配置一条命令
-
-在仓库的**默认分支**上添加 `.slash/echo.yml`：
+在默认分支添加 `.slash/echo.yml`：
 
 ```yaml
 command: echo
@@ -45,15 +30,12 @@ args:
     free_text: true
 ```
 
-完整的 schema 参见 [`.slash/` 参考](/zh-hans/slash-config-reference/)；你也可以在
-自己的 CI 里运行 `slash validate .slash/`，在合并到默认分支之前发现错误（参见
-[已知限制](/zh-hans/limitations/) —— Slash 目前不会在 push 时自行校验 `.slash/`）。
+默认分支拥有命令策略。拉取请求不能修改自己的权限要求，也不能把命令重定向到另一个
+workflow。
 
-## 4. 添加 workflow
+## 2. 添加 Workflow
 
-同样在默认分支上添加 `.github/workflows/echo.yml`（GitHub 只从默认分支注册
-`workflow_dispatch` 目标 —— 参见
-[workflow 要求](/zh-hans/workflow-requirements/)）：
+在默认分支添加 `.github/workflows/echo.yml`：
 
 ```yaml
 name: echo
@@ -73,27 +55,33 @@ jobs:
         run: echo "$ACTOR says: $MESSAGE"
 ```
 
-两个文件的完整可复制版本在仓库的
-[`examples/` 目录](https://github.com/HenryZhang-ZHY/slash/tree/main/examples) 里。
+GitHub 必须先在默认分支注册这个 workflow，Slash 才能 dispatch。请像示例一样通过
+`env:` 传递 inputs；绝不要把不可信 input 直接插值进 `run:` 脚本。
 
-## 5. 试试看
+## 3. 运行命令
 
-打开一个拉取请求并评论：
+从同一仓库的分支创建拉取请求，在新评论的第一行输入：
 
 ```text
 /echo hello world
 ```
 
-几秒内你应该会在评论上看到 🚀 反应，PR 上出现 `slash/echo` check run，并在
-workflow run 结束后达到终态，附上该 run 的链接。
+## 确认结果
+
+一次成功调用会产生三个可见信号：
+
+1. Slash 为评论添加 🚀 反应。
+2. 拉取请求上出现 `slash/echo` check。
+3. check 到达终态，并链接到对应的 GitHub Actions run。
+
+如果命令被忽略，先确认命令位于评论第一行。如果 dispatch 失败，确认两个文件都已在
+默认分支上，并且 workflow 声明了 `on: workflow_dispatch`。
 
 ## 下一步
 
-- [`.slash/` 参考](/zh-hans/slash-config-reference/) —— 完整的 `.slash/*.yml` schema
-- [Workflow 要求](/zh-hans/workflow-requirements/) —— 注入的 inputs、
-  `env:`-而非-`${{ }}` 规则、required status check 的注意事项
-- [权限](/zh-hans/permissions/) —— 谁能调用什么
-- [Web 控制台](/zh-hans/web-console/) —— 登录、创建团队、管理 Test Engine
-- [Test Engine](/zh-hans/test-engine/) —— 收集测试结果并隔离 flaky 测试
-- [自托管](/zh-hans/self-host/) —— 在你自己的基础设施上运行 Slash
-- [已知限制](/zh-hans/limitations/) —— Slash 目前刻意不做的事情
+- [Slash 命令](/zh-hans/commands/)解释完整生命周期。
+- [配置命令](/zh-hans/commands/configuration/)记录全部字段与校验规则。
+- [构建命令 Workflow](/zh-hans/commands/workflows/)介绍注入 inputs、安全传值和
+  required checks。
+- [命令授权](/zh-hans/commands/authorization/)解释谁可以运行命令。
+- [已知限制](/zh-hans/limitations/)列出刻意边界与当前缺口。

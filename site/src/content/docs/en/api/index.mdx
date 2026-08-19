@@ -7,12 +7,25 @@ sidebar:
 
 Slash serves its HTTP API and web console from the same origin. Replace
 `https://slash.example.com` in the examples with the origin of your Slash
-deployment. The console (see the [web console guide](/en/web-console/)) is a
+deployment. The console (see [Account and workspace](/en/account/)) is a
 thin client over these same endpoints.
 
 All request bodies share a **5 MiB limit**. UUID path parameters use the
 standard hyphenated UUID representation. Timestamps in JSON responses are
 RFC 3339 strings.
+
+## Choose an API
+
+- Use [Authentication and teams](/en/api/authentication/) for sessions,
+  external identity, the current user, and team creation.
+- Use [Personal access tokens](/en/api/access-tokens/) to issue credentials
+  for agents and other REST clients.
+- Use [Test Engine management](/en/api/test-engine/) for suites, tests,
+  execution history, state, and collection tokens.
+- Use [Test result ingestion](/en/api/ingestion/) from CI to upload results or
+  query quarantine.
+- Use [Webhook and operations](/en/api/platform/) when configuring or
+  monitoring the server boundary.
 
 ## Authentication methods
 
@@ -21,6 +34,7 @@ RFC 3339 strings.
 | Account, team, and Test Engine management | `slash_session` cookie or personal Bearer token |
 | Personal access token management | `slash_session` cookie only |
 | Test result ingestion and quarantine lookup | `Authorization: Bearer <collection-token>` |
+| Instance administration | Separate admin session enabled by `SLASH_ADMIN_SECRET_PATH` |
 | GitHub webhook | `X-Hub-Signature-256` HMAC signature |
 | Health and metrics | None |
 
@@ -70,6 +84,20 @@ The tables below list every route registered by `slash-server`.
 | `POST` | `/v1/test-engine/upload/cargo` | Upload Cargo libtest JSON events |
 | `POST` | `/v1/test-engine/upload/vitest` | Upload Vitest results |
 | `GET` | `/v1/test-engine/quarantined` | List muted or skipped test names |
+
+### [Instance administration](/en/self-host/operations/#instance-admin-console)
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/admin/auth/login` | Create an admin session |
+| `POST` | `/api/admin/auth/logout` | Clear the admin session |
+| `GET` | `/api/admin/auth/session` | Read admin session state |
+| `GET` | `/api/admin/overview` | Read instance queue and installation totals |
+| `GET` | `/api/admin/installations` | List known App installations |
+| `POST` | `/api/admin/installations/refresh` | Reconcile installations from GitHub |
+| `GET` | `/api/admin/deliveries` | List recent webhook deliveries |
+| `GET` | `/api/admin/deliveries/{guid}` | Read one delivery and related invocations |
+| `GET` | `/api/admin/invocations` | List recent command invocations |
 
 ### [Webhook and operations](/en/api/platform/)
 

@@ -1,0 +1,59 @@
+---
+title: 配置 Slash
+description: "设置运行变量、挂载 secrets，并开启可选 GitHub 登录。"
+sidebar:
+  order: 3
+---
+
+## 运行变量
+
+| 变量 | 必填 | 用途 |
+| --- | --- | --- |
+| `SLASH_DATABASE_URL_PATH` | 是 | 包含 Postgres 连接串的文件 |
+| `SLASH_WEBHOOK_SECRET_PATH` | 是 | 包含 GitHub App webhook secret 的文件 |
+| `SLASH_GITHUB_APP_ID` | 是 | GitHub App 数字 ID |
+| `SLASH_GITHUB_PRIVATE_KEY_PATH` | 是 | 包含 GitHub App 私钥的文件 |
+| `SLASH_AUTH_SECRET_PATH` | 是 | 包含 session 签名 HMAC secret 的文件 |
+| `SLASH_ADMIN_SECRET_PATH` | 否 | 开启独立的实例管理表面 |
+| `SLASH_GITHUB_CLIENT_ID` | 否 | 使用同一个 App 开启 GitHub 用户登录 |
+| `SLASH_GITHUB_CLIENT_SECRET_PATH` | 设置 Client ID 时 | 包含 GitHub App Client Secret 的文件 |
+| `SLASH_BASE_URL` | 开启 GitHub 登录时 | 用于生成 callback URL 的公开 origin |
+| `SLASH_WEB_DIR` | 否 | 构建后的 Web 控制台目录；默认 `web/dist` |
+| `RUST_LOG` | 否 | `tracing_subscriber` filter，例如 `info` |
+
+## 仅文件 Secrets
+
+每个 secret 都通过 `*_PATH` 变量配置。Slash 在启动时逐字节读取目标文件，不会 trim
+空白。请只读挂载 secret 文件；除非换行是 secret 的刻意组成部分，否则不要在末尾
+留下换行。
+
+`SLASH_DATABASE_URL`、`SLASH_WEBHOOK_SECRET` 和 `SLASH_AUTH_SECRET` 等内联
+变体不会被识别。必需 secret 文件缺失、不可读或为空都会阻止启动。可选 admin
+secret 的唯一区别是：不设置路径会关闭 `/admin`；路径一旦设置但无效，仍会阻止启动。
+
+## 配置 GitHub App
+
+把 App webhook URL 设置为：
+
+```text
+https://slash.example.com/webhook
+```
+
+webhook secret 必须与 `SLASH_WEBHOOK_SECRET_PATH` 指向文件中的字节完全一致。授予
+`checks: write`、`actions: write`、`contents: read`、`pull_requests: write`、
+`issues: write` 和 `metadata: read`。订阅 `issue_comment`、`workflow_run`、
+`check_run` 和 `pull_request`，再把 App 安装到 Slash 应控制的每个仓库。
+
+## 开启 GitHub 用户登录
+
+Slash 可以使用同一个 GitHub App 处理仓库自动化和用户身份：
+
+1. 把 `https://slash.example.com/api/auth/github/callback` 加入 App callback URL。
+2. 把 `SLASH_GITHUB_CLIENT_ID` 设为 App Client ID。
+3. 把 Client Secret 存进 `SLASH_GITHUB_CLIENT_SECRET_PATH` 指向的文件。
+4. 把 `SLASH_BASE_URL` 设为公开 origin，不包含 callback 路径。
+5. 重启 Slash，并从 `/login` 验证 **Sign in with GitHub**。
+
+Slash 只读取已认证的 `/user` profile，不申请 GitHub 邮箱权限、不按邮箱推断账户相同，
+也不保存 provider access token。已有密码用户应先登录要保留的账户，再从 `/settings`
+连接 GitHub。

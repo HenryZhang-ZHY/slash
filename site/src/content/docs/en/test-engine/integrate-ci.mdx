@@ -1,0 +1,56 @@
+---
+title: Integrate Test Engine with CI
+description: "Upload results and apply the current quarantine disposition in CI."
+sidebar:
+  order: 4
+---
+
+The integration loop is:
+
+1. Query the current quarantine list.
+2. Run the tests and collect their results.
+3. Upload every observed execution.
+4. Soft-fail or skip quarantined tests when determining the CI outcome.
+
+## Authenticate the suite
+
+Every upload and quarantine lookup uses a collection token scoped to one
+suite:
+
+```http
+Authorization: Bearer collection-token-value
+```
+
+Create or rotate the token in the [Test Engine console](/en/test-engine/console/)
+or through the [management API](/en/api/test-engine/). Store it as a CI secret.
+Revocation takes effect immediately.
+
+## Query quarantine
+
+Call `GET /v1/test-engine/quarantined` before applying the run's final
+disposition. The response contains tests whose current state is `muted` or
+`skipped`. Full response semantics are in the
+[ingestion API](/en/api/ingestion/#get-v1test-enginequarantined).
+
+## Upload results
+
+Choose the endpoint that matches the runner output:
+
+| Endpoint | Accepted result |
+| --- | --- |
+| `POST /v1/test-engine/upload` | Normalized JSON or JUnit XML |
+| `POST /v1/test-engine/upload/cargo` | Newline-delimited Cargo libtest JSON |
+| `POST /v1/test-engine/upload/vitest` | A Vitest result array or `{ "tests": [...] }` |
+
+All executions in one accepted batch commit in one database transaction. An
+invalid status rejects the complete batch instead of recording partial data.
+
+## Apply the disposition
+
+Continue running muted tests so Test Engine can observe recovery, but prevent
+their failures from failing the pull request. Skip only tests whose state is
+explicitly `skipped`. Test names sent by the runner must remain stable because
+the quarantine list identifies tests by name within the suite.
+
+For exact payloads, status codes, and format-specific normalization, use the
+[Test result ingestion reference](/en/api/ingestion/).

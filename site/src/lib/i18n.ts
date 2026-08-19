@@ -75,12 +75,12 @@ const translations = {
     home: {
       description: "Slash commands for GitHub pull requests, done right.",
       cards: [
-        ["getting-started", "Get started", "Install and connect the GitHub App"],
-        ["slash-config-reference", "Configure commands", "Define arguments and permissions"],
+        ["getting-started", "Get started", "Add and run your first command"],
+        ["commands", "Slash commands", "Configure commands, workflows, and permissions"],
         ["test-engine", "Test Engine", "Collect results and quarantine flaky tests"],
-        ["permissions", "Permissions", "Understand private and public repository policy"],
-        ["self-host", "Self Hosting", "Run Slash on your own infrastructure"],
+        ["account", "Account and workspace", "Manage teams, connections, and API credentials"],
         ["api", "API reference", "Integrate with every server endpoint"],
+        ["self-host", "Self Hosting", "Deploy and operate your own Slash instance"],
       ],
     },
     editPage: "Edit this page",
@@ -131,12 +131,12 @@ const translations = {
     home: {
       description: "正确实现 GitHub Pull Request 的 Slash Commands。",
       cards: [
-        ["getting-started", "快速开始", "安装并连接 GitHub App"],
-        ["slash-config-reference", "配置命令", "定义参数与权限"],
+        ["getting-started", "快速开始", "添加并运行第一条命令"],
+        ["commands", "Slash 命令", "配置命令、workflow 与权限"],
         ["test-engine", "Test Engine", "收集测试结果并隔离 flaky 测试"],
-        ["permissions", "命令权限", "了解私有与公共仓库的权限策略"],
-        ["self-host", "自托管（Self Hosting）", "在你自己的基础设施上运行 Slash"],
+        ["account", "账户与工作区", "管理团队、连接与 API 凭据"],
         ["api", "API 参考", "接入全部服务端接口"],
+        ["self-host", "自托管（Self Hosting）", "部署并运维自己的 Slash 实例"],
       ],
     },
     editPage: "编辑此页",

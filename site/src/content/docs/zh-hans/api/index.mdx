@@ -6,11 +6,22 @@ sidebar:
 ---
 
 Slash 从同一来源提供 HTTP API 和 Web 控制台。把示例里的 `https://slash.example.com`
-替换为你 Slash 部署的 origin。控制台（见 [Web 控制台指南](/zh-hans/web-console/)）是这些
+替换为你 Slash 部署的 origin。控制台（见[账户与工作区](/zh-hans/account/)）是这些
 端点的薄客户端。
 
 所有请求体共享一个 **5 MiB 限制**。UUID 路径参数使用标准连字符 UUID 表示。
 JSON 响应里的时间戳是 RFC 3339 字符串。
+
+## 选择 API
+
+- 使用[认证与团队](/zh-hans/api/authentication/)处理 session、外部身份、当前用户和
+  团队创建。
+- 使用[个人 Access Token](/zh-hans/api/access-tokens/)为 Agent 和其他 REST 客户端
+  签发凭据。
+- 使用[Test Engine 管理](/zh-hans/api/test-engine/)操作 suites、tests、execution
+  历史、状态和 collection tokens。
+- 从 CI 使用[测试结果 Ingestion](/zh-hans/api/ingestion/)上传结果或查询隔离状态。
+- 配置或监控服务器边界时，使用[Webhook 与运维](/zh-hans/api/platform/)。
 
 ## 认证方式
 
@@ -19,6 +30,7 @@ JSON 响应里的时间戳是 RFC 3339 字符串。
 | 账户、团队和 Test Engine 管理 | `slash_session` cookie 或个人 Bearer token |
 | 个人 Access Token 管理 | 仅 `slash_session` cookie |
 | 测试结果 ingestion 与隔离查询 | `Authorization: Bearer <collection-token>` |
+| 实例管理 | 由 `SLASH_ADMIN_SECRET_PATH` 开启的独立 admin session |
 | GitHub webhook | `X-Hub-Signature-256` HMAC 签名 |
 | 健康与指标 | 无 |
 
@@ -33,7 +45,10 @@ JSON 响应里的时间戳是 RFC 3339 字符串。
 | `POST` | `/api/auth/register` | 创建账户和会话 |
 | `POST` | `/api/auth/login` | 创建会话 |
 | `POST` | `/api/auth/logout` | 清除当前会话 |
-| `GET` | `/api/auth/me` | 读取当前用户和团队 |
+| `GET` | `/api/auth/me` | 读取当前用户、团队和连接 |
+| `GET` | `/api/auth/github/sign-in` | 开始 GitHub 登录 |
+| `POST` | `/api/auth/github/connect` | 把 GitHub 连接到当前用户 |
+| `GET` | `/api/auth/github/callback` | 完成 GitHub 认证 |
 | `POST` | `/api/teams` | 创建团队 |
 
 ### [个人 Access Token](/zh-hans/api/access-tokens/)
@@ -65,6 +80,20 @@ JSON 响应里的时间戳是 RFC 3339 字符串。
 | `POST` | `/v1/test-engine/upload/cargo` | 上传 Cargo libtest JSON 事件 |
 | `POST` | `/v1/test-engine/upload/vitest` | 上传 Vitest 结果 |
 | `GET` | `/v1/test-engine/quarantined` | 列出 muted 或 skipped 的测试名 |
+
+### [实例管理](/zh-hans/self-host/operations/#实例管理后台)
+
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| `POST` | `/api/admin/auth/login` | 创建 admin session |
+| `POST` | `/api/admin/auth/logout` | 清除 admin session |
+| `GET` | `/api/admin/auth/session` | 读取 admin session 状态 |
+| `GET` | `/api/admin/overview` | 读取实例队列和 installation 汇总 |
+| `GET` | `/api/admin/installations` | 列出已知 App installations |
+| `POST` | `/api/admin/installations/refresh` | 从 GitHub reconcile installations |
+| `GET` | `/api/admin/deliveries` | 列出近期 webhook deliveries |
+| `GET` | `/api/admin/deliveries/{guid}` | 读取一条 delivery 和相关 invocations |
+| `GET` | `/api/admin/invocations` | 列出近期命令 invocations |
 
 ### [Webhook 与运维](/zh-hans/api/platform/)
 

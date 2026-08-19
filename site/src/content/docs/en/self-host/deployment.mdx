@@ -1,217 +1,63 @@
 ---
-title: Deployment
-description: "Deploy and operate the Slash server with Postgres."
+title: Deploy Slash
+description: "Run the Slash server with Postgres and verify the deployment."
 sidebar:
   order: 2
 ---
 
-## Reference deployment: a single replica
+## Reference topology
 
-The reference deployment is **one stateless server container plus
-Postgres**. At one replica there is no cross-replica contention on Postgres's
-`FOR UPDATE SKIP LOCKED` (the in-process worker pool still exercises it), so
-scaling out to multiple replicas later is a deployment change, not a code
-change — every piece of coordination (claims, guarded state transitions, the
-sweeper) lives in the database, never in an in-process timer or queue whose
-loss would change an outcome. Race-freedom under multiple replicas is proven
-by the project's two-worker concurrency tests, not by running multiple
-replicas in production.
+Start with one stateless `slash-server` container and one Postgres database.
+Postgres owns durable work, uniqueness, guarded state transitions, and worker
+coordination. No in-memory queue is required for correctness, so additional
+server replicas can share the same database when you need to scale out.
 
-## Running it
+Expose the server's port `8080` through the HTTPS ingress used by your
+environment. The Web console, REST API, GitHub webhook, health endpoint, and
+metrics endpoint share that origin.
 
-Build and run the container:
+## Run the container
+
+Build the repository image and mount the required secret files read-only:
 
 ```sh
 docker build -t slash-server .
 docker run -p 8080:8080 \
   -e SLASH_DATABASE_URL_PATH=/run/secrets/database-url \
   -e SLASH_WEBHOOK_SECRET_PATH=/run/secrets/webhook-secret \
-  -e SLASH_GITHUB_APP_ID=... \
+  -e SLASH_AUTH_SECRET_PATH=/run/secrets/auth-secret \
+  -e SLASH_GITHUB_APP_ID=123456 \
   -e SLASH_GITHUB_PRIVATE_KEY_PATH=/run/secrets/github-app-key.pem \
-  -v /path/to/your-database-url.txt:/run/secrets/database-url:ro \
-  -v /path/to/your-webhook-secret.txt:/run/secrets/webhook-secret:ro \
-  -v /path/to/your-app-key.pem:/run/secrets/github-app-key.pem:ro \
+  -v /path/to/database-url:/run/secrets/database-url:ro \
+  -v /path/to/webhook-secret:/run/secrets/webhook-secret:ro \
+  -v /path/to/auth-secret:/run/secrets/auth-secret:ro \
+  -v /path/to/github-app-key.pem:/run/secrets/github-app-key.pem:ro \
   slash-server
 ```
 
-Or use `docker-compose.yml` in the repository root, which wires up Postgres
-and the server together for local use — see the comments at its top for the
-`.env` values it expects.
+The repository's `docker-compose.yml` provides a local reference with Postgres
+and the server already connected. Review [configuration](/en/self-host/configuration/)
+before adapting it to another environment.
 
-The server runs its own Postgres migrations at startup (`sqlx::migrate!`,
-embedded in the binary at build time) and exits immediately if they fail, so
-a bad migration never leaves the process half-started.
+## Database migrations
 
-### Environment variables
+Migrations are embedded in the server binary and run at startup. The process
+exits if the database is unavailable or a migration fails; it never serves
+requests from a partially migrated schema.
 
-| Variable | Required | Notes |
-| ---------------------------------- | ---------- | ------- |
-| `SLASH_DATABASE_URL_PATH` | yes | Path to a file containing the Postgres connection string. The file is read at startup, byte-for-byte. |
-| `SLASH_WEBHOOK_SECRET_PATH` | yes | Path to a file containing the webhook secret (matches the GitHub App's webhook secret). The server refuses to start without it — signature verification is never optional. |
-| `SLASH_GITHUB_APP_ID` | yes | The GitHub App's numeric ID. |
-| `SLASH_GITHUB_PRIVATE_KEY_PATH` | yes | Path to the App's private key **file** (not the key inline) — mount it read-only, mode `0400` if your platform supports setting it. |
-| `SLASH_AUTH_SECRET_PATH` | yes | Path to a file containing the HMAC session-signing secret, read byte-for-byte. File-only, like the other secrets. |
-| `SLASH_ADMIN_SECRET_PATH` | no | Path to the instance-admin secret. When absent, `/admin` and `/api/admin/*` return 404. When set, the file must be readable and non-empty. |
-| `SLASH_GITHUB_CLIENT_ID` | no | Client ID of the same GitHub App used by the control plane. Enables "Sign in with GitHub". |
-| `SLASH_GITHUB_CLIENT_SECRET_PATH` | no | Path to a file containing that GitHub App's client secret. Required when `SLASH_GITHUB_CLIENT_ID` is set. |
-| `SLASH_BASE_URL` | with GitHub user auth | Public base URL of the server (e.g. `https://slash.example.com`). Used to construct the exact callback URI. |
-| `SLASH_WEB_DIR` | no | Root directory of the built web console SPA. Defaults to `web/dist` (relative to the server's working directory). |
-| `RUST_LOG` | no | `tracing_subscriber` env-filter syntax, e.g. `info` or `slash_server=debug`. |
+Use persistent Postgres storage and include the database in your backup and
+recovery plan. Invocation and webhook state are durable work records, not a
+rebuildable cache.
 
-Every secret is **file-only** — there is exactly one way to configure each,
-a `*_PATH` env var pointing at a file read at startup (mirroring the GitHub
-App private key). The old inline variants (`SLASH_DATABASE_URL`,
-`SLASH_WEBHOOK_SECRET`, `SLASH_AUTH_SECRET`) are **not** recognized, so a
-secret can never end up visible via `docker inspect` or `ps aux`. The file's
-content is read **byte-for-byte — no trimming** — a trailing newline or stray
-whitespace is part of the secret, and a mismatch simply fails rather than
-being silently corrected. If a `*_PATH` env var is unset, or its file is
-unreadable or empty, startup fails rather than skipping the secret. The one
-exception is the optional admin secret: leaving its path unset disables the
-admin surface, while setting an unreadable or empty file still fails startup. See
-`docs/user/onboarding` for the auth secret.
+## Verify the deployment
 
-There is deliberately no way to pass the private key as an inline
-environment variable — only a file path — and the config struct has no
-`Debug`/`Display` implementation, so neither the webhook secret nor the
-database URL (which may embed a password) can leak via a stray log line.
+Request the liveness endpoint after startup:
 
-### GitHub App user authentication (optional)
+```sh
+curl https://slash.example.com/healthz
+```
 
-Slash uses the same GitHub App for repository automation and user sign-in.
-GitHub's web authorization transport returns a short-lived GitHub App user
-access token; unlike a traditional OAuth App token, it uses fine-grained App
-permissions rather than scopes. Slash reads only the authenticated `/user`
-profile and does not request access to GitHub email addresses.
-
-**Setup steps:**
-
-1. Open the settings for the GitHub App already used by Slash.
-2. Add `{base_url}/api/auth/github/callback` as a callback URL. It must match
-   exactly. No account-level email permission is required.
-3. Note the GitHub App **Client ID** and generate a **Client Secret**.
-4. Set the environment variables:
-   ```sh
-   SLASH_GITHUB_CLIENT_ID=<client_id>
-   SLASH_GITHUB_CLIENT_SECRET_PATH=/run/secrets/github-oauth-secret
-   SLASH_BASE_URL=https://slash.example.com   # required
-   ```
-5. Store the client secret in the file (same byte-for-byte convention as
-   other secrets):
-   ```sh
-   echo -n 'ghp_xxxxxxxxxxxx' > /run/secrets/github-oauth-secret
-   chmod 0400 /run/secrets/github-oauth-secret
-   ```
-
-The login flow:
-
-- **New users**: clicking "Sign in with GitHub" creates a credential-free
-  Slash account linked to the stable numeric GitHub user id.
-- **Existing users**: sign in with email/password, then go to **Settings →
-  Connect GitHub**. The callback succeeds only while the same Slash user is
-  still signed in, and neither side may already belong to a different
-  connection.
-
-Both flows use a short-lived, HMAC-signed context cookie (10-minute TTL), an
-independent CSRF state nonce, and PKCE with `S256`. GitHub access tokens are
-used only during the callback and are not stored.
-
-### Endpoints
-
-| Endpoint                       | Purpose |
-|--------------------------------|---------|
-| `POST /webhook`                | The GitHub App's webhook URL. |
-| `POST /api/auth/register`      | Create a new email/password account. |
-| `POST /api/auth/login`         | Sign in with email/password. |
-| `POST /api/auth/logout`        | Clear the session cookie. |
-| `GET /api/auth/me`             | Return the authenticated user, teams, and connections. |
-| `GET /api/auth/github/sign-in` | Initiate GitHub App user sign-in (unauthenticated). |
-| `POST /api/auth/github/connect`| Initiate explicit GitHub connection (authenticated). |
-| `GET /api/auth/github/callback`| GitHub App user-auth callback for both intents. |
-| `GET /healthz`                 | Liveness check; always returns `200 ok` once the process is up. |
-| `GET /metrics`                 | Prometheus text-format metrics — see below. |
-
-## Observability
-
-`GET /metrics` exposes (see `crates/slash-server/src/metrics.rs`):
-
-- `slash_webhook_deliveries_total{event,outcome}` and
-  `slash_webhook_handler_seconds{outcome}` — webhook intake volume and
-  latency.
-- `slash_deliveries_pending` and `slash_deliveries_oldest_pending_age_seconds`
-  — inbox depth and staleness; a nonzero, growing age means the worker pool
-  is stuck or falling behind.
-- `slash_invocations{status}` and
-  `slash_invocations_max_dispatched_age_seconds` — how many invocations are
-  in each lifecycle state, and how long the oldest one has been waiting in
-  `dispatched` for a run id. A growing `dispatched` count or age is the
-  stuck-invocation alarm; the sweeper resolves these automatically within its
-  configured timeout, so a sustained climb points at GitHub API errors, not a
-  logic bug.
-- `slash_correlation_total{path}` — how each dispatch's run id was ultimately
-  resolved: `dispatch_response` (the common case), `polled` (the sweeper's
-  missing-run-id recovery), or `timeout` (never resolved). A healthy
-  deployment is almost entirely `dispatch_response`.
-- `slash_dispatch_failures_total{class}` — dispatches that ended in
-  `dispatch_failed`, by failure class.
-
-**Known gap** (see [known limitations](/en/limitations/)): there is no
-`slash_github_api_calls_total`/rate-limit-remaining metric yet — GitHub API
-call volume and remaining rate-limit budget are not currently observable
-through `/metrics`. Watch application logs for `sweeper: failed to mint
-token` / API error warnings as the interim signal.
-
-## Key rotation
-
-Rotating either credential requires no code change, only a config update and
-restart:
-
-- **Webhook secret**: generate a new secret, update it in the GitHub App's
-  settings, then update the file pointed at by `SLASH_WEBHOOK_SECRET_PATH` and
-  restart the server. There
-  is a brief window where GitHub may deliver with the old secret before the
-  App settings save propagates — a handful of `401`s during that window are
-  expected and harmless (GitHub retries deliveries).
-- **Private key**: generate a new private key in the GitHub App's settings
-  (this does not invalidate the old one immediately), roll out the new
-  `.pem` file to `SLASH_GITHUB_PRIVATE_KEY_PATH` and restart, then delete the
-  old private key from the App's settings once you've confirmed the new
-  deployment is minting tokens successfully.
-
-Do both periodically and always after any suspected credential exposure —
-see the incident procedure below.
-
-## Incident procedure
-
-If the App is doing something it shouldn't (misbehaving on a repository,
-credentials suspected leaked, or GitHub reports abuse):
-
-1. **Stop the server process.** There is currently no per-installation or
-   global kill switch (tracked as a known gap — see
-  [known limitations](/en/limitations/)); stopping the process is the only way
-   to immediately halt *all* dispatch activity across every installation.
-   In-flight `claimed`/`dispatched` invocations are left durably in Postgres
-   and will resolve themselves through the sweeper's normal timeout paths
-   once the server restarts — nothing is lost by stopping it.
-2. **If credentials are suspected compromised**: rotate the private key and
-   the webhook secret immediately (above), and consider suspending or
-   uninstalling the GitHub App from the affected repository/organization
-   from GitHub's own UI — this immediately invalidates the App's ability to
-   mint new installation tokens for it, independent of anything Slash itself
-   does.
-3. **Investigate** using the `invocations` table (a durable, append-mostly
-   audit record of every dispatch attempt — installation, repo, PR, actor,
-   command, workflow, and resulting run id, written *before* the dispatch API
-   call) and the `/metrics` counters above.
-4. **Resume** by restarting the server once the underlying issue is
-   addressed. There is no separate "paused" state to clear — a stopped
-   server simply isn't processing anything.
-
-## Multi-tenancy notes
-
-Installation tokens are minted per-repository with only the permissions a
-given call actually needs, and cached separately per
-`(installation_id, repository_id, permission_set)` — a token leak is bounded
-to one repository and one permission set, not every repository the App is
-installed on anywhere. On a `401`, the cached token is invalidated and
-re-minted once.
+A running process returns `200 OK` with `ok`. Next, configure the GitHub App's
+webhook URL as `https://slash.example.com/webhook` and confirm that a signed
+delivery is accepted. Use [Operate Slash](/en/self-host/operations/) to inspect
+queue health and recent deliveries.

@@ -22,15 +22,15 @@ Use this map only after identifying the changed concept and audience. Keep one d
 
 | Changed surface | Inspect these public owners | Inspect these durable owners |
 | --- | --- | --- |
-| Command YAML, parsing, inputs, trusted fields | `getting-started.mdx`, `slash-config-reference.mdx`, `workflow-requirements.mdx` | `docs/architecture.md` and the owning design |
-| GitHub permissions and authorization | `permissions.mdx`, `api/platform.mdx` | `docs/design/github-command-authorization.md` |
-| Registration, sessions, GitHub identity, teams | `api/authentication.mdx`, `web-console.mdx` | `docs/design/authentication.md` |
-| Personal access tokens | `api/access-tokens.mdx`, `api/index.mdx`, `web-console.mdx` | `docs/design/personal-access-tokens.md` |
-| Admin console, webhook inspection, installation reconciliation | `web-console.mdx`, `self-host/deployment.mdx`, relevant API index text | `docs/design/admin-console.md`, `docs/architecture.md` |
-| Test result ingestion and quarantine | `api/ingestion.mdx`, `api/test-engine.mdx`, `test-engine.mdx`, `web-console.mdx` | `docs/test-engine.md`, `docs/architecture.md` |
+| Command YAML, parsing, inputs, trusted fields | `getting-started.mdx`, `commands/configuration.mdx`, `commands/workflows.mdx` | `docs/architecture.md` and the owning design |
+| GitHub permissions and authorization | `commands/authorization.mdx`, `api/platform.mdx` | `docs/design/github-command-authorization.md` |
+| Registration, sessions, GitHub identity, teams | `account/index.mdx`, `api/authentication.mdx` | `docs/design/authentication.md` |
+| Personal access tokens | `account/index.mdx`, `api/access-tokens.mdx`, `api/index.mdx` | `docs/design/personal-access-tokens.md` |
+| Admin console, webhook inspection, installation reconciliation | `self-host/operations.mdx`, relevant API index text | `docs/design/admin-console.md`, `docs/architecture.md` |
+| Test result ingestion and quarantine | `test-engine/*.mdx`, `api/ingestion.mdx`, `api/test-engine.mdx` | `docs/test-engine.md`, `docs/architecture.md` |
 | REST route, authentication, body, or error behavior | Owning `api/*.mdx` page and `api/index.mdx` inventory | Relevant design only when the durable contract changes |
-| Deployment, secrets, environment, image, release, IaC | `self-host/index.mdx`, `self-host/deployment.mdx`, `limitations.mdx` | `docs/architecture.md` and relevant design |
-| Console capability or user workflow | `web-console.mdx` and linked API page | Relevant design when trust or lifecycle changes |
+| Deployment, secrets, environment, image, release, IaC | `self-host/index.mdx`, `self-host/deployment.mdx`, `self-host/configuration.mdx`, `self-host/operations.mdx`, `limitations.mdx` | `docs/architecture.md` and relevant design |
+| Console capability or user workflow | `account/index.mdx`, `test-engine/console.mdx`, and linked API page | Relevant design when trust or lifecycle changes |
 | Documentation locale, route, search, metadata, Nimbus patch | `site/README.md` and affected locale pages | `docs/design/documentation-internationalization.md` |
 
 Every public owner above means the same relative file under both `en/` and `zh-hans/` when a Chinese counterpart exists.

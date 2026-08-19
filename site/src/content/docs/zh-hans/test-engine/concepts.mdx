@@ -1,0 +1,48 @@
+---
+title: 测试与隔离
+description: "理解 suites、executions、测试状态和 flaky 检测。"
+sidebar:
+  order: 3
+---
+
+## 数据模型
+
+Test Engine 存储四类相关资源：
+
+- **Suite** —— 由 `(owner, repo, suite_key)` 标识的测试集合。
+- **Test** —— suite 中的稳定测试名称，带有可变处置状态。
+- **Run** —— 一次 CI 调用，由 `(ci_provider, run_ref)` 标识。
+- **Execution** —— run 中一次观测到的测试结果，包括状态、时长、stack 和捕获时间。
+
+Execution 只追加。测试状态则是根据历史自动得出的可变决策，也可以由用户手动设置。
+
+## 测试状态
+
+| 状态 | CI 行为 | 如何变化 |
+| --- | --- | --- |
+| `enabled` | 正常运行；失败可以使拉取请求失败 | 默认、手动修改或自动恢复 |
+| `muted` | 继续运行和记录；soft-fail 而不阻塞 | 手动修改或自动隔离 |
+| `skipped` | 不再运行 | 仅手动修改 |
+
+自动隔离使用 `muted` 而不是 `skipped`，因为检测器需要新的 execution 来判断测试何时
+恢复。
+
+## Flaky 检测
+
+当滚动七天窗口同时包含以下信息时，测试被判为 flaky：
+
+- 至少三次 execution；并且
+- 一次失败或错误之后出现了通过。
+
+Slash 自动把符合条件的测试从 `enabled` 改为 `muted`。当近期失败滚出窗口后，Slash
+会把稳定的 muted 测试恢复为 `enabled`。`skipped` 测试不会自动变化，因为它不产生
+新的证据。
+
+检测是针对持久化 execution 历史的定期 reconcile。过程幂等，受保护的状态更新避免
+自动决策悄悄覆盖并发的手动修改。
+
+## 在 CI 中应用状态
+
+Test Engine 记录处置方式；你的 CI adapter 负责执行它。在上报 job 结果前查询隔离
+端点，对返回的 `muted` 或 `skipped` 测试执行 soft-fail 或跳过。完整闭环见
+[把 Test Engine 接入 CI](/zh-hans/test-engine/integrate-ci/)。
