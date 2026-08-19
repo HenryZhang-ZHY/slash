@@ -27,6 +27,38 @@ Delivery 并发由共享数据库协调。每个 server 可以运行其配置的
 GitHub App installation 在所有副本上最多同时处理 8 个 delivery。该限制不需要粘性
 session 或内存协调器。
 
+## 验证多副本发布
+
+所有副本必须使用同一个 PostgreSQL 数据库、公开 base URL，以及同一组挂载的
+webhook、auth、admin、OAuth 和 GitHub App secret。先发布包含数据库 `/readyz`
+检查的镜像，再让代理使用该端点。先发布一个副本并要求 `/readyz` 返回 `200`，然后
+启动其余副本并 reload Caddy。不要让代理重试 POST：upstream 结果不确定时，应由
+GitHub delivery 重试和 Slash delivery GUID 构成安全的重试边界。
+
+接入生产流量前，用受控测试流量演练故障：
+
+1. 向有代表性的仓库发送 64 个 delivery burst，确认 pending 队列排空，最老队列
+   年龄回到零。
+2. 在一个副本 claim 工作后停止它。其他副本应继续接收请求，并在 60 秒 lease
+   到期后接管遗留工作。
+3. 注入 GitHub 延迟和 rate-limit 响应。安全重试应增加
+   `slash_delivery_retries_total`；结果不确定的写入不得产生第二次有效 workflow
+   dispatch。
+4. 短暂阻断数据库访问。所有副本的 `/readyz` 都应返回 `503`；访问恢复后无需重启
+   即可恢复，并保留中断前已经确认的全部 delivery。
+5. 在 burst 期间 reload Caddy，确认每个 upstream 都能在不使用粘性 session 的
+   情况下重新加入 ready 集合。
+
+以下情况应告警：副本 scrape target 连续两分钟不可用；
+`slash_deliveries_oldest_pending_age_seconds` 连续五分钟超过 120 秒；或
+`slash_delivery_lease_recoveries_total` 意外增加。持续的队列年龄告警表示容量或依赖
+故障；不要在未检查 GitHub installation 限额前直接提高并发。
+
+回滚时，先停止新副本再更换镜像，保留共享数据库和 secret 文件，并在启动旧二进制
+前确认它兼容当前 schema。数据库迁移只向前执行；回滚 schema 必须使用 PostgreSQL
+服务的备份恢复流程。回滚后检查 `/readyz`、队列年龄、近期 terminal delivery 和
+invocation correlation，再恢复流量。
+
 ## 实例管理后台
 
 设置 `SLASH_ADMIN_SECRET_PATH` 会开启 `/admin` 和 `/api/admin/*`。它与普通 Slash

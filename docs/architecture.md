@@ -94,6 +94,9 @@ transactions, guarded updates, and row claiming are part of correctness rather
 than replaceable storage details. Terminal deliveries are retained for 30 days
 by default before the sweeper removes them.
 
+The supported deployment baseline and failure-validation contract are recorded
+in [`docs/design/capacity.md`](design/capacity.md).
+
 ## Invocation lifecycle
 
 An invocation is the durable record connecting a parsed command, its check run,
