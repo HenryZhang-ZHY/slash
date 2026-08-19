@@ -14,6 +14,7 @@ pub struct Delivery {
     pub delivery_guid: String,
     pub event: String,
     pub payload: Vec<u8>,
+    pub attempts: i32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,6 +75,7 @@ pub(crate) async fn state_of(pool: &PgPool, guid: &str) -> Result<Option<String>
 pub struct ClaimedDelivery {
     pool: PgPool,
     lease_token: uuid::Uuid,
+    recovered: bool,
     pub delivery: Delivery,
 }
 
@@ -91,9 +93,18 @@ pub async fn claim_pending_for(
 ) -> Result<Option<ClaimedDelivery>, sqlx::Error> {
     let lease_token = uuid::Uuid::new_v4();
     let lease_expires_at = chrono::Utc::now() + lease_duration;
-    let delivery = sqlx::query_as::<_, Delivery>(
+    #[derive(sqlx::FromRow)]
+    struct ClaimedRow {
+        delivery_guid: String,
+        event: String,
+        payload: Vec<u8>,
+        attempts: i32,
+        recovered: bool,
+    }
+
+    let row = sqlx::query_as::<_, ClaimedRow>(
         "WITH candidate AS ( \
-             SELECT delivery_guid FROM deliveries \
+             SELECT delivery_guid, state = 'processing' AS recovered FROM deliveries \
              WHERE (state = 'pending' AND (next_attempt_at IS NULL OR next_attempt_at <= now())) \
                 OR (state = 'processing' AND lease_expires_at <= now()) \
              ORDER BY received_at \
@@ -104,21 +115,47 @@ pub async fn claim_pending_for(
              attempts = attempts + 1 \
          FROM candidate \
          WHERE d.delivery_guid = candidate.delivery_guid \
-         RETURNING d.delivery_guid, d.event, d.payload",
+         RETURNING d.delivery_guid, d.event, d.payload, d.attempts, candidate.recovered",
     )
     .bind(lease_token)
     .bind(lease_expires_at)
     .fetch_optional(pool)
     .await?;
 
-    Ok(delivery.map(|delivery| ClaimedDelivery {
+    Ok(row.map(|row| ClaimedDelivery {
         pool: pool.clone(),
         lease_token,
-        delivery,
+        recovered: row.recovered,
+        delivery: Delivery {
+            delivery_guid: row.delivery_guid,
+            event: row.event,
+            payload: row.payload,
+            attempts: row.attempts,
+        },
     }))
 }
 
 impl ClaimedDelivery {
+    pub fn was_recovered(&self) -> bool {
+        self.recovered
+    }
+
+    /// Extends only the currently owned lease. A stale worker gets
+    /// `RowNotFound` and must stop processing.
+    pub async fn renew(&self, lease_duration: chrono::Duration) -> Result<(), sqlx::Error> {
+        let lease_expires_at = chrono::Utc::now() + lease_duration;
+        let result = sqlx::query(
+            "UPDATE deliveries SET lease_expires_at = $3 \
+             WHERE delivery_guid = $1 AND state = 'processing' AND lease_token = $2",
+        )
+        .bind(&self.delivery.delivery_guid)
+        .bind(self.lease_token)
+        .bind(lease_expires_at)
+        .execute(&self.pool)
+        .await?;
+        require_owned_lease(result.rows_affected())
+    }
+
     pub async fn complete(self) -> Result<(), sqlx::Error> {
         let result = sqlx::query(
             "UPDATE deliveries \
@@ -141,6 +178,28 @@ impl ClaimedDelivery {
         )
         .bind(&self.delivery.delivery_guid)
         .bind(error)
+        .bind(self.lease_token)
+        .execute(&self.pool)
+        .await?;
+        require_owned_lease(result.rows_affected())
+    }
+
+    /// Releases the owned lease back to the durable queue after a delay.
+    pub async fn retry_after(
+        self,
+        error: &str,
+        delay: chrono::Duration,
+    ) -> Result<(), sqlx::Error> {
+        let next_attempt_at = chrono::Utc::now() + delay;
+        let result = sqlx::query(
+            "UPDATE deliveries \
+             SET state = 'pending', last_error = $2, next_attempt_at = $3, \
+                 lease_token = NULL, lease_expires_at = NULL \
+             WHERE delivery_guid = $1 AND state = 'processing' AND lease_token = $4",
+        )
+        .bind(&self.delivery.delivery_guid)
+        .bind(error)
+        .bind(next_attempt_at)
         .bind(self.lease_token)
         .execute(&self.pool)
         .await?;
@@ -371,6 +430,67 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(last_error.as_deref(), Some("boom"));
+    }
+
+    #[serial_test::serial(db)]
+    #[tokio::test]
+    async fn renew_extends_only_the_current_lease() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        insert_delivery(&pool, "guid-renew", "issue_comment", b"{}")
+            .await
+            .unwrap();
+
+        let claimed = claim_pending(&pool).await.unwrap().unwrap();
+        sqlx::query(
+            "UPDATE deliveries SET lease_expires_at = now() + interval '1 second' \
+             WHERE delivery_guid = 'guid-renew'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        claimed.renew(chrono::Duration::minutes(1)).await.unwrap();
+
+        let remaining: i64 = sqlx::query_scalar(
+            "SELECT EXTRACT(EPOCH FROM (lease_expires_at - now()))::bigint \
+             FROM deliveries WHERE delivery_guid = 'guid-renew'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(remaining >= 55);
+        claimed.complete().await.unwrap();
+    }
+
+    #[serial_test::serial(db)]
+    #[tokio::test]
+    async fn retry_after_releases_the_lease_but_honors_the_delay() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        insert_delivery(&pool, "guid-retry", "issue_comment", b"{}")
+            .await
+            .unwrap();
+
+        let claimed = claim_pending(&pool).await.unwrap().unwrap();
+        assert_eq!(claimed.delivery.attempts, 1);
+        claimed
+            .retry_after("temporary", chrono::Duration::minutes(1))
+            .await
+            .unwrap();
+        assert!(claim_pending(&pool).await.unwrap().is_none());
+
+        sqlx::query(
+            "UPDATE deliveries SET next_attempt_at = now() - interval '1 second' \
+             WHERE delivery_guid = 'guid-retry'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let retried = claim_pending(&pool).await.unwrap().unwrap();
+        assert_eq!(retried.delivery.attempts, 2);
+        retried.complete().await.unwrap();
     }
 
     #[serial_test::serial(db)]

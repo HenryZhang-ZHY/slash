@@ -141,12 +141,13 @@ pub async fn run() {
         github_oauth,
     };
 
-    tokio::spawn(worker::run(
+    worker::spawn_pool(
         pool.clone(),
         github_app.clone(),
         metrics.clone(),
+        config.delivery_workers,
         WORKER_POLL_INTERVAL,
-    ));
+    );
     tokio::spawn(sweeper::run(
         pool.clone(),
         github_app.clone(),

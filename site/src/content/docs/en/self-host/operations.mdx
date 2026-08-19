@@ -19,6 +19,10 @@ format. Monitor at least:
 - `slash_correlation_total{path}` to distinguish direct dispatch correlation,
   polling recovery, and timeout; and
 - `slash_dispatch_failures_total{class}` for terminal dispatch failures.
+- `slash_delivery_processing_seconds{outcome}` for worker latency,
+  `slash_delivery_retries_total{reason}` for safe retries, and
+  `slash_delivery_lease_recoveries_total` for crashed or stalled workers whose
+  leases were reclaimed.
 
 Slash does not currently expose per-endpoint GitHub API call counts or the
 remaining rate-limit budget. Use application logs as the supporting signal for

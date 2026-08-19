@@ -75,6 +75,11 @@ transaction or connection; another replica can reclaim the delivery after the
 lease expires. This makes redelivery and concurrent replicas safe without an
 in-memory queue or transaction-spanning external I/O.
 
+Each server starts a bounded delivery-worker pool. Active workers renew their
+leases while the pipeline runs. A known-safe transient failure may return a
+delivery to the inbox with a future attempt time; failures whose side effects
+could be ambiguous are not blindly replayed.
+
 PostgreSQL is a deliberate coordination dependency: uniqueness constraints,
 transactions, guarded updates, and row claiming are part of correctness rather
 than replaceable storage details. Terminal deliveries are retained for 30 days

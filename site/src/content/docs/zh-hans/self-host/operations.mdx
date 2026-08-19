@@ -15,6 +15,9 @@ sidebar:
   等待关联过久的 invocation；
 - `slash_correlation_total{path}`，区分直接 dispatch 关联、轮询恢复和超时；以及
 - `slash_dispatch_failures_total{class}`，统计终态 dispatch 失败。
+- `slash_delivery_processing_seconds{outcome}` 用于观察 worker 延迟，
+  `slash_delivery_retries_total{reason}` 用于统计安全重试，
+  `slash_delivery_lease_recoveries_total` 用于发现 lease 被接管的崩溃或停滞 worker。
 
 Slash 目前不暴露按端点的 GitHub API 调用数或剩余 rate-limit 预算。请同时使用应用
 日志发现 GitHub API 和 token minting 错误。

@@ -30,6 +30,12 @@ pub struct Metrics {
     /// Spec §7.4: dispatches that ended in `dispatch_failed`, by class.
     pub dispatch_failures_total: IntCounterVec,
     pub command_catalog_loads_total: IntCounterVec,
+    /// Delivery processing outcomes after a row has been claimed.
+    pub delivery_processing_seconds: HistogramVec,
+    /// Deliveries returned to the queue after a known-safe transient failure.
+    pub delivery_retries_total: IntCounterVec,
+    /// Expired delivery leases reclaimed by a later worker or replica.
+    pub delivery_lease_recoveries_total: prometheus::IntCounter,
     /// Test Engine ingestion upload-health (design §6 M2 / spec §7.4): every
     /// accepted/rejected upload, by collector kind and outcome.
     pub test_engine_uploads_total: IntCounterVec,
@@ -103,6 +109,26 @@ impl Metrics {
             registry
         )?;
 
+        let delivery_processing_seconds = register_histogram_vec_with_registry!(
+            "slash_delivery_processing_seconds",
+            "Claimed delivery processing latency, by terminal worker outcome.",
+            &["outcome"],
+            registry
+        )?;
+
+        let delivery_retries_total = register_int_counter_vec_with_registry!(
+            "slash_delivery_retries_total",
+            "Deliveries returned to the queue after a known-safe transient failure.",
+            &["reason"],
+            registry
+        )?;
+
+        let delivery_lease_recoveries_total = prometheus::register_int_counter_with_registry!(
+            "slash_delivery_lease_recoveries_total",
+            "Expired processing leases reclaimed by a later worker or replica.",
+            registry
+        )?;
+
         let test_engine_uploads_total = register_int_counter_vec_with_registry!(
             "slash_test_engine_uploads_total",
             "Test Engine ingestion uploads by collector kind and outcome.",
@@ -121,6 +147,9 @@ impl Metrics {
             correlation_total,
             dispatch_failures_total,
             command_catalog_loads_total,
+            delivery_processing_seconds,
+            delivery_retries_total,
+            delivery_lease_recoveries_total,
             test_engine_uploads_total,
         })
     }
@@ -161,5 +190,6 @@ mod tests {
         assert!(output.contains(
             "slash_command_catalog_loads_total{outcome=\"unavailable\",stage=\"directory\"} 1"
         ));
+        assert!(output.contains("slash_delivery_lease_recoveries_total 0"));
     }
 }
