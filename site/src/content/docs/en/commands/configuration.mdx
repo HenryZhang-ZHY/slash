@@ -52,7 +52,7 @@ command is invoked.
 
 | Field         | Required | Default | Notes |
 |---------------|----------|---------|-------|
-| `command`     | yes      | —       | `^[a-z][a-z0-9-]*$`, case-insensitive at invocation. `help` and `slash` are reserved for future built-ins and cannot be used. |
+| `command`     | yes      | —       | `^[a-z][a-z0-9-]*$`, case-insensitive at invocation. `help` and `slash` are reserved for built-ins and cannot be used; run `/slash help` to inspect the configured catalog. |
 | `description` | no       | none    | Shown in error/usage messages only. |
 | `permission`  | no       | `write` | One of `read`, `write`, `admin` (default `write`). |
 | `workflow`    | yes      | —       | `^[A-Za-z0-9._-]{1,100}\.(ya?ml)$` — a filename under `.github/workflows/`, no `/`, `\`, `%`, or `..`. Must exist on the default branch with `on: workflow_dispatch`. |

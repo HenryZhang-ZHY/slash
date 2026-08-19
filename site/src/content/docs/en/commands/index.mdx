@@ -28,6 +28,20 @@ Only pull requests whose head branch belongs to the same repository are
 supported. Configuration and authorization policy always come from the default
 branch, so pull-request code cannot loosen its own permission gate.
 
+## Discover available commands
+
+Write this on the first line of a pull-request comment:
+
+```text
+/slash help
+```
+
+Slash replies with the validated commands from the repository's default
+branch. Each entry includes its usage, required GitHub role, argument details,
+and an example you can copy and edit. Help does not start a workflow or create
+a check run. If the catalog is missing, invalid, or temporarily unavailable,
+Slash reports that catalog state instead of presenting partial help.
+
 ## Choose your next step
 
 - [Run your first command](/en/getting-started/) for a complete, minimal
