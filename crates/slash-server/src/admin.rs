@@ -558,7 +558,7 @@ mod tests {
     }
 
     #[test]
-    fn token_round_trip_and_secret_rotation_invalidates_it() {
+    fn admin_session_crosses_replicas_and_secret_rotation_invalidates_it() {
         let token = sign_token(&secret("first")).unwrap();
         assert!(verify_token(&secret("first"), &token).is_ok());
         assert!(verify_token(&secret("second"), &token).is_err());
