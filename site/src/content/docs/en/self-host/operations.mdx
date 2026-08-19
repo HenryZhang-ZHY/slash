@@ -7,8 +7,9 @@ sidebar:
 
 ## Health and metrics
 
-`GET /healthz` is the liveness probe. `GET /metrics` returns Prometheus text
-format. Monitor at least:
+`GET /healthz` is the process liveness probe. `GET /readyz` checks PostgreSQL
+and is the load-balancer readiness probe. `GET /metrics` returns Prometheus
+text format. Monitor at least:
 
 - `slash_deliveries_pending` and
   `slash_deliveries_oldest_pending_age_seconds` for a stuck or falling-behind

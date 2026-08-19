@@ -171,6 +171,7 @@ pub async fn run() {
             get(ingestion::handle_quarantined),
         )
         .route("/healthz", get(healthz))
+        .route("/readyz", get(readyz))
         .route("/metrics", get(metrics_handler))
         // User onboarding API (org/user management lane, 1.0 MVP)
         .route("/api/auth/register", post(userapi::register))
@@ -274,6 +275,23 @@ async fn healthz() -> &'static str {
     "ok"
 }
 
+async fn readyz(State(state): State<AppState>) -> impl IntoResponse {
+    match readiness_status(&state.pool).await {
+        axum::http::StatusCode::OK => (axum::http::StatusCode::OK, "ready"),
+        status => (status, "not ready"),
+    }
+}
+
+async fn readiness_status(pool: &PgPool) -> axum::http::StatusCode {
+    match sqlx::query_scalar::<_, i32>("SELECT 1")
+        .fetch_one(pool)
+        .await
+    {
+        Ok(1) => axum::http::StatusCode::OK,
+        Ok(_) | Err(_) => axum::http::StatusCode::SERVICE_UNAVAILABLE,
+    }
+}
+
 /// SPA + static asset handler. Serves real files under `<dist>/<path>`
 /// (e.g. `/assets/index-*.js`, `/favicon.svg`) when they exist; otherwise
 /// returns `index.html` with a 200 so client-side routes (`/login`,
@@ -364,4 +382,26 @@ async fn metrics_handler(State(state): State<AppState>) -> String {
 
 async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn readiness_requires_a_live_database_connection() {
+        let Some(database_url) = test_support::test_database_url() else {
+            return;
+        };
+        let pool = db::connect(&database_url).await.unwrap();
+
+        assert_eq!(readiness_status(&pool).await, axum::http::StatusCode::OK);
+
+        pool.close().await;
+        assert_eq!(
+            readiness_status(&pool).await,
+            axum::http::StatusCode::SERVICE_UNAVAILABLE
+        );
+    }
 }

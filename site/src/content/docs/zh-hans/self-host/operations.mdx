@@ -7,7 +7,8 @@ sidebar:
 
 ## 健康与指标
 
-`GET /healthz` 是存活探针，`GET /metrics` 返回 Prometheus 文本格式。至少监控：
+`GET /healthz` 是进程存活探针；`GET /readyz` 检查 PostgreSQL，供负载均衡器判断副本
+是否就绪；`GET /metrics` 返回 Prometheus 文本格式。至少监控：
 
 - `slash_deliveries_pending` 和 `slash_deliveries_oldest_pending_age_seconds`，发现
   卡住或落后的 worker 池；
