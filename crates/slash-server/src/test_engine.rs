@@ -694,54 +694,46 @@ pub struct SuiteTokenIdentity {
 
 pub struct IssuedCollectionToken {
     pub id: Uuid,
+    pub name: String,
     pub raw: String,
-    pub expires_at: chrono::DateTime<chrono::Utc>,
+    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct CollectionTokenSummary {
     pub id: Uuid,
+    pub name: String,
     pub status: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
-    pub expires_at: chrono::DateTime<chrono::Utc>,
+    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
     pub last_used_at: Option<chrono::DateTime<chrono::Utc>>,
     pub revoked_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-/// Issues one show-once token and atomically revokes every previous active
-/// token for the suite.
+/// Issues one show-once token without changing any existing token.
 pub async fn issue_collection_token(
     pool: &PgPool,
     suite_id: Uuid,
+    name: &str,
+    expires_at: Option<chrono::DateTime<chrono::Utc>>,
 ) -> Result<IssuedCollectionToken, sqlx::Error> {
     let raw = slash_core::crypto_random_token();
     let hash = slash_core::hash_token(&raw);
     let id = Uuid::new_v4();
-    let mut tx = pool.begin().await?;
-    sqlx::query("SELECT id FROM test_suites WHERE id = $1 FOR UPDATE")
-        .bind(suite_id)
-        .fetch_one(&mut *tx)
-        .await?;
     sqlx::query(
-        "UPDATE collection_tokens SET status = 'revoked', revoked_at = now() \
-         WHERE suite_id = $1 AND status = 'active'",
-    )
-    .bind(suite_id)
-    .execute(&mut *tx)
-    .await?;
-    let (expires_at,): (chrono::DateTime<chrono::Utc>,) = sqlx::query_as(
-        "INSERT INTO collection_tokens (id, suite_id, token_hash, status, expires_at) \
-         VALUES ($1, $2, $3, 'active', now() + interval '90 days') \
-         RETURNING expires_at",
+        "INSERT INTO collection_tokens (id, suite_id, name, token_hash, status, expires_at) \
+         VALUES ($1, $2, $3, $4, 'active', $5)",
     )
     .bind(id)
     .bind(suite_id)
+    .bind(name)
     .bind(&hash[..])
-    .fetch_one(&mut *tx)
+    .bind(expires_at)
+    .execute(pool)
     .await?;
-    tx.commit().await?;
     Ok(IssuedCollectionToken {
         id,
+        name: name.to_string(),
         raw,
         expires_at,
     })
@@ -786,8 +778,8 @@ pub async fn list_collection_tokens(
     suite_id: Uuid,
 ) -> Result<Vec<CollectionTokenSummary>, sqlx::Error> {
     sqlx::query_as::<_, CollectionTokenSummary>(
-        "SELECT id, \
-             CASE WHEN status = 'active' AND expires_at <= now() \
+        "SELECT id, name, \
+             CASE WHEN status = 'active' AND expires_at IS NOT NULL AND expires_at <= now() \
                   THEN 'expired' ELSE status END AS status, \
              created_at, expires_at, last_used_at, revoked_at \
          FROM collection_tokens WHERE suite_id = $1 \
@@ -810,7 +802,8 @@ pub async fn find_suite_for_token(
         "UPDATE collection_tokens ct SET last_used_at = now() \
          FROM test_suites ts \
          WHERE ct.suite_id = ts.id AND ct.token_hash = $1 \
-           AND ct.status = 'active' AND ct.expires_at > now() \
+           AND ct.status = 'active' \
+           AND (ct.expires_at IS NULL OR ct.expires_at > now()) \
          RETURNING ts.id, ts.suite_key, ts.installation_id, ts.owner, ts.repo",
     )
     .bind(&hash[..])

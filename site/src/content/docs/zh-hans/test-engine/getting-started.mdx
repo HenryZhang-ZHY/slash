@@ -12,8 +12,9 @@ sidebar:
 登录 Slash 控制台，打开 `/tests`，选择 **Create suite**。输入仓库 owner、仓库名称
 和一个稳定的 suite key，例如 `unit-tests`。
 
-Slash 会创建 suite 并显示 collection token。立即复制它；这是 CI 访问该 suite 的
-bearer 凭据，之后无法恢复，并会在 90 天后到期。
+Slash 会先创建 suite。在设置中选择 **创建 Token**，为凭据设置名称（例如
+`GitHub Actions`），并保留默认的**永不过期**，或选择有限的到期日期。立即复制这个
+token；它是 CI 访问该 suite 的 bearer 凭据，之后无法恢复。
 
 ## 2. 保存 Collection Token
 

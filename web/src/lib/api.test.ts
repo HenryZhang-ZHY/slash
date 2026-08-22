@@ -20,7 +20,6 @@ describe("testEngineApi", () => {
             muted: 0,
             skipped: 0,
           },
-          token: "collector-token",
         }),
         { status: 201, headers: { "Content-Type": "application/json" } },
       ),
@@ -33,7 +32,7 @@ describe("testEngineApi", () => {
       "web",
     );
 
-    expect(result.token).toBe("collector-token");
+    expect(result.suite.id).toBe("suite-1");
     expect(fetchMock).toHaveBeenCalledWith("/api/test-engine/suites", {
       credentials: "same-origin",
       headers: { "Content-Type": "application/json" },
@@ -44,6 +43,41 @@ describe("testEngineApi", () => {
         suite_key: "web",
       }),
     });
+  });
+
+  it("creates a named non-expiring collection token", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          id: "token-1",
+          name: "Buildkite production",
+          token: "collector-token",
+          expires_at: null,
+        }),
+        { status: 201, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await testEngineApi.issueToken(
+      "suite-1",
+      "Buildkite production",
+      null,
+    );
+
+    expect(result.token).toBe("collector-token");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/test-engine/suites/suite-1/tokens",
+      {
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        method: "POST",
+        body: JSON.stringify({
+          name: "Buildkite production",
+          expires_at: null,
+        }),
+      },
+    );
   });
 
   it("surfaces the API error message and status", async () => {

@@ -14,9 +14,10 @@ Sign in to the Slash console, open `/tests`, and choose **Create suite**. Enter
 the repository owner, repository name, and a stable suite key such as
 `unit-tests`.
 
-Slash creates the suite and displays a collection token. Copy it now; the token
-is the bearer credential your CI uses for this suite, is not recoverable later,
-and expires after 90 days.
+Slash creates the suite first. In its settings, choose **Create token**, give
+the credential a name such as `GitHub Actions`, and keep the default **Never**
+expiry or choose a finite date. Copy the token now; it is the bearer credential
+your CI uses for this suite and is not recoverable later.
 
 ## 2. Store the collection token
 

@@ -10,6 +10,7 @@ use axum::Json;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
 use crate::AppState;
@@ -47,8 +48,8 @@ fn normalize_create_suite(request: CreateSuiteRequest) -> Option<NormalizedCreat
         .then_some(normalized)
 }
 
-/// `POST /api/test-engine/suites` — create (or reuse) a suite and issue its
-/// first collection token so a new repository can bootstrap ingestion.
+/// `POST /api/test-engine/suites` — create or reuse a suite. Collection
+/// credentials are issued explicitly after the suite exists.
 pub async fn create_suite(
     State(state): State<AppState>,
     auth_user: UserId,
@@ -103,14 +104,6 @@ pub async fn create_suite(
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
 
-    let token = match test_engine::issue_collection_token(&state.pool, suite_id).await {
-        Ok(token) => token,
-        Err(error) => {
-            tracing::error!(%error, suite = %suite_id, "test-engine initial token issue failed");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
-
     (
         StatusCode::CREATED,
         Json(SuiteCreated {
@@ -131,7 +124,6 @@ pub async fn create_suite(
                 average_duration_ms: None,
                 last_captured: None,
             },
-            token: token.raw,
         }),
     )
         .into_response()
@@ -252,27 +244,67 @@ pub async fn set_test_state(
 
 /// `POST /api/test-engine/suites/{id}/tokens` — issue a new per-suite
 /// collection token. Its raw value is returned once and only its hash remains
-/// available afterward. Issuing it revokes the suite's previous active token.
+/// available afterward. Existing tokens remain active.
 pub async fn issue_token(
     State(state): State<AppState>,
     auth_user: UserId,
     Path(id): Path<uuid::Uuid>,
-) -> Result<(StatusCode, Json<TokenIssued>), StatusCode> {
-    require_suite_owner(&state, id, auth_user.0).await?;
-    match test_engine::issue_collection_token(&state.pool, id).await {
-        Ok(issued) => Ok((
+    Json(request): Json<IssueTokenRequest>,
+) -> Response {
+    let Some(settings) = normalize_issue_token(request) else {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ErrorOut {
+                message: "invalid token settings",
+            }),
+        )
+            .into_response();
+    };
+    if let Err(status) = require_suite_owner(&state, id, auth_user.0).await {
+        return status.into_response();
+    }
+    match test_engine::issue_collection_token(&state.pool, id, &settings.name, settings.expires_at)
+        .await
+    {
+        Ok(issued) => (
             StatusCode::CREATED,
             Json(TokenIssued {
                 id: issued.id.to_string(),
+                name: issued.name,
                 token: issued.raw,
-                expires_at: issued.expires_at.to_rfc3339(),
+                expires_at: issued.expires_at.map(|at| at.to_rfc3339()),
             }),
-        )),
+        )
+            .into_response(),
         Err(error) => {
             tracing::error!(%error, suite = %id, "test-engine token issue failed");
-            Err(StatusCode::INTERNAL_SERVER_ERROR)
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct IssueTokenRequest {
+    name: String,
+    expires_at: Option<DateTime<Utc>>,
+}
+
+struct NormalizedIssueToken {
+    name: String,
+    expires_at: Option<DateTime<Utc>>,
+}
+
+fn normalize_issue_token(request: IssueTokenRequest) -> Option<NormalizedIssueToken> {
+    let name = request.name.trim().to_string();
+    (!name.is_empty()
+        && name.chars().count() <= 100
+        && request
+            .expires_at
+            .is_none_or(|expires_at| expires_at > Utc::now()))
+    .then_some(NormalizedIssueToken {
+        name,
+        expires_at: request.expires_at,
+    })
 }
 
 /// `GET /api/test-engine/suites/{id}/tokens` — list token metadata without
@@ -489,16 +521,18 @@ pub struct TestStateOut {
 #[derive(Debug, serde::Serialize)]
 pub struct TokenIssued {
     id: String,
+    name: String,
     token: String,
-    expires_at: String,
+    expires_at: Option<String>,
 }
 
 #[derive(Debug, serde::Serialize)]
 pub struct CollectionTokenOut {
     id: String,
+    name: String,
     status: String,
     created_at: String,
-    expires_at: String,
+    expires_at: Option<String>,
     last_used_at: Option<String>,
     revoked_at: Option<String>,
 }
@@ -507,9 +541,10 @@ impl From<test_engine::CollectionTokenSummary> for CollectionTokenOut {
     fn from(token: test_engine::CollectionTokenSummary) -> Self {
         Self {
             id: token.id.to_string(),
+            name: token.name,
             status: token.status,
             created_at: token.created_at.to_rfc3339(),
-            expires_at: token.expires_at.to_rfc3339(),
+            expires_at: token.expires_at.map(|at| at.to_rfc3339()),
             last_used_at: token.last_used_at.map(|at| at.to_rfc3339()),
             revoked_at: token.revoked_at.map(|at| at.to_rfc3339()),
         }
@@ -519,7 +554,6 @@ impl From<test_engine::CollectionTokenSummary> for CollectionTokenOut {
 #[derive(Debug, serde::Serialize)]
 struct SuiteCreated {
     suite: SuiteOut,
-    token: String,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -583,6 +617,43 @@ mod tests {
         ] {
             assert!(normalize_create_suite(request).is_none());
         }
+    }
+
+    #[test]
+    fn issue_token_settings_are_trimmed_and_never_expire_by_default() {
+        let request = IssueTokenRequest {
+            name: " Buildkite production ".to_string(),
+            expires_at: None,
+        };
+
+        let normalized = normalize_issue_token(request).expect("request should be valid");
+
+        assert_eq!(normalized.name, "Buildkite production");
+        assert!(normalized.expires_at.is_none());
+    }
+
+    #[test]
+    fn issue_token_rejects_blank_or_overlong_names() {
+        for name in [" ".to_string(), "x".repeat(101)] {
+            assert!(
+                normalize_issue_token(IssueTokenRequest {
+                    name,
+                    expires_at: None,
+                })
+                .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn issue_token_rejects_an_expiry_in_the_past() {
+        assert!(
+            normalize_issue_token(IssueTokenRequest {
+                name: "Buildkite production".to_string(),
+                expires_at: Some(Utc::now() - chrono::Duration::seconds(1)),
+            })
+            .is_none()
+        );
     }
 
     #[test]

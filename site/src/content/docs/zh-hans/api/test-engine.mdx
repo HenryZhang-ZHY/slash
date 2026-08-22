@@ -48,8 +48,8 @@ curl -b cookies.txt \
 
 ## POST `/api/test-engine/suites`
 
-创建套件，或当匹配套件已属于当前账户时复用它。它还会为 ingestion 签发一个
-collection token。
+创建套件，或当匹配套件已属于当前账户时复用它。套件存在后，再单独创建 collection
+token。
 
 ```sh
 curl -b cookies.txt \
@@ -80,20 +80,17 @@ curl -b cookies.txt \
     "errored_executions": 0,
     "average_duration_ms": null,
     "last_captured": null
-  },
-  "token": "collection-token-value"
+  }
 }
 ```
 
-token 是机密。把它存放在上传结果的 CI 系统里。
-
 | 状态 | 含义 |
 | --- | --- |
-| `201` | 套件可用且 token 已签发 |
+| `201` | 套件可用 |
 | `401` | 无有效会话 |
 | `409` | 另一个账户拥有匹配套件 |
 | `422` | 某个必填字段为空或过长 |
-| `500` | 套件或 token 持久化失败 |
+| `500` | 套件持久化失败 |
 
 ## GET `/api/test-engine/suites/{id}/tests`
 
@@ -219,9 +216,10 @@ curl -b cookies.txt -X PATCH \
 [
   {
     "id": "2b914582-17c3-42c5-b9e8-439816360a3e",
+    "name": "Buildkite production",
     "status": "active",
     "created_at": "2026-08-22T06:00:00+00:00",
-    "expires_at": "2026-11-20T06:00:00+00:00",
+    "expires_at": null,
     "last_used_at": "2026-08-22T06:05:00+00:00",
     "revoked_at": null
   }
@@ -229,30 +227,36 @@ curl -b cookies.txt -X PATCH \
 ```
 
 成功为 `200`。未知或不拥有的套件返回 `404`；存储失败返回 `500`。`status` 为
-`active`、`expired` 或 `revoked`。
+`active`、`expired` 或 `revoked`。永不过期的 token，其 `expires_at` 为 `null`。
 
 ## POST `/api/test-engine/suites/{id}/tokens`
 
-为已拥有的套件签发一个只显示一次的 collection token。请求没有 body。签发会以原子
-方式吊销此前有效的 token。
+为已拥有的套件签发一个只显示一次的 collection token。已有 token 会继续有效，因此
+不同 CI 采集器可以使用各自命名的凭据，轮换也不会中断上传。
 
 ```sh
 curl -b cookies.txt -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Buildkite production","expires_at":null}' \
   https://slash.example.com/api/test-engine/suites/0e1ef24a-927f-4094-bdaf-477e17c123b8/tokens
 ```
+
+`name` 必填、会被 trim，最长 100 个字符。`expires_at` 可以是表示永不过期的 `null`，
+或未来的 RFC 3339 时间戳。省略 `expires_at` 也会创建永不过期的 token。
 
 成功：`201 Created`。
 
 ```json
 {
   "id": "2b914582-17c3-42c5-b9e8-439816360a3e",
+  "name": "Buildkite production",
   "token": "new-collection-token-value",
-  "expires_at": "2026-11-20T06:00:00+00:00"
+  "expires_at": null
 }
 ```
 
-请立即复制响应中的原始 token；Slash 只保存哈希，无法再次显示它。token 在 90 天后
-到期。未知或不拥有的套件返回 `404`；签发失败返回 `500`。
+请立即复制响应中的原始 token；Slash 只保存哈希，无法再次显示它。未知或不拥有的
+套件返回 `404`；无效名称或到期时间返回 `422`；签发失败返回 `500`。
 
 ## DELETE `/api/test-engine/suites/{suite_id}/tokens/{token_id}`
 
