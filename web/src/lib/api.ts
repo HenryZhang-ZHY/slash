@@ -33,6 +33,10 @@ export interface UpdatePasswordRequest {
   newPassword: string
 }
 
+export interface MetaResponse {
+  version: string
+}
+
 interface ApiErrorBody {
   message?: string
   error?: string
@@ -70,6 +74,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  meta: () => request<MetaResponse>('/api/meta'),
   register: (email: string, password: string) =>
     request<{ user: User }>('/api/auth/register', {
       method: 'POST',

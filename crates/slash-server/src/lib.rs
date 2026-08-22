@@ -34,6 +34,7 @@ pub mod worker;
 use std::sync::Arc;
 use std::time::Duration;
 
+use axum::Json;
 use axum::Router;
 use axum::extract::State;
 use axum::response::IntoResponse;
@@ -45,6 +46,7 @@ use tower_http::trace::TraceLayer;
 
 use config::ServerConfig;
 use metrics::Metrics;
+use serde::Serialize;
 
 /// Generously over any real GitHub webhook body (spec §7.3's explicit
 /// request-body limit).
@@ -173,6 +175,7 @@ pub async fn run() {
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
         .route("/metrics", get(metrics_handler))
+        .route("/api/meta", get(meta))
         // User onboarding API (org/user management lane, 1.0 MVP)
         .route("/api/auth/register", post(userapi::register))
         .route("/api/auth/login", post(userapi::login))
@@ -277,6 +280,17 @@ fn load_github_app(config: &ServerConfig) -> Result<slash_github::GithubApp, Str
 
 async fn healthz() -> &'static str {
     "ok"
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+struct MetaResponse {
+    version: &'static str,
+}
+
+async fn meta() -> Json<MetaResponse> {
+    Json(MetaResponse {
+        version: env!("CARGO_PKG_VERSION"),
+    })
 }
 
 async fn readyz(State(state): State<AppState>) -> impl IntoResponse {
@@ -392,6 +406,16 @@ async fn shutdown_signal() {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn meta_reports_the_authoritative_release_version() {
+        assert_eq!(
+            meta().await.0,
+            MetaResponse {
+                version: env!("CARGO_PKG_VERSION")
+            }
+        );
+    }
 
     #[tokio::test]
     async fn readiness_requires_a_live_database_connection() {
