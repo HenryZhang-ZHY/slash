@@ -32,7 +32,7 @@ Request body:
 | Field | Type | Required | Validation |
 | --- | --- | --- | --- |
 | `email` | string | yes | Must be non-empty and contain `@`; normalized to lowercase |
-| `password` | string | yes | At least 8 bytes |
+| `password` | string | yes | At least 8 Unicode characters |
 | `display_name` | string | no | Defaults to an empty string; surrounding whitespace is removed |
 
 Success: `200 OK`, a `Set-Cookie` header, and:
@@ -104,10 +104,10 @@ curl -i -b cookies.txt -X PUT \
   https://slash.example.com/api/auth/password
 ```
 
-The new password must be at least eight characters. New login emails are
-trimmed, normalized to lowercase, and must contain `@`. Creating a password
-does not merge accounts: an email already used by another password credential
-returns a conflict.
+The new password must be at least eight Unicode characters. New login emails
+are trimmed, normalized to lowercase, and must contain `@`. Creating a
+password does not merge accounts: an email already used by another password
+credential returns a conflict.
 
 | Status | Meaning |
 | --- | --- |

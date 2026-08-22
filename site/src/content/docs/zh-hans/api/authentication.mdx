@@ -31,7 +31,7 @@ curl -i -c cookies.txt \
 | 字段 | 类型 | 必填 | 校验 |
 | --- | --- | --- | --- |
 | `email` | string | 是 | 必须非空且包含 `@`；归一化为小写 |
-| `password` | string | 是 | 至少 8 字节 |
+| `password` | string | 是 | 至少 8 个 Unicode 字符 |
 | `display_name` | string | 否 | 默认为空字符串；首尾空白被移除 |
 
 成功：`200 OK`，一个 `Set-Cookie` 头，以及：
@@ -99,8 +99,8 @@ curl -i -b cookies.txt -X PUT \
   https://slash.example.com/api/auth/password
 ```
 
-新密码至少八个字符。新登录邮箱会 trim、归一化为小写，并且必须包含 `@`。创建密码
-不会合并账户；如果邮箱已被另一个密码凭据使用，请求会冲突失败。
+新密码至少 8 个 Unicode 字符。新登录邮箱会 trim、归一化为小写，并且必须包含 `@`。
+创建密码不会合并账户；如果邮箱已被另一个密码凭据使用，请求会冲突失败。
 
 | 状态 | 含义 |
 | --- | --- |

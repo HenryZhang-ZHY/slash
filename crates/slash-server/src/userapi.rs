@@ -131,13 +131,17 @@ fn user_view(id: Uuid, email: Option<&str>, display_name: &str) -> UserView {
     }
 }
 
+fn is_valid_password(password: &str) -> bool {
+    password.chars().count() >= 8
+}
+
 // ---- Handlers --------------------------------------------------------------
 
 pub async fn register(
     State(state): State<crate::AppState>,
     Json(body): Json<RegisterRequest>,
 ) -> Response {
-    if body.password.len() < 8 {
+    if !is_valid_password(&body.password) {
         return api_error(
             StatusCode::UNPROCESSABLE_ENTITY,
             "password must be at least 8 characters",
@@ -282,7 +286,7 @@ pub async fn update_password(
     SessionUserId(user_id): SessionUserId,
     Json(body): Json<UpdatePasswordRequest>,
 ) -> Response {
-    if body.new_password.len() < 8 {
+    if !is_valid_password(&body.new_password) {
         return api_error(
             StatusCode::UNPROCESSABLE_ENTITY,
             "new password must be at least 8 characters",
@@ -918,6 +922,12 @@ mod tests {
         )
         .await;
         assert_eq!(response_status(&resp), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[test]
+    fn password_length_counts_unicode_characters() {
+        assert!(!is_valid_password("密码密"));
+        assert!(is_valid_password("密码密码密码密码"));
     }
 
     #[serial_test::serial(db)]
