@@ -28,6 +28,7 @@ JSON 响应里的时间戳是 RFC 3339 字符串。
 | 表面 | 认证 |
 | --- | --- |
 | 账户、团队和 Test Engine 管理 | `slash_session` cookie 或个人 Bearer token |
+| 密码凭据管理 | 仅 `slash_session` cookie |
 | 个人 Access Token 管理 | 仅 `slash_session` cookie |
 | 测试结果 ingestion 与隔离查询 | `Authorization: Bearer <collection-token>` |
 | 实例管理 | 由 `SLASH_ADMIN_SECRET_PATH` 开启的独立 admin session |
@@ -44,6 +45,7 @@ JSON 响应里的时间戳是 RFC 3339 字符串。
 | --- | --- | --- |
 | `POST` | `/api/auth/register` | 创建账户和会话 |
 | `POST` | `/api/auth/login` | 创建会话 |
+| `PUT` | `/api/auth/password` | 创建或替换当前用户的密码凭据 |
 | `POST` | `/api/auth/logout` | 清除当前会话 |
 | `GET` | `/api/auth/me` | 读取当前用户、团队和连接 |
 | `GET` | `/api/auth/github/sign-in` | 开始 GitHub 登录 |

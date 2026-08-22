@@ -5,6 +5,7 @@ import { CheckCircle2 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { AccessTokensSection } from '@/components/AccessTokensSection'
+import { PasswordSection } from '@/components/PasswordSection'
 import type { DashboardContext } from '@/components/AppShell'
 import { githubErrorKey } from '@/lib/authFlow'
 
@@ -17,7 +18,7 @@ function GithubIcon({ className }: { className?: string }) {
 }
 
 export function SettingsPage() {
-  const { me } = useOutletContext<DashboardContext>()
+  const { me, refreshMe } = useOutletContext<DashboardContext>()
   const { t } = useTranslation()
   const [searchParams, setSearchParams] = useSearchParams()
   const [githubResult] = useState(() => searchParams.get('github'))
@@ -60,6 +61,8 @@ export function SettingsPage() {
             ) : null}
           </div>
         </section>
+
+        <PasswordSection email={me.user.email} onUpdated={refreshMe} />
 
         {/* Connected accounts section */}
         <section>
