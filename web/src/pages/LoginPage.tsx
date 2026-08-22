@@ -52,7 +52,7 @@ export function LoginPage() {
     >
       <div className="space-y-4">
         {githubError ? (
-          <p className="border-l-2 border-red-500 bg-red-50 px-3 py-2 text-sm text-red-700">
+          <p className="border-l-2 border-destructive bg-destructive/10 px-3 py-2 text-sm text-destructive">
             {t(githubErrorKey(githubError))}
           </p>
         ) : null}
@@ -71,7 +71,7 @@ export function LoginPage() {
             <span className="w-full border-t" />
           </div>
           <div className="relative flex justify-center text-xs uppercase">
-            <span className="bg-white px-2 text-muted-foreground">{t('auth.or')}</span>
+            <span className="bg-background px-2 text-muted-foreground">{t('auth.or')}</span>
           </div>
         </div>
 
@@ -100,7 +100,7 @@ export function LoginPage() {
               minLength={8}
             />
           </div>
-          {error ? <p className="border-l-2 border-red-500 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
+          {error ? <p className="border-l-2 border-destructive bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p> : null}
           <Button className="w-full" type="submit" disabled={busy}>
             {busy ? t('auth.pleaseWait') : mode === 'login' ? t('auth.signIn') : t('auth.createAccount')}
           </Button>

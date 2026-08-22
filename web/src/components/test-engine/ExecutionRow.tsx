@@ -16,17 +16,17 @@ export function ExecutionRow({ execution }: { execution: TestExecution }) {
             <span className="text-xs text-muted-foreground">{execution.ci_provider}</span>
           </div>
           <div
-            className="mt-2 truncate font-mono text-[11px] text-muted-foreground"
+            className="mt-2 truncate font-mono text-xs text-muted-foreground"
             title={execution.run_ref}
           >
             {execution.run_ref}
           </div>
         </div>
-        <time className="shrink-0 text-[11px] text-muted-foreground">
+        <time className="shrink-0 text-xs text-muted-foreground">
           {formatDate(execution.captured_at)}
         </time>
       </div>
-      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-muted-foreground">
+      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
         <span>{t('execution.started', { date: formatDate(execution.started_at) })}</span>
         {execution.finished_at && (
           <span>{t('execution.finished', { date: formatDate(execution.finished_at) })}</span>
@@ -42,7 +42,7 @@ export function ExecutionRow({ execution }: { execution: TestExecution }) {
           <summary className="cursor-pointer px-3 py-2 text-xs text-zinc-300">
             {t('execution.failureOutput')}
           </summary>
-          <pre className="max-h-56 overflow-auto border-t border-zinc-800 p-3 text-[11px] leading-relaxed whitespace-pre-wrap">
+          <pre className="max-h-56 overflow-auto border-t border-zinc-800 p-3 text-xs leading-relaxed whitespace-pre-wrap">
             {execution.stack}
           </pre>
         </details>

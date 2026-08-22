@@ -106,7 +106,7 @@ export function TestEnginePage() {
     : 0
 
   return (
-    <div className="flex min-h-[calc(100vh-3.5rem)] flex-col bg-white xl:h-[calc(100vh-3.5rem)] xl:min-h-0 xl:overflow-hidden">
+    <div className="flex min-h-[calc(100vh-3.5rem)] flex-col bg-background xl:h-[calc(100vh-3.5rem)] xl:min-h-0 xl:overflow-hidden">
       <div className="border-b px-4 py-5 md:px-6 xl:px-8">
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
@@ -116,7 +116,7 @@ export function TestEnginePage() {
               {t('testengine.subtitle')}
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
             <Button variant="outline" onClick={() => void loadSuites()} disabled={loadingSuites}>
               <RefreshCw className={loadingSuites ? 'animate-spin' : ''} />
               {t('testengine.refresh')}
@@ -154,14 +154,14 @@ export function TestEnginePage() {
             value={formatDuration(selectedSuite?.average_duration_ms ?? null)}
           />
         </div>
-        <div className="mt-4 grid grid-cols-2 border bg-[#fafafa] p-0.5 xl:hidden">
+        <div className="mt-4 grid grid-cols-2 rounded-lg border bg-muted/40 p-1 xl:hidden">
           {(['cases', 'details'] as const).map((view) => (
             <button
               key={view}
               type="button"
               onClick={() => setCompactView(view)}
               className={`h-8 text-xs capitalize ${
-                compactView === view ? 'bg-white font-medium shadow-sm' : 'text-muted-foreground'
+                compactView === view ? 'rounded-md bg-background font-medium shadow-sm' : 'text-muted-foreground'
               }`}
             >
               {t(view === 'cases' ? 'testengine.casesView' : 'testengine.detailsView')}
@@ -171,17 +171,17 @@ export function TestEnginePage() {
       </div>
 
       {error && (
-        <div className="flex items-center gap-2 border-b bg-red-50 px-4 py-2 text-xs text-red-700 md:px-6 xl:px-8">
+        <div className="flex items-center gap-2 border-b bg-destructive/10 px-4 py-2 text-sm text-destructive md:px-6 xl:px-8">
           <CircleAlert className="size-4" />
           {error}
         </div>
       )}
 
       <div className="grid flex-1 grid-cols-1 xl:min-h-0 xl:grid-cols-[180px_minmax(430px,1fr)_360px] 2xl:grid-cols-[210px_minmax(520px,1fr)_420px]">
-        <aside className="border-b bg-[#fafafa] xl:min-h-0 xl:border-r xl:border-b-0">
+        <aside className="border-b bg-muted/30 xl:min-h-0 xl:border-r xl:border-b-0">
           <div className="flex items-center justify-between px-3 py-3 xl:border-b">
-            <span className="text-[11px] font-medium text-muted-foreground uppercase">{t('testengine.suites')}</span>
-            <span className="text-[11px] text-muted-foreground">{suites.length}</span>
+            <span className="text-xs font-medium text-muted-foreground uppercase">{t('testengine.suites')}</span>
+            <span className="text-xs text-muted-foreground">{suites.length}</span>
           </div>
           <div className="flex overflow-x-auto p-2 xl:block xl:max-h-[calc(100vh-19rem)] xl:overflow-y-auto">
             {loadingSuites ? (
@@ -200,20 +200,20 @@ export function TestEnginePage() {
                   key={suite.id}
                   type="button"
                   onClick={() => setSelectedSuiteId(suite.id)}
-                  className={`mr-2 min-w-48 border px-3 py-2.5 text-left transition-colors xl:mr-0 xl:mb-1 xl:w-full xl:min-w-0 ${
+                  className={`mr-2 min-w-48 rounded-lg border px-3 py-2.5 text-left transition-colors xl:mr-0 xl:mb-1 xl:w-full xl:min-w-0 ${
                     suite.id === selectedSuiteId
-                      ? 'border-zinc-300 bg-white shadow-sm'
-                      : 'border-transparent hover:bg-white'
+                      ? 'border-border bg-background shadow-sm'
+                      : 'border-transparent hover:bg-background'
                   }`}
                 >
                   <div className="flex items-center justify-between gap-2">
                     <span className="truncate text-sm font-medium">{suite.suite_key}</span>
                     <ChevronRight className="size-3.5 text-muted-foreground" />
                   </div>
-                  <div className="mt-1 truncate text-[11px] text-muted-foreground">
+                  <div className="mt-1 truncate text-xs text-muted-foreground">
                     {suite.owner}/{suite.repo}
                   </div>
-                  <div className="mt-2 flex gap-3 text-[11px] text-muted-foreground">
+                  <div className="mt-2 flex gap-3 text-xs text-muted-foreground">
                     <span>{t('testengine.cases', { count: suite.total_tests })}</span>
                     <span>{t('testengine.execs', { count: suite.execution_count })}</span>
                   </div>
@@ -239,7 +239,7 @@ export function TestEnginePage() {
                   placeholder={t('testengine.searchPlaceholder')}
                 />
               </div>
-              <div className="flex h-8 items-center border bg-[#fafafa] p-0.5">
+              <div className="flex max-w-full items-center overflow-x-auto rounded-md border bg-muted/40 p-1">
                 <Filter className="mx-1.5 size-3.5 text-muted-foreground" />
                 {filterItems.map((item) => (
                   <button
@@ -248,7 +248,7 @@ export function TestEnginePage() {
                     onClick={() => setFilter(item.value)}
                     className={`h-6 px-2 text-xs ${
                       filter === item.value
-                        ? 'bg-white font-medium shadow-sm'
+                        ? 'rounded bg-background font-medium shadow-sm'
                         : 'text-muted-foreground hover:text-foreground'
                     }`}
                   >
@@ -259,7 +259,7 @@ export function TestEnginePage() {
               <select
                 value={sort}
                 onChange={(event) => setSort(event.target.value as CaseSort)}
-                className="h-8 border bg-white px-2 text-xs outline-none focus:border-ring"
+                className="h-9 rounded-md border bg-background px-2 text-xs outline-none focus:border-ring"
               >
                 <option value="recent">{t('testengine.sortRecent')}</option>
                 <option value="name">{t('testengine.sortName')}</option>
@@ -278,7 +278,7 @@ export function TestEnginePage() {
                 </Button>
               )}
             </div>
-            <div className="mt-2 text-[11px] text-muted-foreground">
+            <div className="mt-2 text-xs text-muted-foreground">
               {t('testengine.showingCases', {
                 shown: filteredTests.length.toLocaleString(),
                 total: (tests?.length ?? 0).toLocaleString(),
@@ -287,8 +287,16 @@ export function TestEnginePage() {
           </div>
 
           <div className="max-h-[70vh] overflow-auto xl:max-h-none xl:min-h-0 xl:flex-1">
-            <table className="w-full min-w-[820px] border-collapse text-left">
-              <thead className="sticky top-0 z-10 bg-[#fafafa] text-[11px] text-muted-foreground">
+            <div className="divide-y lg:hidden">
+              {loadingTests || tests === null ? <div className="px-4 py-12 text-center text-sm text-muted-foreground">{t('testengine.loadingTestCases')}</div> : filteredTests.length === 0 ? <div className="px-4 py-12 text-center text-sm text-muted-foreground">{t('testengine.noCasesMatch')}</div> : filteredTests.map((test) => (
+                <button key={test.id} type="button" onClick={() => { setSelectedTestId(test.id); setCompactView('details') }} className={`w-full p-4 text-left transition-colors ${test.id === selectedTestId ? 'bg-muted' : 'hover:bg-muted/50'}`}>
+                  <div className="flex items-start justify-between gap-3"><div className="min-w-0"><div className="truncate font-mono text-sm font-medium">{test.name}</div><div className="mt-1 truncate text-xs text-muted-foreground">{test.file ?? t('testengine.noSourceLocation')}</div></div><StatusBadge value={test.last_status} /></div>
+                  <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground"><span>{t('testengine.execs', { count: test.execution_count })}</span><span>{t('testengine.passRate')}: {percentage(test.passed_count, test.execution_count)}%</span><span>{formatDuration(test.average_duration_ms)}</span>{test.state !== 'enabled' ? <StatusBadge value={test.state} /> : null}</div>
+                </button>
+              ))}
+            </div>
+            <table className="hidden w-full min-w-[760px] border-collapse text-left lg:table">
+              <thead className="sticky top-0 z-10 bg-muted/60 text-xs text-muted-foreground">
                 <tr className="border-b">
                   <th className="px-4 py-2.5 font-medium">{t('testengine.colTestCase')}</th>
                   <th className="w-24 px-3 py-2.5 font-medium">{t('testengine.colLatest')}</th>
@@ -320,7 +328,7 @@ export function TestEnginePage() {
                         setCompactView('details')
                       }}
                       className={`cursor-pointer border-b transition-colors ${
-                        test.id === selectedTestId ? 'bg-zinc-100' : 'hover:bg-zinc-50'
+                        test.id === selectedTestId ? 'bg-muted' : 'hover:bg-muted/50'
                       }`}
                     >
                       <td className="px-4 py-3">
@@ -330,7 +338,7 @@ export function TestEnginePage() {
                         >
                           {test.name}
                         </div>
-                        <div className="mt-1 flex items-center gap-2 text-[11px] text-muted-foreground">
+                        <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
                           <span className="truncate">{test.file ?? t('testengine.noSourceLocation')}</span>
                           {test.state !== 'enabled' && <StatusBadge value={test.state} />}
                         </div>
@@ -347,7 +355,7 @@ export function TestEnginePage() {
                       <td className="px-3 py-3 text-right text-xs tabular-nums">
                         {formatDuration(test.average_duration_ms)}
                       </td>
-                      <td className="px-4 py-3 text-right text-[11px] text-muted-foreground">
+                      <td className="px-4 py-3 text-right text-xs text-muted-foreground">
                         {formatDate(test.last_captured)}
                       </td>
                     </tr>
@@ -359,7 +367,7 @@ export function TestEnginePage() {
         </section>
 
         <aside
-          className={`min-w-0 bg-white xl:block xl:min-h-0 xl:overflow-y-auto ${
+          className={`min-w-0 bg-background xl:block xl:min-h-0 xl:overflow-y-auto ${
             compactView === 'cases' ? 'hidden' : 'block'
           }`}
         >
@@ -373,7 +381,7 @@ export function TestEnginePage() {
               <div className="border-b px-5 py-4">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <div className="text-[11px] text-muted-foreground uppercase">{t('testengine.colTestCase')}</div>
+                    <div className="text-xs text-muted-foreground uppercase">{t('testengine.colTestCase')}</div>
                     <h2 className="mt-1 break-words font-mono text-sm font-semibold leading-relaxed">
                       {selectedTest.name}
                     </h2>
@@ -381,10 +389,10 @@ export function TestEnginePage() {
                   <StatusBadge value={selectedTest.state} />
                 </div>
                 <div className="mt-4">
-                  <div className="mb-1.5 text-[10px] font-medium text-muted-foreground uppercase">
+                  <div className="mb-1.5 text-xs font-medium text-muted-foreground uppercase">
                     {t('testengine.disposition')}
                   </div>
-                  <div className="grid grid-cols-3 border bg-[#fafafa] p-0.5">
+                  <div className="grid grid-cols-3 rounded-lg border bg-muted/40 p-1">
                     {(['enabled', 'muted', 'skipped'] as const).map((state) => (
                       <button
                         key={state}
@@ -393,34 +401,34 @@ export function TestEnginePage() {
                         disabled={updatingState}
                         className={`h-7 text-xs capitalize transition-colors ${
                           selectedTest.state === state
-                            ? 'bg-white font-medium shadow-sm'
+                            ? 'rounded-md bg-background font-medium shadow-sm'
                             : 'text-muted-foreground hover:text-foreground'
                         }`}
                       >
-                        {state}
+                        {t(`testengine.state.${state}`)}
                       </button>
                     ))}
                   </div>
                 </div>
                 <div className="mt-4 grid grid-cols-3 divide-x border-y">
                   <div className="py-3 pr-3">
-                    <div className="text-[10px] text-muted-foreground uppercase">{t('testengine.passRate')}</div>
+                    <div className="text-xs text-muted-foreground uppercase">{t('testengine.passRate')}</div>
                     <div className="mt-1 text-lg font-semibold tabular-nums">{casePassRate}%</div>
                   </div>
                   <div className="px-3 py-3">
-                    <div className="text-[10px] text-muted-foreground uppercase">{t('testengine.executions')}</div>
+                    <div className="text-xs text-muted-foreground uppercase">{t('testengine.executions')}</div>
                     <div className="mt-1 text-lg font-semibold tabular-nums">
                       {selectedTest.execution_count}
                     </div>
                   </div>
                   <div className="py-3 pl-3">
-                    <div className="text-[10px] text-muted-foreground uppercase">{t('testengine.average')}</div>
+                    <div className="text-xs text-muted-foreground uppercase">{t('testengine.average')}</div>
                     <div className="mt-1 text-lg font-semibold tabular-nums">
                       {formatDuration(selectedTest.average_duration_ms)}
                     </div>
                   </div>
                 </div>
-                <div className="mt-3 flex h-1.5 overflow-hidden bg-zinc-100">
+                <div className="mt-3 flex h-1.5 overflow-hidden rounded-full bg-muted">
                   <div
                     className="bg-emerald-500"
                     style={{
@@ -443,7 +451,7 @@ export function TestEnginePage() {
                     }}
                   />
                 </div>
-                <div className="mt-2 flex gap-4 text-[10px] text-muted-foreground">
+                <div className="mt-2 flex flex-wrap gap-4 text-xs text-muted-foreground">
                   <span>{t('testengine.passed', { count: selectedTest.passed_count })}</span>
                   <span>{t('testengine.failed', { count: selectedTest.failed_count + selectedTest.errored_count })}</span>
                   <span>{t('testengine.skipped', { count: selectedTest.skipped_count })}</span>
@@ -476,7 +484,7 @@ export function TestEnginePage() {
                     {selectedTest.last_ci_provider ?? t('testengine.notReported')}
                   </MetadataRow>
                   <MetadataRow label={t('testengine.run')}>
-                    <span className="font-mono text-[11px]">
+                      <span className="font-mono text-xs">
                       {selectedTest.last_run_ref ?? t('testengine.notReported')}
                     </span>
                   </MetadataRow>
@@ -484,7 +492,7 @@ export function TestEnginePage() {
                     {selectedTest.labels.length ? (
                       <div className="flex flex-wrap gap-1">
                         {selectedTest.labels.map((label) => (
-                          <span key={label} className="bg-zinc-100 px-1.5 py-0.5">
+                          <span key={label} className="rounded bg-muted px-1.5 py-0.5">
                             {label}
                           </span>
                         ))}
@@ -501,11 +509,11 @@ export function TestEnginePage() {
                   <MetadataRow label={t('testengine.stateDecision')}>
                     <div className="space-y-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="font-mono text-[11px]">{selectedTest.state_source}</span>
+                        <span className="font-mono text-xs">{selectedTest.state_source}</span>
                         <span>{formatDate(selectedTest.state_changed_at)}</span>
                       </div>
                       {selectedTest.state_reason ? (
-                        <p className="text-[11px] text-muted-foreground">{selectedTest.state_reason}</p>
+                        <p className="text-xs text-muted-foreground">{selectedTest.state_reason}</p>
                       ) : null}
                     </div>
                   </MetadataRow>
@@ -515,12 +523,12 @@ export function TestEnginePage() {
               </section>
 
               <section className="max-h-[70vh] overflow-y-auto xl:max-h-none xl:overflow-visible">
-                <div className="sticky top-0 z-10 flex items-center justify-between border-b bg-white px-5 py-3">
+                <div className="sticky top-0 z-10 flex items-center justify-between border-b bg-background px-5 py-3">
                   <div className="flex items-center gap-2">
                     <Activity className="size-4" />
                     <h3 className="text-sm font-semibold">{t('testengine.executionHistory')}</h3>
                   </div>
-                  <span className="text-[11px] text-muted-foreground">
+                  <span className="text-xs text-muted-foreground">
                     {t('testengine.total', { count: executions?.total ?? selectedTest.execution_count })}
                   </span>
                 </div>

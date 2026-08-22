@@ -105,7 +105,7 @@ export function CollectionTokensSection({ suite }: { suite: TestSuiteSummary }) 
         </Button>
       </div>
 
-      {error ? <p className="mt-4 text-sm text-red-600">{error}</p> : null}
+      {error ? <p className="mt-4 text-sm text-destructive">{error}</p> : null}
 
       <div className="mt-4 space-y-3">
         {tokens === null ? (
