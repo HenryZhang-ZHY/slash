@@ -15,7 +15,8 @@ the repository owner, repository name, and a stable suite key such as
 `unit-tests`.
 
 Slash creates the suite and displays a collection token. Copy it now; the token
-is the bearer credential your CI uses for this suite.
+is the bearer credential your CI uses for this suite, is not recoverable later,
+and expires after 90 days.
 
 ## 2. Store the collection token
 
@@ -45,8 +46,8 @@ Return to `/tests`, select the suite, and find
 `checkout::completes_order`. Its latest result should be `passed`, with one
 recorded execution.
 
-If the upload returns `401`, verify that the token is present, known, and not
-revoked. If it returns `400`, compare the payload with the
+If the upload returns `401`, verify that the token is present, active, and not
+expired. If it returns `400`, compare the payload with the
 [ingestion schema](/en/api/ingestion/#normalized-json).
 
 ## Next steps

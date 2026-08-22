@@ -103,13 +103,7 @@ pub async fn create_suite(
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
 
-    let token = match test_engine::issue_recoverable_collection_token(
-        &state.pool,
-        suite_id,
-        &state.auth_secret,
-    )
-    .await
-    {
+    let token = match test_engine::issue_collection_token(&state.pool, suite_id).await {
         Ok(token) => token,
         Err(error) => {
             tracing::error!(%error, suite = %suite_id, "test-engine initial token issue failed");
@@ -137,7 +131,7 @@ pub async fn create_suite(
                 average_duration_ms: None,
                 last_captured: None,
             },
-            token,
+            token: token.raw,
         }),
     )
         .into_response()
@@ -257,17 +251,23 @@ pub async fn set_test_state(
 }
 
 /// `POST /api/test-engine/suites/{id}/tokens` — issue a new per-suite
-/// collection token (M2-4 token management). Its hash authenticates ingestion;
-/// its encrypted value remains available to the owning account.
+/// collection token. Its raw value is returned once and only its hash remains
+/// available afterward. Issuing it revokes the suite's previous active token.
 pub async fn issue_token(
     State(state): State<AppState>,
     auth_user: UserId,
     Path(id): Path<uuid::Uuid>,
 ) -> Result<(StatusCode, Json<TokenIssued>), StatusCode> {
     require_suite_owner(&state, id, auth_user.0).await?;
-    match test_engine::issue_recoverable_collection_token(&state.pool, id, &state.auth_secret).await
-    {
-        Ok(raw) => Ok((StatusCode::CREATED, Json(TokenIssued { token: raw }))),
+    match test_engine::issue_collection_token(&state.pool, id).await {
+        Ok(issued) => Ok((
+            StatusCode::CREATED,
+            Json(TokenIssued {
+                id: issued.id.to_string(),
+                token: issued.raw,
+                expires_at: issued.expires_at.to_rfc3339(),
+            }),
+        )),
         Err(error) => {
             tracing::error!(%error, suite = %id, "test-engine token issue failed");
             Err(StatusCode::INTERNAL_SERVER_ERROR)
@@ -275,18 +275,18 @@ pub async fn issue_token(
     }
 }
 
-/// `GET /api/test-engine/suites/{id}/tokens` — return the latest active token
-/// to its owning account. Legacy hash-only tokens return `null` until rotated.
-pub async fn get_token(
+/// `GET /api/test-engine/suites/{id}/tokens` — list token metadata without
+/// exposing secret values.
+pub async fn list_tokens(
     State(state): State<AppState>,
     auth_user: UserId,
     Path(id): Path<uuid::Uuid>,
-) -> Result<Json<CurrentToken>, StatusCode> {
+) -> Result<Json<Vec<CollectionTokenOut>>, StatusCode> {
     require_suite_owner(&state, id, auth_user.0).await?;
-    match test_engine::latest_collection_token(&state.pool, id, auth_user.0, &state.auth_secret)
-        .await
-    {
-        Ok(token) => Ok(Json(CurrentToken { token })),
+    match test_engine::list_collection_tokens(&state.pool, id).await {
+        Ok(tokens) => Ok(Json(
+            tokens.into_iter().map(CollectionTokenOut::from).collect(),
+        )),
         Err(error) => {
             tracing::error!(%error, suite = %id, "test-engine token read failed");
             Err(StatusCode::INTERNAL_SERVER_ERROR)
@@ -294,28 +294,19 @@ pub async fn get_token(
     }
 }
 
-/// Body for token revocation (the raw token the caller still holds; it is
-/// hashed and looked up to revoke).
-#[derive(Debug, Deserialize)]
-pub struct RevokeTokenRequest {
-    token: String,
-}
-
-/// `POST /api/test-engine/suites/{id}/tokens/revoke` — revoke a collection
-/// token. 204 on success; 404 if unknown or already revoked. Fail-closed:
-/// revoked tokens no longer authenticate.
-pub async fn revoke_token(
+/// `DELETE /api/test-engine/suites/{suite_id}/tokens/{token_id}` — revoke a
+/// token by metadata id. The raw secret is never required.
+pub async fn revoke_token_by_id(
     State(state): State<AppState>,
     auth_user: UserId,
-    Path(id): Path<uuid::Uuid>,
-    Json(req): Json<RevokeTokenRequest>,
+    Path((suite_id, token_id)): Path<(uuid::Uuid, uuid::Uuid)>,
 ) -> Result<StatusCode, StatusCode> {
-    require_suite_owner(&state, id, auth_user.0).await?;
-    match test_engine::revoke_collection_token(&state.pool, id, &req.token).await {
+    require_suite_owner(&state, suite_id, auth_user.0).await?;
+    match test_engine::revoke_collection_token_by_id(&state.pool, suite_id, token_id).await {
         Ok(true) => Ok(StatusCode::NO_CONTENT),
         Ok(false) => Err(StatusCode::NOT_FOUND),
         Err(error) => {
-            tracing::error!(%error, suite = %id, "test-engine token revoke failed");
+            tracing::error!(%error, suite = %suite_id, token = %token_id, "test-engine token revoke failed");
             Err(StatusCode::INTERNAL_SERVER_ERROR)
         }
     }
@@ -497,12 +488,32 @@ pub struct TestStateOut {
 
 #[derive(Debug, serde::Serialize)]
 pub struct TokenIssued {
+    id: String,
     token: String,
+    expires_at: String,
 }
 
 #[derive(Debug, serde::Serialize)]
-pub struct CurrentToken {
-    token: Option<String>,
+pub struct CollectionTokenOut {
+    id: String,
+    status: String,
+    created_at: String,
+    expires_at: String,
+    last_used_at: Option<String>,
+    revoked_at: Option<String>,
+}
+
+impl From<test_engine::CollectionTokenSummary> for CollectionTokenOut {
+    fn from(token: test_engine::CollectionTokenSummary) -> Self {
+        Self {
+            id: token.id.to_string(),
+            status: token.status,
+            created_at: token.created_at.to_rfc3339(),
+            expires_at: token.expires_at.to_rfc3339(),
+            last_used_at: token.last_used_at.map(|at| at.to_rfc3339()),
+            revoked_at: token.revoked_at.map(|at| at.to_rfc3339()),
+        }
+    }
 }
 
 #[derive(Debug, serde::Serialize)]

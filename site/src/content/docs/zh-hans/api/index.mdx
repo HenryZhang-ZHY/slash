@@ -68,9 +68,9 @@ JSON 响应里的时间戳是 RFC 3339 字符串。
 | `GET` | `/api/test-engine/suites/{id}/tests` | 列出套件里的测试 |
 | `GET` | `/api/test-engine/tests/{id}/executions` | 列出执行历史 |
 | `PATCH` | `/api/test-engine/tests/{id}/state` | 改变测试的处置状态 |
-| `GET` | `/api/test-engine/suites/{id}/tokens` | 读取最新有效 token |
+| `GET` | `/api/test-engine/suites/{id}/tokens` | 列出 token 元数据 |
 | `POST` | `/api/test-engine/suites/{id}/tokens` | 签发 collection token |
-| `POST` | `/api/test-engine/suites/{id}/tokens/revoke` | 吊销 collection token |
+| `DELETE` | `/api/test-engine/suites/{suite_id}/tokens/{token_id}` | 吊销 collection token |
 
 ### [测试结果 ingestion](/zh-hans/api/ingestion/)
 
