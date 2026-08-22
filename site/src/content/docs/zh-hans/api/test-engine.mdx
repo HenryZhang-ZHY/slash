@@ -213,20 +213,28 @@ curl -b cookies.txt -X PATCH \
 
 ## GET `/api/test-engine/suites/{id}/tokens`
 
-返回已拥有套件最新有效、可恢复的 collection token。旧的仅哈希 token 无法恢复，
-显示为 `null`。
+列出已拥有套件的非 secret token 元数据。此端点绝不会返回原始凭据。
 
 ```json
-{
-  "token": "collection-token-value"
-}
+[
+  {
+    "id": "2b914582-17c3-42c5-b9e8-439816360a3e",
+    "status": "active",
+    "created_at": "2026-08-22T06:00:00+00:00",
+    "expires_at": "2026-11-20T06:00:00+00:00",
+    "last_used_at": "2026-08-22T06:05:00+00:00",
+    "revoked_at": null
+  }
+]
 ```
 
-成功为 `200`。未知或不拥有的套件返回 `404`；存储或 token 解密失败返回 `500`。
+成功为 `200`。未知或不拥有的套件返回 `404`；存储失败返回 `500`。`status` 为
+`active`、`expired` 或 `revoked`。
 
 ## POST `/api/test-engine/suites/{id}/tokens`
 
-为已拥有的套件签发一个新的可恢复 collection token。请求没有 body。
+为已拥有的套件签发一个只显示一次的 collection token。请求没有 body。签发会以原子
+方式吊销此前有效的 token。
 
 ```sh
 curl -b cookies.txt -X POST \
@@ -237,22 +245,22 @@ curl -b cookies.txt -X POST \
 
 ```json
 {
-  "token": "new-collection-token-value"
+  "id": "2b914582-17c3-42c5-b9e8-439816360a3e",
+  "token": "new-collection-token-value",
+  "expires_at": "2026-11-20T06:00:00+00:00"
 }
 ```
 
-未知或不拥有的套件返回 `404`；签发失败返回 `500`。
+请立即复制响应中的原始 token；Slash 只保存哈希，无法再次显示它。token 在 90 天后
+到期。未知或不拥有的套件返回 `404`；签发失败返回 `500`。
 
-## POST `/api/test-engine/suites/{id}/tokens/revoke`
+## DELETE `/api/test-engine/suites/{suite_id}/tokens/{token_id}`
 
-吊销一个 collection token。发送调用方仍持有的精确原始 token；Slash 在查找前先
-对它做哈希。
+使用列表端点返回的元数据 id 吊销 collection token，不需要原始 secret。
 
 ```sh
-curl -b cookies.txt \
-  -H "Content-Type: application/json" \
-  -d '{"token":"collection-token-value"}' \
-  https://slash.example.com/api/test-engine/suites/0e1ef24a-927f-4094-bdaf-477e17c123b8/tokens/revoke
+curl -b cookies.txt -X DELETE \
+  https://slash.example.com/api/test-engine/suites/0e1ef24a-927f-4094-bdaf-477e17c123b8/tokens/2b914582-17c3-42c5-b9e8-439816360a3e
 ```
 
 成功为 `204 No Content`。未知、已吊销或不拥有的 token 返回 `404`；存储失败返回

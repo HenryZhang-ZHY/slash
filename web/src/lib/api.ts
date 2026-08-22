@@ -181,6 +181,21 @@ export interface SuiteCreated {
   token: string
 }
 
+export interface CollectionTokenSummary {
+  id: string
+  status: 'active' | 'expired' | 'revoked'
+  created_at: string
+  expires_at: string
+  last_used_at: string | null
+  revoked_at: string | null
+}
+
+export interface IssuedCollectionToken {
+  id: string
+  token: string
+  expires_at: string
+}
+
 export const testEngineApi = {
   listSuites: () => request<TestSuiteSummary[]>('/api/test-engine/suites'),
   createSuite: (owner: string, repo: string, suiteKey: string) =>
@@ -199,10 +214,14 @@ export const testEngineApi = {
       method: 'PATCH',
       body: JSON.stringify({ state }),
     }),
-  getToken: (suiteId: string) =>
-    request<{ token: string | null }>(`/api/test-engine/suites/${suiteId}/tokens`),
+  listTokens: (suiteId: string) =>
+    request<CollectionTokenSummary[]>(`/api/test-engine/suites/${suiteId}/tokens`),
   issueToken: (suiteId: string) =>
-    request<{ token: string }>(`/api/test-engine/suites/${suiteId}/tokens`, {
+    request<IssuedCollectionToken>(`/api/test-engine/suites/${suiteId}/tokens`, {
       method: 'POST',
+    }),
+  revokeToken: (suiteId: string, tokenId: string) =>
+    request<void>(`/api/test-engine/suites/${suiteId}/tokens/${tokenId}`, {
+      method: 'DELETE',
     }),
 }

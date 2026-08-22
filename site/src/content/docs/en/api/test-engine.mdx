@@ -220,22 +220,29 @@ Success: `200 OK`.
 
 ## GET `/api/test-engine/suites/{id}/tokens`
 
-Returns the latest active, recoverable collection token for an owned suite.
-Legacy hash-only tokens cannot be recovered and appear as `null`.
+Lists non-secret token metadata for an owned suite. Raw credentials are never
+returned by this endpoint.
 
 ```json
-{
-  "token": "collection-token-value"
-}
+[
+  {
+    "id": "2b914582-17c3-42c5-b9e8-439816360a3e",
+    "status": "active",
+    "created_at": "2026-08-22T06:00:00+00:00",
+    "expires_at": "2026-11-20T06:00:00+00:00",
+    "last_used_at": "2026-08-22T06:05:00+00:00",
+    "revoked_at": null
+  }
+]
 ```
 
-Success is `200`. Unknown or unowned suites return `404`; storage or token
-decryption failures return `500`.
+Success is `200`. Unknown or unowned suites return `404`; storage failures
+return `500`. `status` is `active`, `expired`, or `revoked`.
 
 ## POST `/api/test-engine/suites/{id}/tokens`
 
-Issues a new recoverable collection token for an owned suite. The request has
-no body.
+Issues a new show-once collection token for an owned suite. The request has no
+body. Issuance atomically revokes the previous active token.
 
 ```sh
 curl -b cookies.txt -X POST \
@@ -246,22 +253,24 @@ Success: `201 Created`.
 
 ```json
 {
-  "token": "new-collection-token-value"
+  "id": "2b914582-17c3-42c5-b9e8-439816360a3e",
+  "token": "new-collection-token-value",
+  "expires_at": "2026-11-20T06:00:00+00:00"
 }
 ```
 
-Unknown or unowned suites return `404`; issuance failures return `500`.
+Copy the raw token from this response immediately; Slash stores only its hash
+and cannot display it again. The token expires after 90 days. Unknown or
+unowned suites return `404`; issuance failures return `500`.
 
-## POST `/api/test-engine/suites/{id}/tokens/revoke`
+## DELETE `/api/test-engine/suites/{suite_id}/tokens/{token_id}`
 
-Revokes one collection token. Send the exact raw token still held by the
-caller; Slash hashes it before lookup.
+Revokes one collection token by the metadata id returned by the list endpoint.
+The raw secret is not required.
 
 ```sh
-curl -b cookies.txt \
-  -H "Content-Type: application/json" \
-  -d '{"token":"collection-token-value"}' \
-  https://slash.example.com/api/test-engine/suites/0e1ef24a-927f-4094-bdaf-477e17c123b8/tokens/revoke
+curl -b cookies.txt -X DELETE \
+  https://slash.example.com/api/test-engine/suites/0e1ef24a-927f-4094-bdaf-477e17c123b8/tokens/2b914582-17c3-42c5-b9e8-439816360a3e
 ```
 
 Success is `204 No Content`. An unknown, already revoked, or unowned token

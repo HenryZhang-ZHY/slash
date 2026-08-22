@@ -29,9 +29,11 @@ decision that stops new execution evidence.
 
 ## Manage collection tokens
 
-Issue a token for a suite or revoke the current token when it may be exposed.
-The plaintext credential is returned when issued and should be moved directly
-into the CI system that uploads results.
+Issue, rotate, or revoke a suite token. The plaintext credential is shown only
+when issued and should be moved directly into the CI system that uploads
+results. The console retains non-secret creation, expiration, last-used, and
+revocation metadata. Rotation revokes the previous active token, and tokens
+expire after 90 days.
 
 See [Tests and quarantine](/en/test-engine/concepts/) for state semantics and
 the [management API](/en/api/test-engine/) for exact requests and errors.

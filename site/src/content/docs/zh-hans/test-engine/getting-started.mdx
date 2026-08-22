@@ -13,7 +13,7 @@ sidebar:
 和一个稳定的 suite key，例如 `unit-tests`。
 
 Slash 会创建 suite 并显示 collection token。立即复制它；这是 CI 访问该 suite 的
-bearer 凭据。
+bearer 凭据，之后无法恢复，并会在 90 天后到期。
 
 ## 2. 保存 Collection Token
 
@@ -40,7 +40,7 @@ curl -X POST \
 回到 `/tests`，选择对应 suite，找到 `checkout::completes_order`。它的最新结果应为
 `passed`，并显示一条 execution。
 
-如果上传返回 `401`，确认 token 存在、有效且未吊销。如果返回 `400`，请根据
+如果上传返回 `401`，确认 token 存在、有效且未到期。如果返回 `400`，请根据
 [ingestion schema](/zh-hans/api/ingestion/#normalized-json)检查 payload。
 
 ## 下一步

@@ -6,19 +6,17 @@
 
 #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::expect_used)]
 
-use std::sync::Arc;
-
 use sqlx::PgPool;
 use uuid::Uuid;
 
-use slash_server::auth::AuthSecret;
 use slash_server::db;
 use slash_server::test_engine::ExecutionStatus::{Failed, Passed};
 use slash_server::test_engine::{
     ExecutionStatus, NewExecution, NewRun, NewSuite, NewTest, TestState, TestStateChange,
-    TestStateSource, find_suite_for_token, insert_executions, issue_recoverable_collection_token,
-    list_suites, parse_test_state, quarantined_tests, revoke_collection_token, set_test_state,
-    upsert_owned_suite, upsert_run, upsert_suite, upsert_test,
+    TestStateSource, find_suite_for_token, insert_executions, issue_collection_token,
+    list_collection_tokens, list_suites, parse_test_state, quarantined_tests,
+    revoke_collection_token_by_id, set_test_state, upsert_owned_suite, upsert_run, upsert_suite,
+    upsert_test,
 };
 
 /// `None` when `SLASH_TEST_DATABASE_URL` is unset — callers skip cleanly
@@ -52,11 +50,8 @@ async fn provision_suite(pool: &PgPool) -> (Uuid, String) {
     .unwrap();
     tx.commit().await.unwrap();
 
-    let secret = AuthSecret(Arc::from("test-auth-secret"));
-    let raw = issue_recoverable_collection_token(pool, suite_id, &secret)
-        .await
-        .unwrap();
-    (suite_id, raw)
+    let issued = issue_collection_token(pool, suite_id).await.unwrap();
+    (suite_id, issued.raw)
 }
 
 #[serial_test::serial(db)]
@@ -112,6 +107,10 @@ async fn provisioned_token_resolves_to_the_suite_identity() {
     assert_eq!(identity.installation_id, 1);
     assert_eq!(identity.owner, "acme");
     assert_eq!(identity.repo, "widgets");
+    let tokens = list_collection_tokens(&pool, identity.suite_id)
+        .await
+        .unwrap();
+    assert!(tokens[0].last_used_at.is_some());
 
     let unknown = find_suite_for_token(&pool, "definitely-not-a-token")
         .await
@@ -126,22 +125,118 @@ async fn revoked_token_no_longer_authenticates() {
         return;
     };
     let (suite_id, raw) = provision_suite(&pool).await;
+    let tokens = list_collection_tokens(&pool, suite_id).await.unwrap();
+    let token_id = tokens[0].id;
 
     // Active token resolves.
     assert!(find_suite_for_token(&pool, &raw).await.unwrap().is_some());
 
     // Revoke: applies and the token no longer authenticates (fail-closed).
-    let revoked = revoke_collection_token(&pool, suite_id, &raw)
+    let revoked = revoke_collection_token_by_id(&pool, suite_id, token_id)
         .await
         .unwrap();
     assert!(revoked);
     assert!(find_suite_for_token(&pool, &raw).await.unwrap().is_none());
 
     // Revoking again is a no-op (already non-active).
-    let again = revoke_collection_token(&pool, suite_id, &raw)
+    let again = revoke_collection_token_by_id(&pool, suite_id, token_id)
         .await
         .unwrap();
     assert!(!again);
+}
+
+#[serial_test::serial(db)]
+#[tokio::test]
+async fn issuing_a_token_rotates_the_previous_token() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let (suite_id, first_raw) = provision_suite(&pool).await;
+
+    let second = issue_collection_token(&pool, suite_id).await.unwrap();
+
+    assert!(
+        find_suite_for_token(&pool, &first_raw)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        find_suite_for_token(&pool, &second.raw)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    let tokens = list_collection_tokens(&pool, suite_id).await.unwrap();
+    assert_eq!(tokens.len(), 2);
+    assert_eq!(
+        tokens
+            .iter()
+            .filter(|token| token.status == "active")
+            .count(),
+        1
+    );
+    assert_eq!(tokens[0].id, second.id);
+}
+
+#[serial_test::serial(db)]
+#[tokio::test]
+async fn concurrent_token_rotation_keeps_exactly_one_active_token() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let (suite_id, first_raw) = provision_suite(&pool).await;
+
+    let (left, right) = tokio::join!(
+        issue_collection_token(&pool, suite_id),
+        issue_collection_token(&pool, suite_id)
+    );
+    let left = left.unwrap();
+    let right = right.unwrap();
+
+    assert!(
+        find_suite_for_token(&pool, &first_raw)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let left_live = find_suite_for_token(&pool, &left.raw)
+        .await
+        .unwrap()
+        .is_some();
+    let right_live = find_suite_for_token(&pool, &right.raw)
+        .await
+        .unwrap()
+        .is_some();
+    assert_ne!(left_live, right_live);
+    let tokens = list_collection_tokens(&pool, suite_id).await.unwrap();
+    assert_eq!(
+        tokens
+            .iter()
+            .filter(|token| token.status == "active")
+            .count(),
+        1
+    );
+}
+
+#[serial_test::serial(db)]
+#[tokio::test]
+async fn expired_token_fails_closed() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let (suite_id, raw) = provision_suite(&pool).await;
+    sqlx::query(
+        "UPDATE collection_tokens SET expires_at = now() - interval '1 second' WHERE suite_id = $1",
+    )
+    .bind(suite_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    assert!(find_suite_for_token(&pool, &raw).await.unwrap().is_none());
+    let tokens = list_collection_tokens(&pool, suite_id).await.unwrap();
+    assert_eq!(tokens[0].status, "expired");
 }
 
 #[serial_test::serial(db)]
