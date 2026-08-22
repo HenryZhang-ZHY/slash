@@ -112,6 +112,10 @@ curl -b cookies.txt \
     "id": "df5a68b4-bf9f-4745-a320-a7cd39b59249",
     "name": "checkout::completes_order",
     "state": "enabled",
+    "state_source": "monitor",
+    "state_reason": "failure-free reconciliation window",
+    "state_changed_by_user_id": null,
+    "state_changed_at": "2026-08-12T03:55:00+00:00",
     "file": "tests/checkout.rs",
     "line_no": 42,
     "labels": [],
@@ -132,7 +136,8 @@ curl -b cookies.txt \
 ]
 ```
 
-可选的来源、最近运行和平均字段可能是 `null`。未知或不拥有的套件返回 `404`；
+`state_source` 为 `default`、`manual` 或 `monitor`。可选的状态 reason 和 actor
+说明当前决策；最近运行和平均字段也可能是 `null`。未知或不拥有的套件返回 `404`；
 存储失败返回 `500`。
 
 ## GET `/api/test-engine/tests/{id}/executions`
@@ -183,11 +188,12 @@ curl -b cookies.txt \
 ```sh
 curl -b cookies.txt -X PATCH \
   -H "Content-Type: application/json" \
-  -d '{"state":"muted"}' \
+  -d '{"state":"muted","reason":"known provider instability"}' \
   https://slash.example.com/api/test-engine/tests/df5a68b4-bf9f-4745-a320-a7cd39b59249/state
 ```
 
-允许的取值是 `enabled`、`muted` 和 `skipped`。
+允许的状态值是 `enabled`、`muted` 和 `skipped`。`reason` 是可选字符串。修改会记录为
+手动决策，并把当前用户记录为 actor；自动 flaky reconcile 不会覆盖它。
 
 成功：`200 OK`。
 

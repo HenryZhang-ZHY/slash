@@ -148,7 +148,8 @@ curl -X POST \
 
 ## GET `/v1/test-engine/quarantined`
 
-返回 token 所属套件中当前状态为 `muted` 或 `skipped` 的测试名。
+返回 token 所属套件中当前状态为 `muted` 或 `skipped` 的测试，并包含 CI 必须应用的
+状态。
 
 ```sh
 curl -H "Authorization: Bearer $SLASH_COLLECTION_TOKEN" \
@@ -159,9 +160,10 @@ curl -H "Authorization: Bearer $SLASH_COLLECTION_TOKEN" \
 
 ```json
 [
-  "checkout::intermittent_gateway",
-  "payments::legacy_processor"
+  { "name": "checkout::intermittent_gateway", "state": "muted" },
+  { "name": "payments::legacy_processor", "state": "skipped" }
 ]
 ```
 
-当 CI workflow 需要在运行套件前跳过或 soft-fail 已被 Slash 隔离的测试时，用这个端点。
+继续运行和上传 `muted` 测试，但在决定 CI 结果时对它们执行 soft-fail。不要运行状态为
+`skipped` 的测试。

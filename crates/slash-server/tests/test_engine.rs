@@ -15,10 +15,10 @@ use slash_server::auth::AuthSecret;
 use slash_server::db;
 use slash_server::test_engine::ExecutionStatus::{Failed, Passed};
 use slash_server::test_engine::{
-    ExecutionStatus, NewExecution, NewRun, NewSuite, NewTest, TestState, find_suite_for_token,
-    insert_executions, issue_recoverable_collection_token, list_suites, parse_test_state,
-    quarantined_tests, revoke_collection_token, set_test_state, upsert_owned_suite, upsert_run,
-    upsert_suite, upsert_test,
+    ExecutionStatus, NewExecution, NewRun, NewSuite, NewTest, TestState, TestStateChange,
+    TestStateSource, find_suite_for_token, insert_executions, issue_recoverable_collection_token,
+    list_suites, parse_test_state, quarantined_tests, revoke_collection_token, set_test_state,
+    upsert_owned_suite, upsert_run, upsert_suite, upsert_test,
 };
 
 /// `None` when `SLASH_TEST_DATABASE_URL` is unset — callers skip cleanly
@@ -348,8 +348,63 @@ async fn flaky_reconcile_mutes_then_recovers_a_test() {
 
     let state = state_of(&pool, suite_id, "tests::wobbly").await;
     assert_eq!(state, Some(TestState::Muted));
+    let source = state_source_of(&pool, suite_id, "tests::wobbly").await;
+    assert_eq!(source.as_deref(), Some("monitor"));
     let steady = state_of(&pool, suite_id, "tests::steady").await;
     assert_eq!(steady, Some(TestState::Enabled));
+
+    sqlx::query(
+        "UPDATE test_executions SET captured_at = now() - interval '8 days' \
+         WHERE status IN ('failed', 'errored')",
+    )
+    .execute(&pool)
+    .await
+    .unwrap();
+    slash_server::flaky::reconcile(&pool).await.unwrap();
+
+    let recovered = state_of(&pool, suite_id, "tests::wobbly").await;
+    assert_eq!(recovered, Some(TestState::Enabled));
+    let source = state_source_of(&pool, suite_id, "tests::wobbly").await;
+    assert_eq!(source.as_deref(), Some("monitor"));
+}
+
+#[serial_test::serial(db)]
+#[tokio::test]
+async fn flaky_reconcile_preserves_a_manual_mute() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let (suite_id, _raw) = provision_suite(&pool).await;
+    seed_runs(&pool, suite_id, "tests::manual", &[Passed, Passed, Passed]).await;
+    let test_id = test_id_of(&pool, suite_id, "tests::manual").await;
+
+    let changed = set_test_state(
+        &pool,
+        test_id,
+        &[TestState::Enabled],
+        TestState::Muted,
+        &TestStateChange {
+            source: TestStateSource::Manual,
+            reason: Some("operator quarantine"),
+            actor_user_id: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(changed);
+
+    slash_server::flaky::reconcile(&pool).await.unwrap();
+
+    assert_eq!(
+        state_of(&pool, suite_id, "tests::manual").await,
+        Some(TestState::Muted)
+    );
+    assert_eq!(
+        state_source_of(&pool, suite_id, "tests::manual")
+            .await
+            .as_deref(),
+        Some("manual")
+    );
 }
 
 #[serial_test::serial(db)]
@@ -392,20 +447,62 @@ async fn direct_set_state_is_a_guarded_cas() {
     tx.commit().await.unwrap();
 
     // enabled -> muted succeeds.
-    let ok = set_test_state(&pool, test.id, &[TestState::Enabled], TestState::Muted)
-        .await
-        .unwrap();
+    let manual_change = TestStateChange {
+        source: TestStateSource::Manual,
+        reason: Some("console update"),
+        actor_user_id: None,
+    };
+    let ok = set_test_state(
+        &pool,
+        test.id,
+        &[TestState::Enabled],
+        TestState::Muted,
+        &manual_change,
+    )
+    .await
+    .unwrap();
     assert!(ok);
     // muted -> muted from [Enabled] fails (guarded).
-    let stale = set_test_state(&pool, test.id, &[TestState::Enabled], TestState::Skipped)
-        .await
-        .unwrap();
+    let stale = set_test_state(
+        &pool,
+        test.id,
+        &[TestState::Enabled],
+        TestState::Skipped,
+        &manual_change,
+    )
+    .await
+    .unwrap();
     assert!(!stale);
     // muted -> enabled succeeds.
-    let recovered = set_test_state(&pool, test.id, &[TestState::Muted], TestState::Enabled)
-        .await
-        .unwrap();
+    let recovered = set_test_state(
+        &pool,
+        test.id,
+        &[TestState::Muted],
+        TestState::Enabled,
+        &manual_change,
+    )
+    .await
+    .unwrap();
     assert!(recovered);
+
+    let events: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
+        "SELECT from_state, to_state, source, reason \
+         FROM test_state_events WHERE test_id = $1 ORDER BY created_at, id",
+    )
+    .bind(test.id)
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(events.len(), 2);
+    assert_eq!(
+        events[0],
+        (
+            "enabled".to_string(),
+            "muted".to_string(),
+            "manual".to_string(),
+            Some("console update".to_string())
+        )
+    );
 }
 
 #[serial_test::serial(db)]
@@ -430,8 +527,12 @@ async fn closed_loop_disposal_hook_reports_the_quarantined_test() {
 
     // The disposal hook (bktec-style skip/mute): query quarantined tests.
     let quarantined = quarantined_tests(&pool, suite_id).await.unwrap();
-    assert!(quarantined.contains(&"tests::flaky_one".to_string()));
-    assert!(!quarantined.contains(&"tests::healthy".to_string()));
+    assert!(
+        quarantined
+            .iter()
+            .any(|test| { test.name == "tests::flaky_one" && test.state == TestState::Muted })
+    );
+    assert!(!quarantined.iter().any(|test| test.name == "tests::healthy"));
 }
 
 // --- helpers ---
@@ -493,4 +594,25 @@ async fn state_of(pool: &PgPool, suite_id: Uuid, name: &str) -> Option<TestState
             .await
             .ok()?;
     Some(parse_test_state(&state))
+}
+
+async fn state_source_of(pool: &PgPool, suite_id: Uuid, name: &str) -> Option<String> {
+    let (source,): (String,) =
+        sqlx::query_as("SELECT state_source FROM tests WHERE suite_id = $1 AND name = $2")
+            .bind(suite_id)
+            .bind(name)
+            .fetch_one(pool)
+            .await
+            .ok()?;
+    Some(source)
+}
+
+async fn test_id_of(pool: &PgPool, suite_id: Uuid, name: &str) -> Uuid {
+    let (id,): (Uuid,) = sqlx::query_as("SELECT id FROM tests WHERE suite_id = $1 AND name = $2")
+        .bind(suite_id)
+        .bind(name)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+    id
 }

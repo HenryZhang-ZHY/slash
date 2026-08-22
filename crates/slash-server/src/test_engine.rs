@@ -25,6 +25,30 @@ impl TestState {
     }
 }
 
+/// Origin of a mutable test-state decision. Newly discovered tests retain the
+/// database's `default` source until either an operator or monitor changes
+/// them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TestStateSource {
+    Manual,
+    Monitor,
+}
+
+impl TestStateSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Manual => "manual",
+            Self::Monitor => "monitor",
+        }
+    }
+}
+
+pub struct TestStateChange<'a> {
+    pub source: TestStateSource,
+    pub reason: Option<&'a str>,
+    pub actor_user_id: Option<Uuid>,
+}
+
 /// A single observed result status (design §3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecutionStatus {
@@ -282,19 +306,59 @@ pub async fn set_test_state(
     test_id: Uuid,
     from: &[TestState],
     to: TestState,
+    change: &TestStateChange<'_>,
 ) -> Result<bool, sqlx::Error> {
+    let mut tx = conn.begin().await?;
     let sql = format!(
-        "UPDATE tests SET state = $2, updated_at = now() WHERE id = $1 AND state IN ({})",
-        // `from` placeholders start at $3: $1 is the test id, $2 the new
-        // state, and each permitted predecessor state is bound after it.
+        "SELECT state FROM tests \
+         WHERE id = $1 AND ($2 OR state_source <> 'manual') AND state IN ({}) \
+         FOR UPDATE",
+        // `from` placeholders start at $3: $1 is the test id and $2 permits
+        // manual changes to replace an earlier manual decision. Monitor
+        // changes fail closed against manual provenance.
         placeholders(3, from.len())
     );
-    let mut query = sqlx::query(&sql).bind(test_id).bind(to.as_str());
+    let mut query = sqlx::query_as::<_, (String,)>(&sql)
+        .bind(test_id)
+        .bind(change.source == TestStateSource::Manual);
     for s in from {
         query = query.bind(s.as_str());
     }
-    let result = query.execute(conn).await?;
-    Ok(result.rows_affected() > 0)
+    let Some((from_state,)) = query.fetch_optional(&mut *tx).await? else {
+        tx.rollback().await?;
+        return Ok(false);
+    };
+
+    sqlx::query(
+        "UPDATE tests SET state = $2, state_source = $3, state_reason = $4, \
+             state_changed_by_user_id = $5, state_changed_at = now(), updated_at = now() \
+         WHERE id = $1",
+    )
+    .bind(test_id)
+    .bind(to.as_str())
+    .bind(change.source.as_str())
+    .bind(change.reason)
+    .bind(change.actor_user_id)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        "INSERT INTO test_state_events \
+             (id, test_id, from_state, to_state, source, reason, actor_user_id) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(test_id)
+    .bind(from_state)
+    .bind(to.as_str())
+    .bind(change.source.as_str())
+    .bind(change.reason)
+    .bind(change.actor_user_id)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(true)
 }
 
 /// Returns the ids of all tests currently `enabled` (candidates for flaky
@@ -310,13 +374,19 @@ pub const RECONCILE_PAGE_SIZE: i64 = 256;
 ///
 /// Pass `None` for the first page; stop when a page is shorter than the page
 /// size (or empty).
+pub struct TestDisposition {
+    pub id: Uuid,
+    pub state: TestState,
+    pub source: Option<TestStateSource>,
+}
+
 pub async fn all_tests_page(
     conn: &PgPool,
     after_id: Option<Uuid>,
     limit: i64,
-) -> Result<Vec<(Uuid, TestState)>, sqlx::Error> {
-    let rows: Vec<(Uuid, String)> = sqlx::query_as(
-        "SELECT id, state FROM tests \
+) -> Result<Vec<TestDisposition>, sqlx::Error> {
+    let rows: Vec<(Uuid, String, String)> = sqlx::query_as(
+        "SELECT id, state, state_source FROM tests \
          WHERE ($1::uuid IS NULL OR id > $1) \
          ORDER BY id LIMIT $2",
     )
@@ -326,24 +396,42 @@ pub async fn all_tests_page(
     .await?;
     Ok(rows
         .into_iter()
-        .map(|(id, state)| (id, parse_test_state(&state)))
+        .map(|(id, state, source)| TestDisposition {
+            id,
+            state: parse_test_state(&state),
+            source: parse_test_state_source(&source),
+        })
         .collect())
 }
 
-/// Returns the names of tests in a suite currently quarantined (`muted` or
+pub struct QuarantinedTest {
+    pub name: String,
+    pub state: TestState,
+}
+
+/// Returns the tests in a suite currently quarantined (`muted` or
 /// `skipped`). Backs the M1 disposal hook (design §5): a slash-commanded test
 /// workflow queries this before running to skip/soft-fail already-quarantined
 /// tests — the bktec client "skip/mute flaky" behavior, server-side.
-pub async fn quarantined_tests(conn: &PgPool, suite_id: Uuid) -> Result<Vec<String>, sqlx::Error> {
-    let rows: Vec<(String,)> = sqlx::query_as(
-        "SELECT name FROM tests \
+pub async fn quarantined_tests(
+    conn: &PgPool,
+    suite_id: Uuid,
+) -> Result<Vec<QuarantinedTest>, sqlx::Error> {
+    let rows: Vec<(String, String)> = sqlx::query_as(
+        "SELECT name, state FROM tests \
          WHERE suite_id = $1 AND state IN ('muted', 'skipped') \
          ORDER BY name",
     )
     .bind(suite_id)
     .fetch_all(conn)
     .await?;
-    Ok(rows.into_iter().map(|(name,)| name).collect())
+    Ok(rows
+        .into_iter()
+        .map(|(name, state)| QuarantinedTest {
+            name,
+            state: parse_test_state(&state),
+        })
+        .collect())
 }
 
 /// A suite row for the console read API (§6 M2 / UI).
@@ -404,6 +492,10 @@ pub struct TestSummary {
     pub id: Uuid,
     pub name: String,
     pub state: String,
+    pub state_source: String,
+    pub state_reason: Option<String>,
+    pub state_changed_by_user_id: Option<Uuid>,
+    pub state_changed_at: chrono::DateTime<chrono::Utc>,
     pub file: Option<String>,
     pub line_no: Option<i32>,
     pub labels: Vec<String>,
@@ -429,7 +521,9 @@ pub async fn list_tests(
     user_id: Uuid,
 ) -> Result<Vec<TestSummary>, sqlx::Error> {
     sqlx::query_as::<_, TestSummary>(
-        "SELECT t.id, t.name, t.state, t.file, t.line_no, t.labels, t.owner_team_ids,\n\
+        "SELECT t.id, t.name, t.state, t.state_source, t.state_reason,\n\
+                t.state_changed_by_user_id, t.state_changed_at,\n\
+                t.file, t.line_no, t.labels, t.owner_team_ids,\n\
                 t.created_at, t.updated_at, e.status AS last_status,\n\
                 e.captured_at AS last_captured, e.run_ref AS last_run_ref,\n\
                 e.ci_provider AS last_ci_provider, count(te.id) AS execution_count,\n\
@@ -561,6 +655,14 @@ pub fn parse_test_state(state: &str) -> TestState {
         "muted" => TestState::Muted,
         "skipped" => TestState::Skipped,
         _ => TestState::Enabled,
+    }
+}
+
+fn parse_test_state_source(source: &str) -> Option<TestStateSource> {
+    match source {
+        "manual" => Some(TestStateSource::Manual),
+        "monitor" => Some(TestStateSource::Monitor),
+        _ => None,
     }
 }
 

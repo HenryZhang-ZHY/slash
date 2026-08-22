@@ -45,12 +45,14 @@ to `enabled`. A `skipped` test never changes automatically because it produces
 no new evidence.
 
 Detection is a recurring reconciliation over durable execution history. It is
-idempotent, and guarded state updates prevent an automatic decision from
-silently overwriting a concurrent manual edit.
+idempotent, and every state change records its source and reason. A manual
+state is authoritative: automatic reconciliation does not replace a manual
+mute, skip, or enable decision.
 
 ## Apply state in CI
 
 Test Engine records disposition; your CI adapter enforces it. Before reporting
-the job result, query the quarantine endpoint and soft-fail or omit the tests
-returned as `muted` or `skipped`. See [Integrate Test Engine with CI](/en/test-engine/integrate-ci/)
-for the complete loop.
+the job result, query the quarantine endpoint. Keep running and uploading
+`muted` tests but soft-fail them; omit only tests returned as `skipped`. See
+[Integrate Test Engine with CI](/en/test-engine/integrate-ci/) for the complete
+loop.

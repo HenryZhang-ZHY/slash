@@ -115,6 +115,10 @@ Success: `200 OK` with an array.
     "id": "df5a68b4-bf9f-4745-a320-a7cd39b59249",
     "name": "checkout::completes_order",
     "state": "enabled",
+    "state_source": "monitor",
+    "state_reason": "failure-free reconciliation window",
+    "state_changed_by_user_id": null,
+    "state_changed_at": "2026-08-12T03:55:00+00:00",
     "file": "tests/checkout.rs",
     "line_no": 42,
     "labels": [],
@@ -135,8 +139,10 @@ Success: `200 OK` with an array.
 ]
 ```
 
-Optional source, latest-run, and average fields may be `null`. An unknown or
-unowned suite returns `404`; storage failures return `500`.
+`state_source` is `default`, `manual`, or `monitor`. The optional state reason
+and actor identify the current decision; latest-run and average fields may
+also be `null`. An unknown or unowned suite returns `404`; storage failures
+return `500`.
 
 ## GET `/api/test-engine/tests/{id}/executions`
 
@@ -188,11 +194,13 @@ Changes a test's disposal state.
 ```sh
 curl -b cookies.txt -X PATCH \
   -H "Content-Type: application/json" \
-  -d '{"state":"muted"}' \
+  -d '{"state":"muted","reason":"known provider instability"}' \
   https://slash.example.com/api/test-engine/tests/df5a68b4-bf9f-4745-a320-a7cd39b59249/state
 ```
 
-Allowed values are `enabled`, `muted`, and `skipped`.
+Allowed state values are `enabled`, `muted`, and `skipped`. `reason` is an
+optional string. The change is recorded as a manual decision with the current
+user as actor; automatic flaky reconciliation does not overwrite it.
 
 Success: `200 OK`.
 
