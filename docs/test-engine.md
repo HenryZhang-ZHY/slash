@@ -78,6 +78,19 @@ The existing server sweeper supplies the reconciliation heartbeat. Re-running
 a pass is safe, and missed process-local events do not lose work because the
 decision is reconstructed from PostgreSQL.
 
+## Local collector experiment
+
+`scripts/test-engine-lab.mjs` exercises normalized ingestion, replay, Cargo and
+Vitest collector dialects, quarantine lookup, and the automatic mute loop
+against any explicitly selected Slash deployment. It runs locally and does not
+consume hosted CI capacity. The collection token is accepted only through a
+file or environment variable and is never printed. Each invocation uses
+namespaced test and run identities so experiments do not collide.
+
+The lab expects a running sweeper and waits up to 70 seconds by default because
+the reconciliation heartbeat runs once per minute. Its orchestration tests are
+available as `mise run test-engine:lab-test`.
+
 ## Extension rules
 
 New collectors should normalize into the existing execution vocabulary rather

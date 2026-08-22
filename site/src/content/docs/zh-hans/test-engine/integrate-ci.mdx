@@ -34,14 +34,35 @@ Authorization: Bearer collection-token-value
 
 选择与 runner 输出匹配的端点：
 
-| 端点 | 接受的结果 |
-| --- | --- |
-| `POST /v1/test-engine/upload` | 归一化 JSON 或 JUnit XML |
-| `POST /v1/test-engine/upload/cargo` | 换行分隔的 Cargo libtest JSON |
+| 端点                                 | 接受的结果                             |
+| ------------------------------------ | -------------------------------------- |
+| `POST /v1/test-engine/upload`        | 归一化 JSON 或 JUnit XML               |
+| `POST /v1/test-engine/upload/cargo`  | 换行分隔的 Cargo libtest JSON          |
 | `POST /v1/test-engine/upload/vitest` | Vitest 结果数组或 `{ "tests": [...] }` |
 
 一次被接受的 batch 中，全部 executions 会在一个数据库事务中提交。无效状态会拒绝
 整个 batch，而不是记录部分数据。
+
+## 运行本地 Collector 实验
+
+验证 ingestion 或 flaky 检测时，使用仓库内的本地实验脚本；它不会启动或消耗托管
+CI run。脚本会上传归一化结果、重放一个 batch、覆盖 Cargo 与 Vitest collector 格式，
+并等待生成的 flaky 测试变为 `muted`：
+
+```sh
+token_file="$(mktemp)"
+trap 'rm -f "$token_file"' EXIT
+chmod 600 "$token_file"
+printf '%s' "$SLASH_COLLECTION_TOKEN" > "$token_file"
+mise run test-engine:lab -- \
+  --base-url http://127.0.0.1:3000 \
+  --token-file "$token_file"
+```
+
+只把 `--base-url` 指向你明确准备写入的部署。脚本从文件读取 token，且不会输出它。
+服务端 reconciliation heartbeat 每分钟运行一次，所以脚本默认最多等待 70 秒；测试
+其他配置时可通过 `--wait-seconds` 调整。使用 `mise run test-engine:lab-test` 运行该
+实验脚本的离线编排测试。
 
 ## 应用处置状态
 
