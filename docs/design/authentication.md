@@ -92,6 +92,22 @@ account must sign in to it and explicitly connect another identity. Account
 merge and recovery are separate high-risk products and are not implicit login
 fallbacks.
 
+## Password credential management
+
+An active user may manage their own password credential from a live browser
+session. A personal access token is intentionally insufficient because it is
+itself a long-lived credential and must not mint another login method.
+
+- A user who already has a password credential keeps its normalized login
+  email and must prove the current password before replacing the hash.
+- A user whose external identity is their only login method supplies a new,
+  unique email and password. Slash creates the password credential and records
+  the email as a contact in one transaction.
+- Creating a password never searches for or merges another account with the
+  same email. A uniqueness conflict fails the operation.
+- Password changes do not revoke existing sessions. Session revocation and
+  account recovery remain separate products.
+
 ## GitHub App adapter
 
 Slash uses the same GitHub App for repository automation and user
@@ -132,6 +148,8 @@ configuration, not provider columns or branches in account persistence.
 - Database uniqueness constraints are authoritative for concurrent sign-in and
   linking races.
 - Password login performs a fixed-cost dummy verification for unknown emails.
+- Password creation and replacement require an active user and a browser
+  session; replacement additionally requires the current password.
 - Contact verification, account recovery, identity replacement, and account
   merge require explicit products with their own audit and reauthentication
   policy.

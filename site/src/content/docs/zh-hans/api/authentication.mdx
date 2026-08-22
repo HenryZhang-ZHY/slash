@@ -5,8 +5,9 @@ sidebar:
   order: 1
 ---
 
-这些端点接受 `slash_session` cookie 或[个人 Access Token](/zh-hans/api/access-tokens/)。注册和
-登录返回带 `HttpOnly`、`SameSite=Lax`、`Path=/` 和七天 `Max-Age` 的 cookie。
+除特别说明外，这些端点接受 `slash_session` cookie 或
+[个人 Access Token](/zh-hans/api/access-tokens/)。注册和登录返回带 `HttpOnly`、
+`SameSite=Lax`、`Path=/` 和七天 `Max-Age` 的 cookie。
 
 示例使用 cookie jar，让一个请求返回的会话能被下一个请求使用：
 
@@ -74,6 +75,40 @@ curl -i -c cookies.txt \
 
 成功：`200 OK`，一个 `Set-Cookie` 头，以及注册返回的同一 `{ "user": ... }` 形状。
 无效凭据返回 `401` 和通用错误；响应不会透露邮箱是否存在。
+
+## PUT `/api/auth/password`
+
+创建或替换当前用户的密码凭据。这个端点只接受 `slash_session` 浏览器 cookie，不接受
+Personal Access Token。
+
+替换已有密码时，必须验证当前密码；登录邮箱不会变化：
+
+```sh
+curl -i -b cookies.txt -X PUT \
+  -H "Content-Type: application/json" \
+  -d '{"currentPassword":"correct-horse","newPassword":"new-correct-horse"}' \
+  https://slash.example.com/api/auth/password
+```
+
+对于 `user.email` 为 `null`、只有外部身份的账户，需要提供将作为密码登录名的邮箱：
+
+```sh
+curl -i -b cookies.txt -X PUT \
+  -H "Content-Type: application/json" \
+  -d '{"email":"operator@example.com","newPassword":"correct-horse"}' \
+  https://slash.example.com/api/auth/password
+```
+
+新密码至少八个字符。新登录邮箱会 trim、归一化为小写，并且必须包含 `@`。创建密码
+不会合并账户；如果邮箱已被另一个密码凭据使用，请求会冲突失败。
+
+| 状态 | 含义 |
+| --- | --- |
+| `204` | 密码凭据已创建或替换 |
+| `401` | 无有效浏览器 session、账户未激活或当前密码验证失败 |
+| `409` | 另一个账户已使用归一化后的邮箱 |
+| `422` | 新密码或新登录邮箱校验失败 |
+| `500` | 哈希或持久化失败 |
 
 ## GitHub 登录与连接
 

@@ -39,6 +39,15 @@ GitHub 仓库权限独立决定。
 打开 `/settings` 查看与账户关联的 GitHub 身份。尚未关联时，可以从该页面开始连接
 流程。Slash 根据认证后的 provider callback 解析连接结果，不信任浏览器 URL 参数。
 
+## 管理密码
+
+打开 `/settings` 可以修改已有密码，或为目前只使用 GitHub 等外部身份的账户添加密码
+登录。已有密码的用户必须输入当前密码；只有外部身份的用户需要选择一个唯一登录邮箱，
+并设置至少八个字符的密码。
+
+添加密码只会为同一个账户增加一种登录方式。Slash 不会把它与已经使用该邮箱的账户
+合并。
+
 ## 管理 Personal Access Tokens
 
 Settings 还允许为 Agent 和 REST API 客户端创建、吊销凭据。Token 以所属用户身份

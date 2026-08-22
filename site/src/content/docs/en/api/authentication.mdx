@@ -5,9 +5,9 @@ sidebar:
   order: 1
 ---
 
-These endpoints accept the `slash_session` cookie or a [personal access
-token](/en/api/access-tokens/). Register and login return the cookie with
-`HttpOnly`, `SameSite=Lax`, `Path=/`, and a seven-day `Max-Age`.
+Except where noted, these endpoints accept the `slash_session` cookie or a
+[personal access token](/en/api/access-tokens/). Register and login return the
+cookie with `HttpOnly`, `SameSite=Lax`, `Path=/`, and a seven-day `Max-Age`.
 
 The examples use a cookie jar so the session returned by one request can be
 used by the next:
@@ -77,6 +77,45 @@ Request body:
 Success: `200 OK`, a `Set-Cookie` header, and the same `{ "user": ... }`
 shape returned by registration. Invalid credentials return `401` with a
 generic error; the response does not reveal whether the email exists.
+
+## PUT `/api/auth/password`
+
+Creates or replaces the current user's password credential. This endpoint
+requires the `slash_session` browser cookie; a personal access token is not
+accepted.
+
+To replace an existing password, prove the current password. The login email
+does not change:
+
+```sh
+curl -i -b cookies.txt -X PUT \
+  -H "Content-Type: application/json" \
+  -d '{"currentPassword":"correct-horse","newPassword":"new-correct-horse"}' \
+  https://slash.example.com/api/auth/password
+```
+
+For an external-identity-only account whose `user.email` is `null`, supply the
+email that will become the password login name:
+
+```sh
+curl -i -b cookies.txt -X PUT \
+  -H "Content-Type: application/json" \
+  -d '{"email":"operator@example.com","newPassword":"correct-horse"}' \
+  https://slash.example.com/api/auth/password
+```
+
+The new password must be at least eight characters. New login emails are
+trimmed, normalized to lowercase, and must contain `@`. Creating a password
+does not merge accounts: an email already used by another password credential
+returns a conflict.
+
+| Status | Meaning |
+| --- | --- |
+| `204` | Password credential created or replaced |
+| `401` | No valid browser session, inactive account, or current-password proof failed |
+| `409` | Another account already uses the normalized email |
+| `422` | New password or new login email validation failed |
+| `500` | Hashing or persistence failed |
 
 ## GitHub sign-in and connection
 
