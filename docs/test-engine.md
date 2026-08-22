@@ -50,12 +50,16 @@ formats including JUnit, Cargo, and Vitest results. A run is normalized into
 the durable model before downstream flaky decisions are made. Provider-specific
 details do not leak into the reconciliation algorithm.
 
-Each suite has one active collection token. Issuing a token atomically revokes
-the previous active token, and every token expires after 90 days. Slash returns
-the raw credential once, stores only its SHA-256 hash for bearer-token lookup,
-and exposes non-secret metadata for later audit and revocation by id. Expired
-or revoked tokens fail ingestion. Tokens and uploaded test output must never
-appear in logs.
+Each suite may have multiple active collection tokens so separate collectors
+and runners can be named, audited, rotated, and revoked independently. New
+tokens do not expire unless the owner selects an expiration time. Issuing or
+rotating a token creates a new credential without revoking an existing one;
+the owner controls when the old credential stops serving traffic.
+
+Slash returns the raw credential once, stores only its SHA-256 hash for
+bearer-token lookup, and exposes non-secret metadata for later audit and
+revocation by id. Expired or revoked tokens fail ingestion. Tokens and
+uploaded test output must never appear in logs.
 
 ## Flaky reconciliation
 
