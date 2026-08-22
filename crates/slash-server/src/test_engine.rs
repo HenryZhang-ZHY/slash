@@ -199,17 +199,26 @@ pub async fn upsert_test(
     Ok(TestRef { id })
 }
 
-/// Inserts a run, returning its id. A conflict on `(installation_id,
-/// ci_provider, run_ref)` means a duplicate upload; the existing run id is
-/// returned so re-uploads append to (or are idempotent against) the same run.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct UpsertedRun {
+    pub id: Uuid,
+    pub inserted: bool,
+}
+
+/// Inserts a run, returning its id and whether this upload created it.
+///
+/// Run identity is scoped to the suite. A conflict means the same collector
+/// batch was already accepted, so callers must not append its executions
+/// again.
 pub async fn upsert_run(
     tx: &mut Transaction<'_, Postgres>,
     run: &NewRun<'_>,
-) -> Result<Uuid, sqlx::Error> {
-    sqlx::query(
+) -> Result<UpsertedRun, sqlx::Error> {
+    let inserted_id: Option<Uuid> = sqlx::query_scalar(
         "INSERT INTO test_runs (id, suite_id, installation_id, ci_provider, run_ref, invocation_id)
          VALUES ($1, $2, $3, $4, $5, $6)
-         ON CONFLICT (installation_id, ci_provider, run_ref) DO NOTHING",
+         ON CONFLICT ON CONSTRAINT test_runs_identity_unique DO NOTHING
+         RETURNING id",
     )
     .bind(Uuid::new_v4())
     .bind(run.suite_id)
@@ -217,20 +226,29 @@ pub async fn upsert_run(
     .bind(run.ci_provider)
     .bind(run.run_ref)
     .bind(run.invocation_id)
-    .execute(&mut **tx)
+    .fetch_optional(&mut **tx)
     .await?;
+
+    if let Some(id) = inserted_id {
+        return Ok(UpsertedRun { id, inserted: true });
+    }
 
     // Read back the canonical run id for the identity key.
     let (id,): (Uuid,) = sqlx::query_as(
         "SELECT id FROM test_runs \
-         WHERE installation_id = $1 AND ci_provider = $2 AND run_ref = $3",
+         WHERE suite_id = $1 AND installation_id = $2 \
+           AND ci_provider = $3 AND run_ref = $4",
     )
+    .bind(run.suite_id)
     .bind(run.installation_id)
     .bind(run.ci_provider)
     .bind(run.run_ref)
     .fetch_one(&mut **tx)
     .await?;
-    Ok(id)
+    Ok(UpsertedRun {
+        id,
+        inserted: false,
+    })
 }
 
 /// Appends executions for a run (design §3: immutable once recorded).

@@ -408,7 +408,7 @@ async fn write_batch(
         test_ids.push(test_ref);
     }
 
-    let run_id = upsert_run(
+    let run = upsert_run(
         &mut tx,
         &crate::test_engine::NewRun {
             suite_id,
@@ -420,18 +420,20 @@ async fn write_batch(
     )
     .await?;
 
-    let new_executions: Vec<crate::test_engine::NewExecution<'_>> = executions
-        .iter()
-        .zip(test_ids.iter())
-        .map(|(exec, test_ref)| crate::test_engine::NewExecution {
-            test_id: test_ref.id,
-            status: exec.status,
-            duration_ms: exec.duration_ms,
-            stack: exec.stack.as_deref(),
-        })
-        .collect();
+    if run.inserted {
+        let new_executions: Vec<crate::test_engine::NewExecution<'_>> = executions
+            .iter()
+            .zip(test_ids.iter())
+            .map(|(exec, test_ref)| crate::test_engine::NewExecution {
+                test_id: test_ref.id,
+                status: exec.status,
+                duration_ms: exec.duration_ms,
+                stack: exec.stack.as_deref(),
+            })
+            .collect();
 
-    insert_executions(&mut tx, run_id, &new_executions).await?;
+        insert_executions(&mut tx, run.id, &new_executions).await?;
+    }
 
     tx.commit().await
 }
