@@ -246,7 +246,13 @@ pub async fn login(
             let _ = auth::verify_password(&body.password, DUMMY_HASH_FOR_TIMING);
             return api_error(StatusCode::UNAUTHORIZED, "invalid credentials");
         }
-        Err(_) => return api_error(StatusCode::UNAUTHORIZED, "invalid credentials"),
+        Err(error) => {
+            tracing::error!(%error, "password login database query failed");
+            return api_error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "authentication service unavailable",
+            );
+        }
     };
     if !auth::verify_password(&body.password, &phc_hash) {
         return api_error(StatusCode::UNAUTHORIZED, "invalid credentials");
@@ -1009,6 +1015,27 @@ mod tests {
         )
         .await;
         assert_eq!(response_status(&resp), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn login_database_failure_is_service_unavailable() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .max_connections(1)
+            .acquire_timeout(std::time::Duration::from_millis(50))
+            .connect_lazy("postgres://slash:slash@127.0.0.1:1/slash")
+            .unwrap();
+        let state = app_state(pool);
+
+        let resp = login(
+            State(state),
+            Json(LoginRequest {
+                email: "dana@example.com".into(),
+                password: "supersecure1".into(),
+            }),
+        )
+        .await;
+
+        assert_eq!(response_status(&resp), StatusCode::SERVICE_UNAVAILABLE);
     }
 
     #[serial_test::serial(db)]
