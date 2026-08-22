@@ -12,8 +12,9 @@ implicitly grants instance administration.
 the admin page and every `/api/admin/*` endpoint return `404`. When it is set,
 the referenced file must be readable and non-empty or the server refuses to
 start. A successful login creates a separate HttpOnly, SameSite=Strict admin
-session lasting 20 minutes. Rotating the secret invalidates existing admin
-sessions.
+session lasting 20 minutes. Its set and clear cookies are also always
+`Secure`, so the admin surface requires HTTPS ingress. Rotating the secret
+invalidates existing admin sessions.
 
 The first version is observational. It exposes installation lifecycle state,
 recent durable webhook deliveries and payloads, related slash invocations,

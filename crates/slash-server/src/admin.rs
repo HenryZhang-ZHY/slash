@@ -483,12 +483,12 @@ fn cookie_value(header_value: Option<&str>) -> Option<&str> {
 
 fn set_cookie_value(token: &str) -> String {
     format!(
-        "{ADMIN_COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict; Max-Age={ADMIN_SESSION_TTL_SECS}"
+        "{ADMIN_COOKIE}={token}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age={ADMIN_SESSION_TTL_SECS}"
     )
 }
 
 fn clear_cookie_value() -> String {
-    format!("{ADMIN_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0")
+    format!("{ADMIN_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0")
 }
 
 fn now_secs() -> u64 {
@@ -568,8 +568,10 @@ mod tests {
     fn cookie_is_http_only_strict_and_short_lived() {
         let cookie = set_cookie_value("token");
         assert!(cookie.contains("HttpOnly"));
+        assert!(cookie.contains("Secure"));
         assert!(cookie.contains("SameSite=Strict"));
         assert!(cookie.contains("Max-Age=1200"));
+        assert!(clear_cookie_value().contains("Secure"));
         assert_eq!(
             cookie_value(Some("other=1; slash_admin_session=token")),
             Some("token")

@@ -29,6 +29,13 @@ Slash does not currently expose per-endpoint GitHub API call counts or the
 remaining rate-limit budget. Use application logs as the supporting signal for
 GitHub API and token-minting errors.
 
+Password login returns the same generic `401` for an unknown email or wrong
+password. A failed database query instead returns `503 authentication service
+unavailable` and writes a server-side error without the submitted email. For a
+`503`, check `/readyz`, PostgreSQL connectivity, and migration completion. The
+authentication secret signs sessions and personal access tokens; it does not
+verify or replace stored password hashes.
+
 Delivery concurrency is coordinated through the shared database. Each server
 may run its configured worker count, while at most eight deliveries for one
 GitHub App installation are active across all replicas. This limit does not
@@ -77,8 +84,8 @@ invocation correlation before restoring traffic.
 
 Set `SLASH_ADMIN_SECRET_PATH` to enable `/admin` and `/api/admin/*`. This is a
 separate trust boundary from Slash users and teams. Login creates an
-`HttpOnly`, `SameSite=Strict` admin session lasting 20 minutes; rotating the
-secret invalidates existing sessions.
+`HttpOnly`, `Secure`, `SameSite=Strict` admin session lasting 20 minutes;
+rotating the secret invalidates existing sessions.
 
 The console shows installation state, recent durable webhook deliveries,
 escaped payloads, related invocations, and queue diagnostics. **Refresh from

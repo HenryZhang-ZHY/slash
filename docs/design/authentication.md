@@ -148,6 +148,12 @@ configuration, not provider columns or branches in account persistence.
 - Database uniqueness constraints are authoritative for concurrent sign-in and
   linking races.
 - Password login performs a fixed-cost dummy verification for unknown emails.
+- Invalid password credentials return the same generic `401` response, while a
+  database failure is logged without the login email and returns `503`; a
+  dependency outage must never be presented as a credential rejection.
+- User session cookies, including the cookie that clears a session, are
+  `HttpOnly`, `Secure`, `SameSite=Lax`, and scoped to `/`. Authenticated browser
+  traffic therefore requires HTTPS ingress.
 - Password creation and replacement require an active user and a browser
   session; replacement additionally requires the current password.
 - Contact verification, account recovery, identity replacement, and account

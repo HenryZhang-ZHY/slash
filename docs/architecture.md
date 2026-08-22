@@ -157,6 +157,9 @@ accounts resolve only by `(connection_id, subject)`; email and mutable provider
 profile fields never merge accounts. Protocol adapters normalize provider
 responses before the provider-neutral persistence layer. The complete contract
 is in [Authentication and external identities](design/authentication.md).
+Browser user and instance-admin sessions are carried in HttpOnly, Secure
+cookies, so every deployment that enables those surfaces requires HTTPS ingress
+and must redirect plaintext HTTP before it reaches authenticated routes.
 
 Personal access tokens authenticate REST API clients as their owning user and
 never copy authorization state. Plaintext tokens are shown once and only a
