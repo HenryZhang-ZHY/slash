@@ -179,6 +179,10 @@ pub async fn run() {
         .route("/api/auth/logout", post(userapi::logout))
         .route("/api/auth/me", get(userapi::me))
         .route(
+            "/api/auth/password",
+            axum::routing::put(userapi::update_password),
+        )
+        .route(
             "/api/access-tokens",
             get(access_tokens::list_tokens).post(access_tokens::issue_token),
         )

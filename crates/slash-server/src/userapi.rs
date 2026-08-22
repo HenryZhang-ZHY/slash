@@ -43,6 +43,18 @@ pub struct LoginRequest {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdatePasswordRequest {
+    /// Required only when the authenticated account has no password
+    /// credential yet. Existing password users keep their current login email.
+    pub email: Option<String>,
+    /// Required when replacing an existing password; omitted for accounts
+    /// whose external identity is currently their only login method.
+    pub current_password: Option<String>,
+    pub new_password: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct CreateTeamRequest {
     pub name: String,
     /// Optional org-scoped slug; derives from `name` when absent.
@@ -256,6 +268,161 @@ pub async fn logout() -> Response {
     let mut resp = (StatusCode::NO_CONTENT).into_response();
     clear_token_cookie(&mut resp);
     resp
+}
+
+/// Creates or replaces the authenticated user's password credential.
+///
+/// Credential management is browser-session-only: callers reach this handler
+/// through [`SessionUserId`], so a personal access token cannot create a new
+/// long-lived login method. Existing password users must prove the current
+/// password. External-identity-only users instead provide the email that will
+/// become their normalized password-login name.
+pub async fn update_password(
+    State(state): State<crate::AppState>,
+    SessionUserId(user_id): SessionUserId,
+    Json(body): Json<UpdatePasswordRequest>,
+) -> Response {
+    if body.new_password.len() < 8 {
+        return api_error(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "new password must be at least 8 characters",
+        );
+    }
+    let mut tx = match state.pool.begin().await {
+        Ok(tx) => tx,
+        Err(error) => {
+            tracing::error!(%error, user_id = %user_id, "password update transaction failed");
+            return api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "could not update password",
+            );
+        }
+    };
+    let credential = sqlx::query_as::<_, (String, Option<String>, Option<String>)>(
+        "SELECT u.status, pc.normalized_email, pc.password_hash
+         FROM users u
+         LEFT JOIN password_credentials pc ON pc.user_id = u.id
+         WHERE u.id = $1
+         FOR UPDATE OF u",
+    )
+    .bind(user_id)
+    .fetch_optional(&mut *tx)
+    .await;
+    let (_status, existing_email, existing_hash) = match credential {
+        Ok(Some(row)) if row.0 == "active" => row,
+        Ok(Some(_) | None) => {
+            return api_error(StatusCode::UNAUTHORIZED, "account unavailable");
+        }
+        Err(error) => {
+            tracing::error!(%error, user_id = %user_id, "password credential lookup failed");
+            return api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "could not update password",
+            );
+        }
+    };
+    if let (Some(_), Some(current_hash)) = (existing_email, existing_hash) {
+        let Some(current_password) = body.current_password.as_deref() else {
+            return api_error(StatusCode::UNAUTHORIZED, "current password required");
+        };
+        if !auth::verify_password(current_password, &current_hash) {
+            return api_error(StatusCode::UNAUTHORIZED, "current password is incorrect");
+        }
+        let password_hash = match auth::hash_password(&body.new_password) {
+            Ok(hash) => hash,
+            Err(_) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, "auth setup failed"),
+        };
+        if let Err(error) = sqlx::query(
+            "UPDATE password_credentials
+             SET password_hash = $2, updated_at = now()
+             WHERE user_id = $1",
+        )
+        .bind(user_id)
+        .bind(&password_hash)
+        .execute(&mut *tx)
+        .await
+        {
+            tracing::error!(%error, user_id = %user_id, "password credential update failed");
+            return api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "could not update password",
+            );
+        }
+    } else {
+        let email = body
+            .email
+            .as_deref()
+            .map(str::trim)
+            .map(str::to_lowercase)
+            .filter(|email| !email.is_empty() && email.contains('@'));
+        let Some(email) = email else {
+            return api_error(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "email is required to create a password credential",
+            );
+        };
+        let password_hash = match auth::hash_password(&body.new_password) {
+            Ok(hash) => hash,
+            Err(_) => return api_error(StatusCode::INTERNAL_SERVER_ERROR, "auth setup failed"),
+        };
+        let inserted = sqlx::query(
+            "INSERT INTO password_credentials (user_id, normalized_email, password_hash)
+             VALUES ($1, $2, $3)",
+        )
+        .bind(user_id)
+        .bind(&email)
+        .bind(&password_hash)
+        .execute(&mut *tx)
+        .await;
+        match inserted {
+            Ok(_) => {}
+            Err(error) if is_unique_violation(&error) => {
+                return api_error(
+                    StatusCode::CONFLICT,
+                    "an account with this email already exists",
+                );
+            }
+            Err(error) => {
+                tracing::error!(%error, user_id = %user_id, "password credential creation failed");
+                return api_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "could not update password",
+                );
+            }
+        }
+        if let Err(error) = sqlx::query(
+            "INSERT INTO user_emails
+                (id, user_id, normalized_email, purpose, is_primary)
+             VALUES (
+                $1, $2, $3, 'contact',
+                NOT EXISTS (
+                    SELECT 1 FROM user_emails WHERE user_id = $2 AND is_primary
+                )
+             )
+             ON CONFLICT (user_id, normalized_email) DO NOTHING",
+        )
+        .bind(Uuid::new_v4())
+        .bind(user_id)
+        .bind(&email)
+        .execute(&mut *tx)
+        .await
+        {
+            tracing::error!(%error, user_id = %user_id, "password contact email creation failed");
+            return api_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "could not update password",
+            );
+        }
+    }
+
+    if let Err(error) = tx.commit().await {
+        tracing::error!(%error, user_id = %user_id, "password update commit failed");
+        return api_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "could not update password",
+        );
+    }
+    StatusCode::NO_CONTENT.into_response()
 }
 
 pub async fn me(State(state): State<crate::AppState>, auth_user: UserId) -> Response {
@@ -836,6 +1003,166 @@ mod tests {
 
     #[serial_test::serial(db)]
     #[tokio::test]
+    async fn passwordless_user_can_create_a_password_credential() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        let user_id = Uuid::new_v4();
+        sqlx::query("INSERT INTO users (id, display_name) VALUES ($1, 'OIDC user')")
+            .bind(user_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let state = app_state(pool.clone());
+
+        let response = update_password(
+            State(state.clone()),
+            SessionUserId(user_id),
+            Json(UpdatePasswordRequest {
+                email: Some("  OIDC@Example.com ".into()),
+                current_password: None,
+                new_password: "new-password-1".into(),
+            }),
+        )
+        .await;
+
+        assert_eq!(response_status(&response), StatusCode::NO_CONTENT);
+        let (email, hash): (String, String) = sqlx::query_as(
+            "SELECT normalized_email, password_hash
+             FROM password_credentials WHERE user_id = $1",
+        )
+        .bind(user_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(email, "oidc@example.com");
+        assert!(crate::auth::verify_password("new-password-1", &hash));
+
+        let login_response = login(
+            State(state),
+            Json(LoginRequest {
+                email: "oidc@example.com".into(),
+                password: "new-password-1".into(),
+            }),
+        )
+        .await;
+        assert_eq!(response_status(&login_response), StatusCode::OK);
+    }
+
+    #[serial_test::serial(db)]
+    #[tokio::test]
+    async fn password_user_must_verify_current_password_before_changing_it() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        let state = app_state(pool.clone());
+        let _ = register(
+            State(state.clone()),
+            Json(RegisterRequest {
+                email: "change@example.com".into(),
+                password: "old-password-1".into(),
+                display_name: "Change".into(),
+            }),
+        )
+        .await;
+        let user_id: Uuid = sqlx::query_scalar(
+            "SELECT user_id FROM password_credentials WHERE normalized_email = 'change@example.com'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        let wrong = update_password(
+            State(state.clone()),
+            SessionUserId(user_id),
+            Json(UpdatePasswordRequest {
+                email: None,
+                current_password: Some("wrong-password".into()),
+                new_password: "new-password-1".into(),
+            }),
+        )
+        .await;
+        assert_eq!(response_status(&wrong), StatusCode::UNAUTHORIZED);
+
+        let updated = update_password(
+            State(state.clone()),
+            SessionUserId(user_id),
+            Json(UpdatePasswordRequest {
+                email: None,
+                current_password: Some("old-password-1".into()),
+                new_password: "new-password-1".into(),
+            }),
+        )
+        .await;
+        assert_eq!(response_status(&updated), StatusCode::NO_CONTENT);
+
+        let old_login = login(
+            State(state.clone()),
+            Json(LoginRequest {
+                email: "change@example.com".into(),
+                password: "old-password-1".into(),
+            }),
+        )
+        .await;
+        assert_eq!(response_status(&old_login), StatusCode::UNAUTHORIZED);
+        let new_login = login(
+            State(state),
+            Json(LoginRequest {
+                email: "change@example.com".into(),
+                password: "new-password-1".into(),
+            }),
+        )
+        .await;
+        assert_eq!(response_status(&new_login), StatusCode::OK);
+    }
+
+    #[serial_test::serial(db)]
+    #[tokio::test]
+    async fn passwordless_user_cannot_claim_an_existing_login_email() {
+        let Some(pool) = test_pool().await else {
+            return;
+        };
+        let state = app_state(pool.clone());
+        let _ = register(
+            State(state.clone()),
+            Json(RegisterRequest {
+                email: "owned@example.com".into(),
+                password: "owner-password".into(),
+                display_name: "Owner".into(),
+            }),
+        )
+        .await;
+        let passwordless_id = Uuid::new_v4();
+        sqlx::query("INSERT INTO users (id, display_name) VALUES ($1, 'OIDC user')")
+            .bind(passwordless_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let response = update_password(
+            State(state),
+            SessionUserId(passwordless_id),
+            Json(UpdatePasswordRequest {
+                email: Some("OWNED@example.com".into()),
+                current_password: None,
+                new_password: "new-password-1".into(),
+            }),
+        )
+        .await;
+
+        assert_eq!(response_status(&response), StatusCode::CONFLICT);
+        let has_credential: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM password_credentials WHERE user_id = $1)",
+        )
+        .bind(passwordless_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(!has_credential);
+    }
+
+    #[serial_test::serial(db)]
+    #[tokio::test]
     async fn create_team_onboards_org_team_and_maintainer_membership() {
         let Some(pool) = test_pool().await else {
             return;
@@ -1056,6 +1383,24 @@ mod tests {
         );
 
         assert!(resolve_user_id(&headers, &state).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn session_only_auth_does_not_accept_a_bearer_token() {
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://slash:slash@127.0.0.1/slash")
+            .unwrap();
+        let state = app_state(pool);
+        let mut headers = axum::http::HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            "Bearer slash_pat_not-a-browser-session".parse().unwrap(),
+        );
+
+        assert!(matches!(
+            resolve_session_user_id(&headers, &state),
+            Err(RequestAuthError::MissingSession)
+        ));
     }
 
     #[test]
