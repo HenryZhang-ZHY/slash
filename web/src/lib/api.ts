@@ -27,6 +27,12 @@ export interface MeResponse {
   }
 }
 
+export interface UpdatePasswordRequest {
+  email: string | null
+  currentPassword: string | null
+  newPassword: string
+}
+
 interface ApiErrorBody {
   message?: string
   error?: string
@@ -76,6 +82,11 @@ export const api = {
     }),
   me: () => request<MeResponse>('/api/auth/me'),
   logout: () => request<void>('/api/auth/logout', { method: 'POST' }),
+  updatePassword: (body: UpdatePasswordRequest) =>
+    request<void>('/api/auth/password', {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
   createTeam: (name: string, slug: string) =>
     request<{ team: Team }>('/api/teams', {
       method: 'POST',

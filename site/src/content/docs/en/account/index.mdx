@@ -14,7 +14,8 @@ state through the documented API.
 Open the deployment's console root. An unauthenticated visit redirects to
 `/login`, where you can:
 
-- create an account with an email and a password of at least eight bytes;
+- create an account with an email and a password of at least eight Unicode
+  characters;
 - sign in to an existing password account; or
 - sign in with a stable GitHub identity.
 
@@ -45,6 +46,16 @@ Open `/settings` to view the GitHub identity linked to the account. If none is
 linked, start the connection flow from that page. Slash resolves the connection
 from the authenticated provider callback rather than trusting browser URL
 parameters.
+
+## Manage your password
+
+Open `/settings` to change an existing password or add password login to an
+account that currently uses only GitHub or another external identity. Existing
+password users must enter their current password. External-identity-only users
+choose a unique login email and a password of at least eight characters.
+
+Adding a password creates another sign-in method for the same account. Slash
+does not merge it with an account that already uses the chosen email.
 
 ## Manage personal access tokens
 

@@ -32,6 +32,7 @@ RFC 3339 strings.
 | Surface | Authentication |
 | --- | --- |
 | Account, team, and Test Engine management | `slash_session` cookie or personal Bearer token |
+| Password credential management | `slash_session` cookie only |
 | Personal access token management | `slash_session` cookie only |
 | Test result ingestion and quarantine lookup | `Authorization: Bearer <collection-token>` |
 | Instance administration | Separate admin session enabled by `SLASH_ADMIN_SECRET_PATH` |
@@ -48,6 +49,7 @@ The tables below list every route registered by `slash-server`.
 | --- | --- | --- |
 | `POST` | `/api/auth/register` | Create an account and session |
 | `POST` | `/api/auth/login` | Create a session |
+| `PUT` | `/api/auth/password` | Create or replace the current user's password credential |
 | `POST` | `/api/auth/logout` | Clear the current session |
 | `GET` | `/api/auth/me` | Read the current user, teams, and connections |
 | `GET` | `/api/auth/github/sign-in` | Start GitHub sign-in |
