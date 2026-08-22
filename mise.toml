@@ -38,3 +38,11 @@ run = [
   "npm run lint:docs",
   "npm run test:output",
 ]
+
+[tasks."test-engine:lab"]
+description = "Run the local Test Engine collector experiment"
+run = "node scripts/test-engine-lab.mjs"
+
+[tasks."test-engine:lab-test"]
+description = "Test the local Test Engine collector experiment"
+run = "node --test scripts/test-engine-lab.test.mjs"
