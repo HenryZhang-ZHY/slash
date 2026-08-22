@@ -11,12 +11,15 @@ Test Engine stores four related resources:
 
 - **Suite** — a collection identified by `(owner, repo, suite_key)`.
 - **Test** — a stable test name within a suite, with a mutable disposition.
-- **Run** — one CI invocation, identified by `(ci_provider, run_ref)`.
+- **Run** — one collector batch, identified within its suite by
+  `(ci_provider, run_ref)`.
 - **Execution** — one observed test result within a run, including status,
   duration, stack, and capture time.
 
-Executions are append-only. Test state is the mutable decision derived from
-that history or set by a user.
+Executions are append-only. Replaying the same run identity is idempotent and
+does not append executions again. Give separate jobs, shards, and attempts
+distinct run references. Test state is the mutable decision derived from that
+history or set by a user.
 
 ## Test states
 
