@@ -52,6 +52,15 @@ hooks = [
     pass_filenames = false,
     stages = ["pre-push"],
   },
+  {
+    id = "test-engine-lab-pre-push",
+    name = "Test Engine local lab pre-push gate",
+    entry = "mise run test-engine:lab-test",
+    language = "system",
+    files = "^(scripts/test-engine-lab.*\\.mjs|mise\\.toml)$",
+    pass_filenames = false,
+    stages = ["pre-push"],
+  },
 ]
 
 [[repos]]

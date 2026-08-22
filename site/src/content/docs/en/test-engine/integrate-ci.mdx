@@ -36,14 +36,37 @@ disposition. The response contains tests whose current state is `muted` or
 
 Choose the endpoint that matches the runner output:
 
-| Endpoint | Accepted result |
-| --- | --- |
-| `POST /v1/test-engine/upload` | Normalized JSON or JUnit XML |
-| `POST /v1/test-engine/upload/cargo` | Newline-delimited Cargo libtest JSON |
+| Endpoint                             | Accepted result                               |
+| ------------------------------------ | --------------------------------------------- |
+| `POST /v1/test-engine/upload`        | Normalized JSON or JUnit XML                  |
+| `POST /v1/test-engine/upload/cargo`  | Newline-delimited Cargo libtest JSON          |
 | `POST /v1/test-engine/upload/vitest` | A Vitest result array or `{ "tests": [...] }` |
 
 All executions in one accepted batch commit in one database transaction. An
 invalid status rejects the complete batch instead of recording partial data.
+
+## Run a local collector experiment
+
+Use the repository's local lab when validating ingestion or flaky detection;
+it does not start or consume a hosted CI run. It uploads normalized results,
+replays one batch, exercises the Cargo and Vitest collector formats, and waits
+for the generated flaky test to become `muted`:
+
+```sh
+token_file="$(mktemp)"
+trap 'rm -f "$token_file"' EXIT
+chmod 600 "$token_file"
+printf '%s' "$SLASH_COLLECTION_TOKEN" > "$token_file"
+mise run test-engine:lab -- \
+  --base-url http://127.0.0.1:3000 \
+  --token-file "$token_file"
+```
+
+Point `--base-url` only at the deployment you intend to modify. The token is
+read from the temporary file and is never printed. The server's reconciliation heartbeat
+runs once per minute, so the lab waits up to 70 seconds by default; override it
+with `--wait-seconds` when testing a different configuration. Run the lab's
+offline orchestration tests with `mise run test-engine:lab-test`.
 
 ## Apply the disposition
 
