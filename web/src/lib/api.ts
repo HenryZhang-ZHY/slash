@@ -133,6 +133,10 @@ export interface TestSummary {
   id: string
   name: string
   state: 'enabled' | 'muted' | 'skipped'
+  state_source: 'default' | 'manual' | 'monitor'
+  state_reason: string | null
+  state_changed_by_user_id: string | null
+  state_changed_at: string
   file: string | null
   line_no: number | null
   labels: string[]

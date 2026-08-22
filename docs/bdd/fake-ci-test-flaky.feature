@@ -26,11 +26,12 @@ Feature: Run a fake flaky CI command that exercises the Test Engine dogfood loop
     Then the flaky detector marks "tests::demo_flaky" as muted
 
     # On the next invocation the workflow consults the quarantined endpoint and
-    # soft-fails or skips the muted test instead of blocking the PR (bktec
-    # "skip/mute flaky" behavior, server-side).
+    # keeps running and uploading the muted test, but soft-fails it instead of
+    # blocking the PR. Only an explicitly skipped test is omitted.
     When the user re-runs the command
     Then the workflow reads the quarantined list from the disposal endpoint
-    And "tests::demo_flaky" is reported as quarantined
+    And "tests::demo_flaky" is reported as "muted"
+    And the workflow still runs and uploads "tests::demo_flaky"
     And the workflow does not fail the pull request on it (soft-fail)
     And the check concludes with "success" (or a non-blocking neutral)
 

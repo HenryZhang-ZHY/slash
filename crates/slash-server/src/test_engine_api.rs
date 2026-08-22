@@ -202,6 +202,7 @@ pub async fn list_test_executions(
 #[derive(Debug, Deserialize)]
 pub struct SetTestStateRequest {
     state: String,
+    reason: Option<String>,
 }
 
 /// `PATCH /api/test-engine/tests/{id}/state` — manually changes a case's
@@ -231,7 +232,19 @@ pub async fn set_test_state(
         test_engine::TestState::Muted,
         test_engine::TestState::Skipped,
     ];
-    match test_engine::set_test_state(&state.pool, id, &from, target).await {
+    match test_engine::set_test_state(
+        &state.pool,
+        id,
+        &from,
+        target,
+        &test_engine::TestStateChange {
+            source: test_engine::TestStateSource::Manual,
+            reason: request.reason.as_deref().or(Some("manual console update")),
+            actor_user_id: Some(auth_user.0),
+        },
+    )
+    .await
+    {
         Ok(true) => Ok(Json(TestStateOut {
             state: target.as_str(),
         })),
@@ -332,6 +345,10 @@ pub struct TestOut {
     id: String,
     name: String,
     state: String,
+    state_source: String,
+    state_reason: Option<String>,
+    state_changed_by_user_id: Option<String>,
+    state_changed_at: String,
     file: Option<String>,
     line_no: Option<i32>,
     labels: Vec<String>,
@@ -393,6 +410,10 @@ impl From<test_engine::TestSummary> for TestOut {
             id: t.id.to_string(),
             name: t.name,
             state: t.state,
+            state_source: t.state_source,
+            state_reason: t.state_reason,
+            state_changed_by_user_id: t.state_changed_by_user_id.map(|id| id.to_string()),
+            state_changed_at: t.state_changed_at.to_rfc3339(),
             file: t.file,
             line_no: t.line_no,
             labels: t.labels,

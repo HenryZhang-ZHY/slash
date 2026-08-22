@@ -174,6 +174,7 @@ export default {
   'testengine.run': '运行',
   'testengine.labels': '标签',
   'testengine.ownerTeams': '所属团队',
+  'testengine.stateDecision': '状态决策',
   'testengine.none': '无',
   'testengine.firstSeen': '首次看到',
   'testengine.updated': '更新时间',

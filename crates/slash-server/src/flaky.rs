@@ -13,8 +13,8 @@ use std::time::Duration;
 use sqlx::PgPool;
 
 use crate::test_engine::{
-    ExecutionStatus, RECONCILE_PAGE_SIZE, TestState, all_tests_page, recent_executions,
-    set_test_state,
+    ExecutionStatus, RECONCILE_PAGE_SIZE, TestState, TestStateChange, TestStateSource,
+    all_tests_page, recent_executions, set_test_state,
 };
 
 /// Rolling window for flaky detection (design §5: 7 days).
@@ -36,19 +36,33 @@ pub async fn reconcile(pool: &PgPool) -> Result<usize, sqlx::Error> {
             break;
         };
 
-        let last_id = last.0;
+        let last_id = last.id;
 
-        for (test_id, state) in &page {
-            let recent = recent_executions(pool, *test_id, FLAKY_WINDOW.as_secs() as i64).await?;
+        for disposition in &page {
+            if disposition.source == Some(TestStateSource::Manual) {
+                continue;
+            }
+            let recent =
+                recent_executions(pool, disposition.id, FLAKY_WINDOW.as_secs() as i64).await?;
 
-            match state {
+            match disposition.state {
                 TestState::Enabled => {
                     if is_flaky(&recent) {
                         // enabled -> muted (default disposition per §8 Q1).
-                        if set_test_state(pool, *test_id, &[TestState::Enabled], TestState::Muted)
-                            .await?
+                        if set_test_state(
+                            pool,
+                            disposition.id,
+                            &[TestState::Enabled],
+                            TestState::Muted,
+                            &TestStateChange {
+                                source: TestStateSource::Monitor,
+                                reason: Some("flaky failure followed by pass"),
+                                actor_user_id: None,
+                            },
+                        )
+                        .await?
                         {
-                            tracing::info!(test_id = %*test_id, "flaky test quarantined (muted)");
+                            tracing::info!(test_id = %disposition.id, "flaky test quarantined (muted)");
                             transitions += 1;
                         }
                     }
@@ -57,10 +71,20 @@ pub async fn reconcile(pool: &PgPool) -> Result<usize, sqlx::Error> {
                     if !recent_contains_failure(&recent) {
                         // muted -> enabled when the window has rolled past failures
                         // and the test is stable (design §5 un-quarantine).
-                        if set_test_state(pool, *test_id, &[TestState::Muted], TestState::Enabled)
-                            .await?
+                        if set_test_state(
+                            pool,
+                            disposition.id,
+                            &[TestState::Muted],
+                            TestState::Enabled,
+                            &TestStateChange {
+                                source: TestStateSource::Monitor,
+                                reason: Some("failure-free reconciliation window"),
+                                actor_user_id: None,
+                            },
+                        )
+                        .await?
                         {
-                            tracing::info!(test_id = %*test_id, "muted test recovered, enabled");
+                            tracing::info!(test_id = %disposition.id, "muted test recovered, enabled");
                             transitions += 1;
                         }
                     }

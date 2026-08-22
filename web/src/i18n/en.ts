@@ -174,6 +174,7 @@ export default {
   'testengine.run': 'Run',
   'testengine.labels': 'Labels',
   'testengine.ownerTeams': 'Owner teams',
+  'testengine.stateDecision': 'State decision',
   'testengine.none': 'None',
   'testengine.firstSeen': 'First seen',
   'testengine.updated': 'Updated',

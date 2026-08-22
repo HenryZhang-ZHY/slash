@@ -498,6 +498,17 @@ export function TestEnginePage() {
                       ? selectedTest.owner_team_ids.join(', ')
                       : t('testengine.none')}
                   </MetadataRow>
+                  <MetadataRow label={t('testengine.stateDecision')}>
+                    <div className="space-y-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-mono text-[11px]">{selectedTest.state_source}</span>
+                        <span>{formatDate(selectedTest.state_changed_at)}</span>
+                      </div>
+                      {selectedTest.state_reason ? (
+                        <p className="text-[11px] text-muted-foreground">{selectedTest.state_reason}</p>
+                      ) : null}
+                    </div>
+                  </MetadataRow>
                   <MetadataRow label={t('testengine.firstSeen')}>{formatDate(selectedTest.created_at)}</MetadataRow>
                   <MetadataRow label={t('testengine.updated')}>{formatDate(selectedTest.updated_at)}</MetadataRow>
                 </dl>

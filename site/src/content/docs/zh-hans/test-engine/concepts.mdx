@@ -40,11 +40,13 @@ Slash 自动把符合条件的测试从 `enabled` 改为 `muted`。当近期失�
 会把稳定的 muted 测试恢复为 `enabled`。`skipped` 测试不会自动变化，因为它不产生
 新的证据。
 
-检测是针对持久化 execution 历史的定期 reconcile。过程幂等，受保护的状态更新避免
-自动决策悄悄覆盖并发的手动修改。
+检测是针对持久化 execution 历史的定期 reconcile。过程幂等，每次状态修改都会记录
+来源和原因。手动状态具有权威性：自动 reconcile 不会替换手动 mute、skip 或 enable
+决策。
 
 ## 在 CI 中应用状态
 
 Test Engine 记录处置方式；你的 CI adapter 负责执行它。在上报 job 结果前查询隔离
-端点，对返回的 `muted` 或 `skipped` 测试执行 soft-fail 或跳过。完整闭环见
+端点。继续运行和上传 `muted` 测试，但对它们执行 soft-fail；只有返回为 `skipped`
+的测试才应跳过。完整闭环见
 [把 Test Engine 接入 CI](/zh-hans/test-engine/integrate-ci/)。
