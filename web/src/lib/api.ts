@@ -192,6 +192,49 @@ export interface TestExecutionPage {
   items: TestExecution[]
 }
 
+export interface TestRun {
+  id: string
+  run_ref: string
+  ci_provider: string
+  invocation_id: string | null
+  started_at: string
+  finished_at: string | null
+  last_captured: string | null
+  execution_count: number
+  passed_count: number
+  failed_count: number
+  skipped_count: number
+  errored_count: number
+  total_duration_ms: number
+}
+
+export interface TestRunPage {
+  total: number
+  limit: number
+  offset: number
+  items: TestRun[]
+}
+
+export interface RunExecution {
+  id: string
+  test_id: string
+  test_name: string
+  test_state: TestSummary['state']
+  file: string | null
+  line_no: number | null
+  status: TestExecution['status']
+  duration_ms: number
+  stack: string | null
+  captured_at: string
+}
+
+export interface RunExecutionPage {
+  total: number
+  limit: number
+  offset: number
+  items: RunExecution[]
+}
+
 export interface SuiteCreated {
   suite: TestSuiteSummary
 }
@@ -222,6 +265,14 @@ export const testEngineApi = {
     }),
   listTests: (suiteId: string) =>
     request<TestSummary[]>(`/api/test-engine/suites/${suiteId}/tests`),
+  listRuns: (suiteId: string, limit = 100, offset = 0) =>
+    request<TestRunPage>(
+      `/api/test-engine/suites/${suiteId}/runs?limit=${limit}&offset=${offset}`,
+    ),
+  listRunExecutions: (runId: string, limit = 100, offset = 0) =>
+    request<RunExecutionPage>(
+      `/api/test-engine/runs/${runId}/executions?limit=${limit}&offset=${offset}`,
+    ),
   listExecutions: (testId: string, limit = 100, offset = 0) =>
     request<TestExecutionPage>(
       `/api/test-engine/tests/${testId}/executions?limit=${limit}&offset=${offset}`,

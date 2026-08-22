@@ -141,6 +141,79 @@ describe("testEngineApi", () => {
     );
   });
 
+  it("loads runs and the test executions captured in a selected run", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            total: 1,
+            limit: 100,
+            offset: 0,
+            items: [
+              {
+                id: "run-id-42",
+                run_ref: "run-42",
+                ci_provider: "github_actions",
+                invocation_id: null,
+                started_at: "2026-08-12T02:30:00Z",
+                finished_at: null,
+                last_captured: "2026-08-12T02:31:00Z",
+                execution_count: 2,
+                passed_count: 1,
+                failed_count: 1,
+                skipped_count: 0,
+                errored_count: 0,
+                total_duration_ms: 100,
+              },
+            ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      )
+      .mockResolvedValueOnce(
+        new Response(
+          JSON.stringify({
+            total: 2,
+            limit: 100,
+            offset: 0,
+            items: [
+              {
+                id: "execution-1",
+                test_id: "test-1",
+                test_name: "cart > adds item",
+                test_state: "enabled",
+                file: "src/cart.test.ts",
+                line_no: 7,
+                status: "passed",
+                duration_ms: 24,
+                stack: null,
+                captured_at: "2026-08-12T02:31:00Z",
+              },
+            ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const runs = await testEngineApi.listRuns("suite-1", 100, 0);
+    const executions = await testEngineApi.listRunExecutions("run-id-42", 100, 0);
+
+    expect(runs.items[0].failed_count).toBe(1);
+    expect(executions.items[0].test_name).toBe("cart > adds item");
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      "/api/test-engine/suites/suite-1/runs?limit=100&offset=0",
+      { credentials: "same-origin", headers: undefined },
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/test-engine/runs/run-id-42/executions?limit=100&offset=0",
+      { credentials: "same-origin", headers: undefined },
+    );
+  });
+
   it("updates a test case disposition", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ state: "muted" }), {
