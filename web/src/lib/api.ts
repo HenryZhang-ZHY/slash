@@ -178,22 +178,23 @@ export interface TestExecutionPage {
 
 export interface SuiteCreated {
   suite: TestSuiteSummary
-  token: string
 }
 
 export interface CollectionTokenSummary {
   id: string
+  name: string
   status: 'active' | 'expired' | 'revoked'
   created_at: string
-  expires_at: string
+  expires_at: string | null
   last_used_at: string | null
   revoked_at: string | null
 }
 
 export interface IssuedCollectionToken {
   id: string
+  name: string
   token: string
-  expires_at: string
+  expires_at: string | null
 }
 
 export const testEngineApi = {
@@ -216,9 +217,10 @@ export const testEngineApi = {
     }),
   listTokens: (suiteId: string) =>
     request<CollectionTokenSummary[]>(`/api/test-engine/suites/${suiteId}/tokens`),
-  issueToken: (suiteId: string) =>
+  issueToken: (suiteId: string, name: string, expiresAt: string | null) =>
     request<IssuedCollectionToken>(`/api/test-engine/suites/${suiteId}/tokens`, {
       method: 'POST',
+      body: JSON.stringify({ name, expires_at: expiresAt }),
     }),
   revokeToken: (suiteId: string, tokenId: string) =>
     request<void>(`/api/test-engine/suites/${suiteId}/tokens/${tokenId}`, {

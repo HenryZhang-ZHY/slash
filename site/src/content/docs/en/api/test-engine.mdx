@@ -51,7 +51,7 @@ available. Storage failures return `500`.
 ## POST `/api/test-engine/suites`
 
 Creates a suite, or reuses the matching suite when it is already owned by the
-current account. It also issues a collection token for ingestion.
+current account. Create the collection token separately after the suite exists.
 
 ```sh
 curl -b cookies.txt \
@@ -82,20 +82,17 @@ Success: `201 Created`.
     "errored_executions": 0,
     "average_duration_ms": null,
     "last_captured": null
-  },
-  "token": "collection-token-value"
+  }
 }
 ```
 
-The token is a secret. Store it in the CI system that uploads results.
-
 | Status | Meaning |
 | --- | --- |
-| `201` | Suite available and token issued |
+| `201` | Suite available |
 | `401` | No valid session |
 | `409` | A different account owns the matching suite |
 | `422` | A required field is empty or too long |
-| `500` | Suite or token persistence failed |
+| `500` | Suite persistence failed |
 
 ## GET `/api/test-engine/suites/{id}/tests`
 
@@ -227,9 +224,10 @@ returned by this endpoint.
 [
   {
     "id": "2b914582-17c3-42c5-b9e8-439816360a3e",
+    "name": "Buildkite production",
     "status": "active",
     "created_at": "2026-08-22T06:00:00+00:00",
-    "expires_at": "2026-11-20T06:00:00+00:00",
+    "expires_at": null,
     "last_used_at": "2026-08-22T06:05:00+00:00",
     "revoked_at": null
   }
@@ -237,31 +235,40 @@ returned by this endpoint.
 ```
 
 Success is `200`. Unknown or unowned suites return `404`; storage failures
-return `500`. `status` is `active`, `expired`, or `revoked`.
+return `500`. `status` is `active`, `expired`, or `revoked`. `expires_at` is
+`null` for a token that never expires.
 
 ## POST `/api/test-engine/suites/{id}/tokens`
 
-Issues a new show-once collection token for an owned suite. The request has no
-body. Issuance atomically revokes the previous active token.
+Issues a new show-once collection token for an owned suite. Existing tokens
+remain active, so separate CI collectors can use independently named
+credentials and rotation does not interrupt uploads.
 
 ```sh
 curl -b cookies.txt -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Buildkite production","expires_at":null}' \
   https://slash.example.com/api/test-engine/suites/0e1ef24a-927f-4094-bdaf-477e17c123b8/tokens
 ```
+
+`name` is required, trimmed, and limited to 100 characters. `expires_at` is
+either `null` for no expiry or a future RFC 3339 timestamp. Omitting
+`expires_at` also creates a non-expiring token.
 
 Success: `201 Created`.
 
 ```json
 {
   "id": "2b914582-17c3-42c5-b9e8-439816360a3e",
+  "name": "Buildkite production",
   "token": "new-collection-token-value",
-  "expires_at": "2026-11-20T06:00:00+00:00"
+  "expires_at": null
 }
 ```
 
 Copy the raw token from this response immediately; Slash stores only its hash
-and cannot display it again. The token expires after 90 days. Unknown or
-unowned suites return `404`; issuance failures return `500`.
+and cannot display it again. Unknown or unowned suites return `404`; invalid
+names or expiration times return `422`; issuance failures return `500`.
 
 ## DELETE `/api/test-engine/suites/{suite_id}/tokens/{token_id}`
 

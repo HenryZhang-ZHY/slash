@@ -12,8 +12,8 @@ than only in the browser.
 ## Manage suites
 
 Use the suite selector to review execution totals, pass rate, and muted or
-skipped counts. Creating a suite requires an owner, repository, and suite key,
-and returns the collection token used by CI ingestion.
+skipped counts. Creating a suite requires an owner, repository, and suite key.
+After Slash creates the suite, create its first collection token explicitly.
 
 ## Find and inspect tests
 
@@ -29,11 +29,15 @@ decision that stops new execution evidence.
 
 ## Manage collection tokens
 
-Issue, rotate, or revoke a suite token. The plaintext credential is shown only
-when issued and should be moved directly into the CI system that uploads
-results. The console retains non-secret creation, expiration, last-used, and
-revocation metadata. Rotation revokes the previous active token, and tokens
-expire after 90 days.
+Create a named token for each CI collector or runner. The plaintext credential
+is shown only when issued and should be moved directly into the CI system that
+uploads results. Tokens do not expire by default; you can instead choose 30,
+90, or 365 days, or a custom expiration date.
+
+A suite may have multiple active tokens. **Rotate** creates a named replacement
+without revoking the existing token, so you can switch CI safely and revoke the
+old token when it no longer receives traffic. The console retains non-secret
+creation, expiration, last-used, and revocation metadata for each token.
 
 See [Tests and quarantine](/en/test-engine/concepts/) for state semantics and
 the [management API](/en/api/test-engine/) for exact requests and errors.

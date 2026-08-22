@@ -11,7 +11,8 @@ sidebar:
 ## 管理 Suites
 
 使用 suite 选择器查看 execution 总数、通过率以及 muted 或 skipped 数量。创建 suite
-需要 owner、repository 和 suite key，并返回供 CI ingestion 使用的 collection token。
+需要 owner、repository 和 suite key。Slash 创建 suite 后，再明确创建它的第一个
+collection token。
 
 ## 查找并检查测试
 
@@ -25,9 +26,13 @@ sidebar:
 
 ## 管理 Collection Tokens
 
-为 suite 签发、轮换或吊销 token。明文凭据仅在签发时显示，应直接保存到负责上传结果
-的 CI 系统。控制台保留非 secret 的创建、到期、最后使用和吊销元数据。轮换会吊销
-此前有效的 token，token 会在 90 天后到期。
+为每个 CI 采集器或 runner 创建一个具名 token。明文凭据仅在签发时显示，应直接保存
+到负责上传结果的 CI 系统。Token 默认永不过期；也可以选择 30、90、365 天或自定义
+到期日期。
+
+一个 suite 可以有多个有效 token。**轮换**会创建具名的替代 token，但不会吊销旧
+token，因此可以安全切换 CI，并在旧 token 不再有流量后手动吊销。控制台为每个 token
+保留非 secret 的创建、到期、最后使用和吊销元数据。
 
 状态语义见[测试与隔离](/zh-hans/test-engine/concepts/)，精确请求和错误见
 [管理 API](/zh-hans/api/test-engine/)。

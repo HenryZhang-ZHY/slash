@@ -50,7 +50,9 @@ async fn provision_suite(pool: &PgPool) -> (Uuid, String) {
     .unwrap();
     tx.commit().await.unwrap();
 
-    let issued = issue_collection_token(pool, suite_id).await.unwrap();
+    let issued = issue_collection_token(pool, suite_id, "Default collector", None)
+        .await
+        .unwrap();
     (suite_id, issued.raw)
 }
 
@@ -147,19 +149,21 @@ async fn revoked_token_no_longer_authenticates() {
 
 #[serial_test::serial(db)]
 #[tokio::test]
-async fn issuing_a_token_rotates_the_previous_token() {
+async fn issuing_a_token_keeps_existing_tokens_active() {
     let Some(pool) = test_pool().await else {
         return;
     };
     let (suite_id, first_raw) = provision_suite(&pool).await;
 
-    let second = issue_collection_token(&pool, suite_id).await.unwrap();
+    let second = issue_collection_token(&pool, suite_id, "Buildkite", None)
+        .await
+        .unwrap();
 
     assert!(
         find_suite_for_token(&pool, &first_raw)
             .await
             .unwrap()
-            .is_none()
+            .is_some()
     );
     assert!(
         find_suite_for_token(&pool, &second.raw)
@@ -174,22 +178,24 @@ async fn issuing_a_token_rotates_the_previous_token() {
             .iter()
             .filter(|token| token.status == "active")
             .count(),
-        1
+        2
     );
     assert_eq!(tokens[0].id, second.id);
+    assert_eq!(tokens[0].name, "Buildkite");
+    assert!(tokens[0].expires_at.is_none());
 }
 
 #[serial_test::serial(db)]
 #[tokio::test]
-async fn concurrent_token_rotation_keeps_exactly_one_active_token() {
+async fn concurrent_token_issuance_keeps_every_token_active() {
     let Some(pool) = test_pool().await else {
         return;
     };
     let (suite_id, first_raw) = provision_suite(&pool).await;
 
     let (left, right) = tokio::join!(
-        issue_collection_token(&pool, suite_id),
-        issue_collection_token(&pool, suite_id)
+        issue_collection_token(&pool, suite_id, "Linux runner", None),
+        issue_collection_token(&pool, suite_id, "macOS runner", None)
     );
     let left = left.unwrap();
     let right = right.unwrap();
@@ -198,7 +204,7 @@ async fn concurrent_token_rotation_keeps_exactly_one_active_token() {
         find_suite_for_token(&pool, &first_raw)
             .await
             .unwrap()
-            .is_none()
+            .is_some()
     );
     let left_live = find_suite_for_token(&pool, &left.raw)
         .await
@@ -208,14 +214,15 @@ async fn concurrent_token_rotation_keeps_exactly_one_active_token() {
         .await
         .unwrap()
         .is_some();
-    assert_ne!(left_live, right_live);
+    assert!(left_live);
+    assert!(right_live);
     let tokens = list_collection_tokens(&pool, suite_id).await.unwrap();
     assert_eq!(
         tokens
             .iter()
             .filter(|token| token.status == "active")
             .count(),
-        1
+        3
     );
 }
 

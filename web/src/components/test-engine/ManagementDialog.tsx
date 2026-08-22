@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { Check, Copy, Eye, EyeOff, KeyRound, Plus, Trash2, X } from 'lucide-react'
+import { useState } from 'react'
+import { Plus, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { Button } from '@/components/ui/button'
@@ -7,9 +7,9 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
   testEngineApi,
-  type CollectionTokenSummary,
   type TestSuiteSummary,
 } from '@/lib/api'
+import { CollectionTokensSection } from '@/components/test-engine/CollectionTokensSection'
 import { MetadataRow } from '@/components/test-engine/MetadataRow'
 
 export type ManagementPanel = 'create' | 'settings' | null
@@ -30,24 +30,9 @@ export function ManagementDialog({
   const [suiteKey, setSuiteKey] = useState('')
   const [createdSuite, setCreatedSuite] = useState<TestSuiteSummary | null>(null)
   const activeSuite = createdSuite ?? suite
-  const [token, setToken] = useState<string | null>(null)
-  const [tokens, setTokens] = useState<CollectionTokenSummary[]>([])
-  const [tokenVisible, setTokenVisible] = useState(false)
-  const [copied, setCopied] = useState(false)
-  const [revokingTokenId, setRevokingTokenId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const { t } = useTranslation()
-
-  useEffect(() => {
-    if (mode !== 'settings' || !suite) return
-    testEngineApi
-      .listTokens(suite.id)
-      .then(setTokens)
-      .catch((requestError) =>
-        setError(requestError instanceof Error ? requestError.message : t('dialog.tokenLoadFailed')),
-      )
-  }, [mode, suite, t])
 
   const createSuite = async (event: React.FormEvent) => {
     event.preventDefault()
@@ -57,59 +42,11 @@ export function ManagementDialog({
       const result = await testEngineApi.createSuite(owner, repo, suiteKey)
       onCreated(result.suite)
       setCreatedSuite(result.suite)
-      setToken(result.token)
-      setTokenVisible(true)
-      setTokens(await testEngineApi.listTokens(result.suite.id))
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : t('dialog.suiteCreateFailed'))
     } finally {
       setBusy(false)
     }
-  }
-
-  const issueToken = async () => {
-    if (!activeSuite) return
-    if (
-      tokens.some((item) => item.status === 'active') &&
-      !window.confirm(t('dialog.confirmRotateToken'))
-    ) {
-      return
-    }
-    setBusy(true)
-    setError(null)
-    try {
-      const result = await testEngineApi.issueToken(activeSuite.id)
-      setToken(result.token)
-      setTokenVisible(true)
-      setTokens(await testEngineApi.listTokens(activeSuite.id))
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : t('dialog.tokenGenerateFailed'))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const revokeToken = async (tokenId: string) => {
-    if (!activeSuite) return
-    if (!window.confirm(t('dialog.confirmRevokeToken'))) return
-    setRevokingTokenId(tokenId)
-    setError(null)
-    try {
-      await testEngineApi.revokeToken(activeSuite.id, tokenId)
-      setTokens(await testEngineApi.listTokens(activeSuite.id))
-      setToken(null)
-    } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : t('dialog.tokenRevokeFailed'))
-    } finally {
-      setRevokingTokenId(null)
-    }
-  }
-
-  const copyToken = async () => {
-    if (!token) return
-    await navigator.clipboard.writeText(token)
-    setCopied(true)
-    window.setTimeout(() => setCopied(false), 1500)
   }
 
   return (
@@ -187,90 +124,7 @@ export function ManagementDialog({
         ) : (
           <div className="p-5">
             <div className="border-b pb-6">
-              <h3 className="text-sm font-semibold">{t('dialog.collectionToken')}</h3>
-              <p className="mt-1 text-xs text-muted-foreground">
-                {t('dialog.collectionTokenHint')}
-              </p>
-              {token ? (
-                <div className="mt-4 rounded-md border border-amber-300 bg-amber-50 p-3">
-                  <p className="mb-2 text-xs text-amber-900">{t('dialog.tokenShowOnce')}</p>
-                  <div className="flex items-center gap-2">
-                    <Input
-                      className="font-mono"
-                      type={tokenVisible ? 'text' : 'password'}
-                      value={token}
-                      readOnly
-                    />
-                    <Button
-                      size="icon"
-                      variant="outline"
-                      onClick={() => setTokenVisible((visible) => !visible)}
-                      aria-label={tokenVisible ? t('dialog.hideToken') : t('dialog.showToken')}
-                    >
-                      {tokenVisible ? <EyeOff /> : <Eye />}
-                    </Button>
-                    <Button
-                      size="icon"
-                      variant="outline"
-                      onClick={copyToken}
-                      aria-label={t('dialog.copyToken')}
-                    >
-                      {copied ? <Check /> : <Copy />}
-                    </Button>
-                  </div>
-                </div>
-              ) : (
-                <p className="mt-4 rounded-md bg-zinc-50 p-3 text-xs text-muted-foreground">
-                  {t('dialog.tokenNotRecoverable')}
-                </p>
-              )}
-              <Button className="mt-3" variant="outline" onClick={issueToken} disabled={busy}>
-                <KeyRound />
-                {busy
-                  ? t('dialog.generating')
-                  : tokens.some((item) => item.status === 'active')
-                    ? t('dialog.rotateToken')
-                    : t('dialog.generateNewToken')}
-              </Button>
-            </div>
-            <div className="border-b py-6">
-              <h3 className="text-sm font-semibold">{t('dialog.tokenHistory')}</h3>
-              <div className="mt-3 space-y-2">
-                {tokens.length ? (
-                  tokens.map((item) => (
-                    <div key={item.id} className="flex items-start justify-between gap-3 border p-3 text-xs">
-                      <div className="min-w-0 space-y-1">
-                        <div className="flex items-center gap-2">
-                          <code>{item.id.slice(0, 8)}</code>
-                          <span>{item.status}</span>
-                        </div>
-                        <p className="text-muted-foreground">
-                          {t('dialog.expires')}: {new Date(item.expires_at).toLocaleString()}
-                        </p>
-                        <p className="text-muted-foreground">
-                          {t('dialog.lastUsed')}:{' '}
-                          {item.last_used_at
-                            ? new Date(item.last_used_at).toLocaleString()
-                            : t('dialog.never')}
-                        </p>
-                      </div>
-                      {item.status === 'active' ? (
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          onClick={() => void revokeToken(item.id)}
-                          disabled={revokingTokenId === item.id}
-                          aria-label={t('dialog.revokeToken')}
-                        >
-                          <Trash2 />
-                        </Button>
-                      ) : null}
-                    </div>
-                  ))
-                ) : (
-                  <p className="text-xs text-muted-foreground">{t('dialog.noTokens')}</p>
-                )}
-              </div>
+              {activeSuite ? <CollectionTokensSection suite={activeSuite} /> : null}
             </div>
             <div className="pt-6">
               <h3 className="text-sm font-semibold">{t('dialog.collectorEndpoints')}</h3>
