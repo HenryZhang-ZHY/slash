@@ -14,7 +14,9 @@ server replicas can share the same database when you need to scale out.
 
 Expose the server's port `8080` through the HTTPS ingress used by your
 environment. The Web console, REST API, GitHub webhook, health endpoint, and
-metrics endpoint share that origin.
+metrics endpoint share that origin. Redirect plaintext HTTP to HTTPS at the
+ingress and do not expose authenticated routes directly over HTTP; user and
+admin session cookies are always marked `Secure`.
 
 ## Run the container
 

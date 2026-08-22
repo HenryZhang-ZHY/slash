@@ -12,7 +12,9 @@ sidebar:
 扩展时，多台服务器可以共享同一数据库。
 
 通过环境中的 HTTPS 入口暴露服务器端口 `8080`。Web 控制台、REST API、GitHub
-webhook、健康端点和指标端点共享同一个 origin。
+webhook、健康端点和指标端点共享同一个 origin。入口必须把明文 HTTP 重定向到
+HTTPS，不要通过 HTTP 直接暴露认证路由；用户和 admin session cookie 始终带
+`Secure`。
 
 ## 运行容器
 

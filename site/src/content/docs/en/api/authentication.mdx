@@ -7,7 +7,8 @@ sidebar:
 
 Except where noted, these endpoints accept the `slash_session` cookie or a
 [personal access token](/en/api/access-tokens/). Register and login return the
-cookie with `HttpOnly`, `SameSite=Lax`, `Path=/`, and a seven-day `Max-Age`.
+cookie with `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`, and a seven-day
+`Max-Age`. Browsers therefore send session cookies only over HTTPS.
 
 The examples use a cookie jar so the session returned by one request can be
 used by the next:
@@ -75,8 +76,14 @@ Request body:
 ```
 
 Success: `200 OK`, a `Set-Cookie` header, and the same `{ "user": ... }`
-shape returned by registration. Invalid credentials return `401` with a
-generic error; the response does not reveal whether the email exists.
+shape returned by registration.
+
+| Status | Meaning |
+| --- | --- |
+| `200` | Credentials verified and session created |
+| `401` | Invalid credentials; the response does not reveal whether the email exists |
+| `500` | Session creation failed |
+| `503` | The authentication database query failed; retry only after the dependency recovers |
 
 ## PUT `/api/auth/password`
 

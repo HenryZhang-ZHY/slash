@@ -7,7 +7,8 @@ sidebar:
 
 除特别说明外，这些端点接受 `slash_session` cookie 或
 [个人 Access Token](/zh-hans/api/access-tokens/)。注册和登录返回带 `HttpOnly`、
-`SameSite=Lax`、`Path=/` 和七天 `Max-Age` 的 cookie。
+`Secure`、`SameSite=Lax`、`Path=/` 和七天 `Max-Age` 的 cookie。因此浏览器只会通过
+HTTPS 发送 session cookie。
 
 示例使用 cookie jar，让一个请求返回的会话能被下一个请求使用：
 
@@ -74,7 +75,13 @@ curl -i -c cookies.txt \
 ```
 
 成功：`200 OK`，一个 `Set-Cookie` 头，以及注册返回的同一 `{ "user": ... }` 形状。
-无效凭据返回 `401` 和通用错误；响应不会透露邮箱是否存在。
+
+| 状态 | 含义 |
+| --- | --- |
+| `200` | 凭据验证通过并创建 session |
+| `401` | 凭据无效；响应不会透露邮箱是否存在 |
+| `500` | 创建 session 失败 |
+| `503` | 认证数据库查询失败；依赖恢复后才能重试 |
 
 ## PUT `/api/auth/password`
 
