@@ -314,6 +314,9 @@ export default {
   'testengine.stateUpdateFailed': '处置更新失败',
   'testengine.casesView': '用例',
   'testengine.detailsView': '详情',
+  'testengine.state.enabled': '启用',
+  'testengine.state.muted': '静音',
+  'testengine.state.skipped': '跳过',
 
   // Management dialog
   'dialog.createSuiteAria': '创建测试套件',

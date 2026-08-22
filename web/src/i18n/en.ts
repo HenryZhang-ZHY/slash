@@ -314,6 +314,9 @@ export default {
   'testengine.stateUpdateFailed': 'Failed to update disposition',
   'testengine.casesView': 'cases',
   'testengine.detailsView': 'details',
+  'testengine.state.enabled': 'Enabled',
+  'testengine.state.muted': 'Muted',
+  'testengine.state.skipped': 'Skipped',
 
   // Management dialog
   'dialog.createSuiteAria': 'Create test suite',
