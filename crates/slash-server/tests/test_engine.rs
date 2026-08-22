@@ -165,7 +165,7 @@ async fn ingestion_writes_suite_test_run_and_executions_durably() {
     )
     .await
     .unwrap();
-    let run_id = upsert_run(
+    let run = upsert_run(
         &mut tx,
         &NewRun {
             suite_id,
@@ -177,9 +177,10 @@ async fn ingestion_writes_suite_test_run_and_executions_durably() {
     )
     .await
     .unwrap();
+    assert!(run.inserted);
     insert_executions(
         &mut tx,
-        run_id,
+        run.id,
         &[NewExecution {
             test_id: test_a.id,
             status: ExecutionStatus::Passed,
@@ -207,7 +208,7 @@ async fn ingestion_writes_suite_test_run_and_executions_durably() {
 
 #[serial_test::serial(db)]
 #[tokio::test]
-async fn duplicate_run_ref_is_a_single_run() {
+async fn duplicate_run_ref_is_idempotent() {
     let Some(pool) = test_pool().await else {
         return;
     };
@@ -221,11 +222,111 @@ async fn duplicate_run_ref_is_a_single_run() {
         run_ref: "run-x",
         invocation_id: None,
     };
+    let test = upsert_test(
+        &mut tx,
+        suite_id,
+        &NewTest {
+            name: "tests::idempotent",
+            file: None,
+            line_no: None,
+            owner_team_ids: vec![],
+        },
+    )
+    .await
+    .unwrap();
     let first = upsert_run(&mut tx, &run).await.unwrap();
     let second = upsert_run(&mut tx, &run).await.unwrap();
+    if first.inserted {
+        insert_executions(
+            &mut tx,
+            first.id,
+            &[NewExecution {
+                test_id: test.id,
+                status: Passed,
+                duration_ms: 1,
+                stack: None,
+            }],
+        )
+        .await
+        .unwrap();
+    }
+    if second.inserted {
+        insert_executions(
+            &mut tx,
+            second.id,
+            &[NewExecution {
+                test_id: test.id,
+                status: Passed,
+                duration_ms: 1,
+                stack: None,
+            }],
+        )
+        .await
+        .unwrap();
+    }
     tx.commit().await.unwrap();
 
-    assert_eq!(first, second);
+    assert_eq!(first.id, second.id);
+    assert!(first.inserted);
+    assert!(!second.inserted);
+    let (execution_count,): (i64,) =
+        sqlx::query_as("SELECT count(*) FROM test_executions WHERE run_id = $1")
+            .bind(first.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(execution_count, 1);
+}
+
+#[serial_test::serial(db)]
+#[tokio::test]
+async fn duplicate_run_ref_is_scoped_to_the_suite() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let (first_suite_id, _raw) = provision_suite(&pool).await;
+    let mut tx = pool.begin().await.unwrap();
+    let second_suite_id = upsert_suite(
+        &mut tx,
+        &NewSuite {
+            installation_id: 1,
+            owner: "acme",
+            repo: "widgets",
+            suite_key: "second-suite",
+        },
+    )
+    .await
+    .unwrap();
+
+    let first = upsert_run(
+        &mut tx,
+        &NewRun {
+            suite_id: first_suite_id,
+            installation_id: 1,
+            ci_provider: "github_actions",
+            run_ref: "shared-run-ref",
+            invocation_id: None,
+        },
+    )
+    .await
+    .unwrap();
+    let second = upsert_run(
+        &mut tx,
+        &NewRun {
+            suite_id: second_suite_id,
+            installation_id: 1,
+            ci_provider: "github_actions",
+            run_ref: "shared-run-ref",
+            invocation_id: None,
+        },
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+
+    assert!(first.inserted);
+    assert!(second.inserted);
+    assert_ne!(first.id, second.id);
 }
 
 #[serial_test::serial(db)]
@@ -355,7 +456,7 @@ async fn seed_runs(pool: &PgPool, suite_id: Uuid, name: &str, statuses: &[Execut
 
     for (i, status) in statuses.iter().enumerate() {
         let run_ref = format!("seed-{name}-{i}");
-        let run_id = upsert_run(
+        let run = upsert_run(
             &mut tx,
             &NewRun {
                 suite_id,
@@ -369,7 +470,7 @@ async fn seed_runs(pool: &PgPool, suite_id: Uuid, name: &str, statuses: &[Execut
         .unwrap();
         insert_executions(
             &mut tx,
-            run_id,
+            run.id,
             &[NewExecution {
                 test_id: test.id,
                 status: *status,

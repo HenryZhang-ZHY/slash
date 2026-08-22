@@ -54,7 +54,7 @@ curl -X POST \
 | 字段 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | `ci_provider` | string | 是 | CI 系统身份 |
-| `run_ref` | string | 是 | 调用方定义的 CI run 身份 |
+| `run_ref` | string | 是 | 调用方定义的 suite 内 batch 身份 |
 | `invocation_id` | UUID 或 null | 否 | 触发该 run 的 Slash invocation |
 | `executions` | array | 是 | 每个观测到的测试一条 |
 | `executions[].name` | string | 是 | 套件内稳定的测试身份 |
@@ -65,6 +65,10 @@ curl -X POST \
 | `executions[].line_no` | integer 或 null | 否 | 源行 |
 
 不受支持的执行状态会在任何数据库写入之前以 `400` 拒绝整个批次。
+
+在同一个 suite 中，`(ci_provider, run_ref)` 具有幂等性。重复发送已经接受的 batch
+不会再次追加其中的 execution。每个单独上报的 job、shard 或 attempt 都必须使用不同的
+`run_ref`。
 
 ### JUnit XML
 

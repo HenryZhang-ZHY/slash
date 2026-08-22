@@ -11,10 +11,12 @@ Test Engine 存储四类相关资源：
 
 - **Suite** —— 由 `(owner, repo, suite_key)` 标识的测试集合。
 - **Test** —— suite 中的稳定测试名称，带有可变处置状态。
-- **Run** —— 一次 CI 调用，由 `(ci_provider, run_ref)` 标识。
+- **Run** —— 一次 collector batch，在 suite 内由 `(ci_provider, run_ref)` 标识。
 - **Execution** —— run 中一次观测到的测试结果，包括状态、时长、stack 和捕获时间。
 
-Execution 只追加。测试状态则是根据历史自动得出的可变决策，也可以由用户手动设置。
+Execution 只追加。使用相同 run 身份重复上传是幂等的，不会再次追加 execution；不同
+job、shard 和 attempt 必须使用不同的 run reference。测试状态则是根据历史自动得出的
+可变决策，也可以由用户手动设置。
 
 ## 测试状态
 

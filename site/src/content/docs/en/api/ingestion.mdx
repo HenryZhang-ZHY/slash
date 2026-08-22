@@ -55,7 +55,7 @@ curl -X POST \
 | Field | Type | Required | Notes |
 | --- | --- | --- | --- |
 | `ci_provider` | string | yes | CI system identity |
-| `run_ref` | string | yes | Caller-defined identity for the CI run |
+| `run_ref` | string | yes | Caller-defined batch identity within the suite |
 | `invocation_id` | UUID or null | no | Slash invocation that triggered the run |
 | `executions` | array | yes | One entry per observed test |
 | `executions[].name` | string | yes | Stable test identity within the suite |
@@ -67,6 +67,10 @@ curl -X POST \
 
 An unsupported execution status rejects the whole batch with `400` before any
 database write.
+
+The pair `(ci_provider, run_ref)` is idempotent within a suite. Replaying a
+previously accepted batch does not append its executions again. Use a distinct
+`run_ref` for each job, shard, or attempt that reports a separate batch.
 
 ### JUnit XML
 

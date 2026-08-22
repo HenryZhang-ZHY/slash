@@ -24,11 +24,14 @@ The PostgreSQL model follows `suite -> test -> run -> execution`:
   repository, and suite key;
 - `tests` identifies a named test within a suite and holds its current
   `enabled`, `muted`, or `skipped` state, labels, and owner team ids;
-- `test_runs` identifies a CI run by installation, provider, and provider run
-  reference;
+- `test_runs` identifies a collector batch by suite, installation, provider,
+  and provider run reference;
 - `test_executions` is the append-only record of an observed result.
 
-Unique constraints make repeated suite, test, and run discovery idempotent.
+Unique constraints make repeated suite, test, and run discovery idempotent. A
+replayed collector batch returns the existing run without appending duplicate
+executions; separate jobs, shards, and attempts must use distinct run
+references.
 State changes use guarded compare-and-swap updates so manual decisions and
 automatic reconciliation cannot overwrite one another blindly. There is no
 implemented execution-retention job; adding one requires an explicit product
