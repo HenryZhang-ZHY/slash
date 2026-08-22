@@ -137,6 +137,87 @@ curl -b cookies.txt \
 说明当前决策；最近运行和平均字段也可能是 `null`。未知或不拥有的套件返回 `404`；
 存储失败返回 `500`。
 
+## GET `/api/test-engine/suites/{id}/runs`
+
+按从新到旧的顺序返回已拥有套件的一页运行，并包含每次运行的 execution 汇总。
+
+| 查询参数 | 默认 | 行为 |
+| --- | --- | --- |
+| `limit` | `100` | 限制在 `1..200` |
+| `offset` | `0` | 负值变成 `0` |
+
+```sh
+curl -b cookies.txt \
+  "https://slash.example.com/api/test-engine/suites/0e1ef24a-927f-4094-bdaf-477e17c123b8/runs?limit=25&offset=0"
+```
+
+成功：`200 OK`。
+
+```json
+{
+  "total": 18,
+  "limit": 25,
+  "offset": 0,
+  "items": [
+    {
+      "id": "68e4a959-c699-4e32-9164-a4500ecfe26d",
+      "run_ref": "build/1842",
+      "ci_provider": "buildkite",
+      "invocation_id": null,
+      "started_at": "2026-08-12T03:59:00+00:00",
+      "finished_at": null,
+      "last_captured": "2026-08-12T04:00:00+00:00",
+      "execution_count": 42,
+      "passed_count": 39,
+      "failed_count": 2,
+      "skipped_count": 1,
+      "errored_count": 0,
+      "total_duration_ms": 3487
+    }
+  ]
+}
+```
+
+`total_duration_ms` 是本次运行所有测试 execution 上报时长的总和。没有 execution 的
+运行，其 `last_captured` 为 `null`。未知或不拥有的套件返回 `404`；存储失败返回
+`500`。
+
+## GET `/api/test-engine/runs/{id}/executions`
+
+返回当前账户所拥有运行中采集到的一页测试。它的 `limit` 和 `offset` 有界行为与运行
+列表相同。
+
+```sh
+curl -b cookies.txt \
+  "https://slash.example.com/api/test-engine/runs/68e4a959-c699-4e32-9164-a4500ecfe26d/executions?limit=100&offset=0"
+```
+
+成功：`200 OK`。
+
+```json
+{
+  "total": 42,
+  "limit": 100,
+  "offset": 0,
+  "items": [
+    {
+      "id": "f8789438-fb99-45f6-a374-1335593264d1",
+      "test_id": "df5a68b4-bf9f-4745-a320-a7cd39b59249",
+      "test_name": "checkout::completes_order",
+      "test_state": "enabled",
+      "file": "tests/checkout.rs",
+      "line_no": 42,
+      "status": "passed",
+      "duration_ms": 87,
+      "stack": null,
+      "captured_at": "2026-08-12T04:00:00+00:00"
+    }
+  ]
+}
+```
+
+未知运行或不在账户已拥有套件里的运行返回空分页。存储失败返回 `500`。
+
 ## GET `/api/test-engine/tests/{id}/executions`
 
 返回属于当前账户的测试的一页最近执行历史。

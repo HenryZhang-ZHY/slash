@@ -72,6 +72,8 @@ The tables below list every route registered by `slash-server`.
 | `GET` | `/api/test-engine/suites` | List owned suites |
 | `POST` | `/api/test-engine/suites` | Create or reuse a suite |
 | `GET` | `/api/test-engine/suites/{id}/tests` | List tests in a suite |
+| `GET` | `/api/test-engine/suites/{id}/runs` | List runs in a suite |
+| `GET` | `/api/test-engine/runs/{id}/executions` | List the tests captured in a run |
 | `GET` | `/api/test-engine/tests/{id}/executions` | List execution history |
 | `PATCH` | `/api/test-engine/tests/{id}/state` | Change a test's disposal state |
 | `GET` | `/api/test-engine/suites/{id}/tokens` | List token metadata |

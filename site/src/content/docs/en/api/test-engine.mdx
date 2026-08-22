@@ -141,6 +141,89 @@ and actor identify the current decision; latest-run and average fields may
 also be `null`. An unknown or unowned suite returns `404`; storage failures
 return `500`.
 
+## GET `/api/test-engine/suites/{id}/runs`
+
+Returns one page of the owned suite's runs, newest first, with execution totals
+for each run.
+
+| Query parameter | Default | Behavior |
+| --- | --- | --- |
+| `limit` | `100` | Clamped to `1..200` |
+| `offset` | `0` | Negative values become `0` |
+
+```sh
+curl -b cookies.txt \
+  "https://slash.example.com/api/test-engine/suites/0e1ef24a-927f-4094-bdaf-477e17c123b8/runs?limit=25&offset=0"
+```
+
+Success: `200 OK`.
+
+```json
+{
+  "total": 18,
+  "limit": 25,
+  "offset": 0,
+  "items": [
+    {
+      "id": "68e4a959-c699-4e32-9164-a4500ecfe26d",
+      "run_ref": "build/1842",
+      "ci_provider": "buildkite",
+      "invocation_id": null,
+      "started_at": "2026-08-12T03:59:00+00:00",
+      "finished_at": null,
+      "last_captured": "2026-08-12T04:00:00+00:00",
+      "execution_count": 42,
+      "passed_count": 39,
+      "failed_count": 2,
+      "skipped_count": 1,
+      "errored_count": 0,
+      "total_duration_ms": 3487
+    }
+  ]
+}
+```
+
+`total_duration_ms` is the sum of the durations reported by the run's test
+executions. `last_captured` is `null` for a run with no executions. An unknown
+or unowned suite returns `404`; storage failures return `500`.
+
+## GET `/api/test-engine/runs/{id}/executions`
+
+Returns one page of the tests captured in a run owned by the current account.
+It uses the same bounded `limit` and `offset` behavior as the run list.
+
+```sh
+curl -b cookies.txt \
+  "https://slash.example.com/api/test-engine/runs/68e4a959-c699-4e32-9164-a4500ecfe26d/executions?limit=100&offset=0"
+```
+
+Success: `200 OK`.
+
+```json
+{
+  "total": 42,
+  "limit": 100,
+  "offset": 0,
+  "items": [
+    {
+      "id": "f8789438-fb99-45f6-a374-1335593264d1",
+      "test_id": "df5a68b4-bf9f-4745-a320-a7cd39b59249",
+      "test_name": "checkout::completes_order",
+      "test_state": "enabled",
+      "file": "tests/checkout.rs",
+      "line_no": 42,
+      "status": "passed",
+      "duration_ms": 87,
+      "stack": null,
+      "captured_at": "2026-08-12T04:00:00+00:00"
+    }
+  ]
+}
+```
+
+An unknown run or a run outside the account's owned suites returns an empty
+page. Storage failures return `500`.
+
 ## GET `/api/test-engine/tests/{id}/executions`
 
 Returns one page of recent execution history for a test owned by the current
