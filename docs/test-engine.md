@@ -43,6 +43,11 @@ Suites are owned by the Slash user who creates or claims them. Team UUIDs on a
 test express ownership metadata inside that account boundary; they do not grant
 permission to invoke GitHub commands.
 
+Authenticated console reads expose both directions of the durable model: test
+history groups executions by test case, while run history groups the same
+immutable executions by collector run. Both views enforce the suite owner's
+account boundary and use bounded pagination.
+
 ## Ingestion and collection tokens
 
 The collection endpoint accepts normalized JSON and supported collector
