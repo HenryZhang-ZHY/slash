@@ -1,4 +1,19 @@
 export default {
+  // Shared product surface
+  'common.loading': '正在加载…',
+  'common.retry': '重试',
+  'common.unavailable': '暂不可用',
+  'common.productMenu': '打开产品菜单',
+  'common.preferences': '偏好设置',
+  'common.preferencesDescription': '语言、外观和产品信息。',
+  'theme.title': '外观',
+  'theme.light': '亮色',
+  'theme.dark': '暗色',
+  'theme.system': '跟随系统',
+  'about.title': '关于 Slash',
+  'about.description': '面向仓库自动化与测试智能的工程控制面。',
+  'about.release': '发布版本',
+
   // App shell
   'app.overview': '概览',
   'app.openTestEngine': '打开 Test Engine',
@@ -22,6 +37,11 @@ export default {
   'app.teams': '团队',
   'app.signOut': '退出登录',
   'app.language': '语言',
+  'app.allWorkspaces': '全部工作区',
+  'app.teamCountValue': '{{count}} 个团队',
+  'app.openNavigation': '打开导航',
+  'app.workspacePlaceholder': '工作区“{{slug}}”已就绪，团队专属功能将在可用后显示在这里。',
+  'app.testDataUnavailable': '测试数据暂不可用',
   'app.slash': 'Slash',
 
   // Auth
@@ -38,6 +58,8 @@ export default {
   'auth.createAccountLink': '创建账户',
   'auth.backToSignIn': '返回登录',
   'auth.controlPlane': '工程控制面',
+  'auth.shellHeadline': '在一个地方理解并运营交付质量。',
+  'auth.shellDescription': '协调仓库自动化、洞察测试健康，让工程工作流持续向前。',
   'auth.environment': '环境',
   'auth.production': '生产',
   'auth.region': '区域',

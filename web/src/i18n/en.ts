@@ -1,4 +1,19 @@
 export default {
+  // Shared product surface
+  'common.loading': 'Loading…',
+  'common.retry': 'Try again',
+  'common.unavailable': 'Unavailable',
+  'common.productMenu': 'Open product menu',
+  'common.preferences': 'Preferences',
+  'common.preferencesDescription': 'Language, appearance and product information.',
+  'theme.title': 'Appearance',
+  'theme.light': 'Light',
+  'theme.dark': 'Dark',
+  'theme.system': 'System',
+  'about.title': 'About Slash',
+  'about.description': 'Engineering control plane for repository automation and test intelligence.',
+  'about.release': 'Release version',
+
   // App shell
   'app.overview': 'Overview',
   'app.openTestEngine': 'Open Test Engine',
@@ -23,6 +38,11 @@ export default {
   'app.signOut': 'Sign out',
   'app.slash': 'Slash',
   'app.language': 'Language',
+  'app.allWorkspaces': 'All workspaces',
+  'app.teamCountValue': '{{count}} teams',
+  'app.openNavigation': 'Open navigation',
+  'app.workspacePlaceholder': 'Workspace “{{slug}}” is ready. Team-specific tools will appear here as they become available.',
+  'app.testDataUnavailable': 'Test data is unavailable',
 
   // Auth
   'auth.signInTitle': 'Sign in to Slash',
@@ -38,6 +58,8 @@ export default {
   'auth.createAccountLink': 'Create an account',
   'auth.backToSignIn': 'Back to sign in',
   'auth.controlPlane': 'Engineering control plane',
+  'auth.shellHeadline': 'One place to understand and operate delivery quality.',
+  'auth.shellDescription': 'Coordinate repository automation, inspect test health and keep engineering workflows moving.',
   'auth.environment': 'Environment',
   'auth.production': 'Production',
   'auth.region': 'Region',

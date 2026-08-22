@@ -32,9 +32,12 @@ export const i18nInstance = i18n.use(initReactI18next).init({
 
 export function setLanguage(code: LanguageCode) {
   localStorage.setItem('slash_lang', code)
+  document.documentElement.lang = code
   void i18n.changeLanguage(code)
 }
 
 export function currentLanguage(): LanguageCode {
   return i18n.language === 'zh-CN' ? 'zh-CN' : 'en'
 }
+
+document.documentElement.lang = currentLanguage()
