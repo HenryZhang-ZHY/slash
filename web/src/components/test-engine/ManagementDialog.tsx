@@ -59,7 +59,7 @@ export function ManagementDialog({
         role="dialog"
         aria-modal="true"
         aria-label={mode === 'create' ? t('dialog.createSuiteAria') : t('dialog.settingsAria')}
-        className="h-full w-full max-w-lg overflow-y-auto border-l bg-white shadow-2xl"
+        className="h-full w-full max-w-lg overflow-y-auto border-l bg-background shadow-2xl"
         onMouseDown={(event) => event.stopPropagation()}
       >
         <div className="flex h-14 items-center justify-between border-b px-5">
@@ -110,7 +110,7 @@ export function ManagementDialog({
                 required
               />
             </div>
-            {error && <p className="text-sm text-red-600">{error}</p>}
+            {error && <p className="text-sm text-destructive">{error}</p>}
             <div className="flex justify-end gap-2 border-t pt-4">
               <Button type="button" variant="ghost" onClick={onClose}>
                 {t('dialog.cancel')}
@@ -140,7 +140,7 @@ export function ManagementDialog({
                 </MetadataRow>
               </dl>
             </div>
-            {error && <p className="mt-4 text-sm text-red-600">{error}</p>}
+            {error && <p className="mt-4 text-sm text-destructive">{error}</p>}
           </div>
         )}
       </section>

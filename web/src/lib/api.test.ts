@@ -163,6 +163,22 @@ describe("testEngineApi", () => {
 });
 
 describe("authentication API", () => {
+  it("loads the authoritative server release version", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ version: "0.8.1" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(api.meta()).resolves.toEqual({ version: "0.8.1" });
+    expect(fetchMock).toHaveBeenCalledWith("/api/meta", {
+      credentials: "same-origin",
+      headers: undefined,
+    });
+  });
+
   it("updates an authenticated user's password credential", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
     vi.stubGlobal("fetch", fetchMock);

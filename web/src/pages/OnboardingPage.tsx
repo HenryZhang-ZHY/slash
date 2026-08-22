@@ -95,7 +95,7 @@ export function OnboardingPage() {
             />
             <p className="text-xs text-muted-foreground">{t('onboard.slugHint')}</p>
           </div>
-          {error ? <p className="border-l-2 border-red-500 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p> : null}
+          {error ? <p className="border-l-2 border-destructive bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p> : null}
           <Button className="w-full" type="submit" disabled={busy}>
             {busy ? t('onboard.creating') : t('onboard.createTeam')}
           </Button>

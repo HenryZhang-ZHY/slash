@@ -130,7 +130,7 @@ export function AccessTokensSection() {
         </Button>
       </div>
 
-      {error ? <div className="mb-3 border-l-2 border-red-500 bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div> : null}
+      {error ? <div className="mb-3 border-l-2 border-destructive bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</div> : null}
 
       <div className="border">
         {tokens === null ? (

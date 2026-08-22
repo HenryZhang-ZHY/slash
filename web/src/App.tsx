@@ -11,6 +11,7 @@ import {
 } from 'react-router-dom'
 
 import { Button } from '@/components/ui/button'
+import { StatePanel } from '@/components/StatePanel'
 import { AppShell, type DashboardContext } from '@/components/AppShell'
 import { testEngineApi, type TestSuiteSummary } from '@/lib/api'
 import { LoginPage } from '@/pages/LoginPage'
@@ -23,14 +24,21 @@ function HomePage() {
   const navigate = useNavigate()
   const { me } = useOutletContext<DashboardContext>()
   const { t } = useTranslation()
-  const [suites, setSuites] = useState<TestSuiteSummary[]>([])
+  const [suites, setSuites] = useState<TestSuiteSummary[] | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
-    testEngineApi.listSuites().then(setSuites).catch(() => setSuites([]))
-  }, [])
+  const loadSuites = () => {
+    setError(null)
+    testEngineApi.listSuites().then(setSuites).catch((requestError) => {
+      setSuites(null)
+      setError(requestError instanceof Error ? requestError.message : t('app.loadFailed'))
+    })
+  }
 
-  const testCount = suites.reduce((sum, suite) => sum + suite.total_tests, 0)
-  const executionCount = suites.reduce((sum, suite) => sum + suite.execution_count, 0)
+  useEffect(loadSuites, [t])
+
+  const testCount = suites?.reduce((sum, suite) => sum + suite.total_tests, 0) ?? null
+  const executionCount = suites?.reduce((sum, suite) => sum + suite.execution_count, 0) ?? null
 
   return (
     <div className="mx-auto w-full max-w-[1680px] px-4 py-6 md:px-8 md:py-8">
@@ -48,9 +56,9 @@ function HomePage() {
       <div className="mt-8 grid border-y sm:grid-cols-2 xl:grid-cols-4">
         {[
           [t('app.teamCount'), me.teams.length.toLocaleString()],
-          [t('app.suiteCount'), suites.length.toLocaleString()],
-          [t('app.testCount'), testCount.toLocaleString()],
-          [t('app.executionCount'), executionCount.toLocaleString()],
+          [t('app.suiteCount'), suites ? suites.length.toLocaleString() : '—'],
+          [t('app.testCount'), testCount?.toLocaleString() ?? '—'],
+          [t('app.executionCount'), executionCount?.toLocaleString() ?? '—'],
         ].map(([label, value], index) => (
           <div key={label} className={`px-4 py-5 ${index > 0 ? 'border-t sm:border-t-0 sm:border-l' : ''}`}>
             <div className="text-xs text-muted-foreground">{label}</div>
@@ -87,7 +95,7 @@ function HomePage() {
             <FlaskConical className="size-4" />
             <h2 className="text-sm font-semibold">{t('app.testEngineSection')}</h2>
           </div>
-          <button
+          {error ? <StatePanel kind="error" title={t('app.testDataUnavailable')} description={error} retry={loadSuites} /> : <button
             type="button"
             onClick={() => navigate('/tests')}
             className="flex w-full items-center justify-between border px-4 py-4 text-left transition-colors hover:bg-muted/40"
@@ -96,18 +104,27 @@ function HomePage() {
               <div className="text-sm font-medium">{t('app.testEngineCta')}</div>
               <div className="mt-1 text-xs text-muted-foreground">
                 {t('app.suiteSummary', {
-                  count: suites.length,
-                  cases: testCount.toLocaleString(),
-                  executions: executionCount.toLocaleString(),
+                  count: suites?.length ?? 0,
+                  cases: testCount?.toLocaleString() ?? '—',
+                  executions: executionCount?.toLocaleString() ?? '—',
                 })}
               </div>
             </div>
             <ArrowRight className="size-4 text-muted-foreground" />
-          </button>
+          </button>}
         </section>
       </div>
     </div>
   )
+}
+
+function TeamPage() {
+  const { me } = useOutletContext<DashboardContext>()
+  const { t } = useTranslation()
+  const slug = window.location.pathname.split('/')[2]
+  const team = me.teams.find((candidate) => candidate.slug === slug)
+  if (!team) return <Navigate to="/" replace />
+  return <div className="mx-auto w-full max-w-5xl px-4 py-8 md:px-8"><StatePanel title={team.name} description={t('app.workspacePlaceholder', { slug: team.slug })} /></div>
 }
 
 export default function App() {
@@ -121,6 +138,7 @@ export default function App() {
           <Route path="/" element={<HomePage />} />
           <Route path="/tests" element={<TestEnginePage />} />
           <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/teams/:slug" element={<TeamPage />} />
         </Route>
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
