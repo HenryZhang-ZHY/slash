@@ -161,6 +161,55 @@ pub async fn list_tests(
     }
 }
 
+/// `GET /api/test-engine/suites/{id}/runs` — recent runs for one owned suite,
+/// including per-status execution totals.
+pub async fn list_runs(
+    State(state): State<AppState>,
+    auth_user: UserId,
+    Path(id): Path<uuid::Uuid>,
+    Query(page): Query<ExecutionPageRequest>,
+) -> Result<Json<RunPageOut>, StatusCode> {
+    require_suite_owner(&state, id, auth_user.0).await?;
+    let limit = normalize_execution_limit(page.limit);
+    let offset = normalize_execution_offset(page.offset);
+    match test_engine::list_runs(&state.pool, id, auth_user.0, limit, offset).await {
+        Ok(page) => Ok(Json(RunPageOut {
+            total: page.total,
+            limit,
+            offset,
+            items: page.items.into_iter().map(RunOut::from).collect(),
+        })),
+        Err(error) => {
+            tracing::error!(%error, suite = %id, "test-engine runs listing failed");
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
+/// `GET /api/test-engine/runs/{id}/executions` — the test executions captured
+/// in one run, scoped through the suite owner.
+pub async fn list_run_executions(
+    State(state): State<AppState>,
+    auth_user: UserId,
+    Path(id): Path<uuid::Uuid>,
+    Query(page): Query<ExecutionPageRequest>,
+) -> Result<Json<RunExecutionPageOut>, StatusCode> {
+    let limit = normalize_execution_limit(page.limit);
+    let offset = normalize_execution_offset(page.offset);
+    match test_engine::list_run_executions(&state.pool, id, auth_user.0, limit, offset).await {
+        Ok(page) => Ok(Json(RunExecutionPageOut {
+            total: page.total,
+            limit,
+            offset,
+            items: page.items.into_iter().map(RunExecutionOut::from).collect(),
+        })),
+        Err(error) => {
+            tracing::error!(%error, run = %id, "test-engine run executions listing failed");
+            Err(StatusCode::INTERNAL_SERVER_ERROR)
+        }
+    }
+}
+
 /// `GET /api/test-engine/tests/{id}/executions` — recent per-case execution
 /// history, scoped to suites owned by the authenticated account.
 pub async fn list_test_executions(
@@ -405,6 +454,37 @@ pub struct TestExecutionOut {
     invocation_id: Option<String>,
 }
 
+#[derive(Debug, serde::Serialize)]
+pub struct RunOut {
+    id: String,
+    run_ref: String,
+    ci_provider: String,
+    invocation_id: Option<String>,
+    started_at: String,
+    finished_at: Option<String>,
+    last_captured: Option<String>,
+    execution_count: i64,
+    passed_count: i64,
+    failed_count: i64,
+    skipped_count: i64,
+    errored_count: i64,
+    total_duration_ms: i64,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct RunExecutionOut {
+    id: String,
+    test_id: String,
+    test_name: String,
+    test_state: String,
+    file: Option<String>,
+    line_no: Option<i32>,
+    status: String,
+    duration_ms: i64,
+    stack: Option<String>,
+    captured_at: String,
+}
+
 impl From<test_engine::SuiteSummary> for SuiteOut {
     fn from(s: test_engine::SuiteSummary) -> Self {
         Self {
@@ -479,6 +559,43 @@ impl From<test_engine::TestExecutionSummary> for TestExecutionOut {
     }
 }
 
+impl From<test_engine::RunSummary> for RunOut {
+    fn from(run: test_engine::RunSummary) -> Self {
+        Self {
+            id: run.id.to_string(),
+            run_ref: run.run_ref,
+            ci_provider: run.ci_provider,
+            invocation_id: run.invocation_id.map(|id| id.to_string()),
+            started_at: run.started_at.to_rfc3339(),
+            finished_at: run.finished_at.map(|at| at.to_rfc3339()),
+            last_captured: run.last_captured.map(|at| at.to_rfc3339()),
+            execution_count: run.execution_count,
+            passed_count: run.passed_count,
+            failed_count: run.failed_count,
+            skipped_count: run.skipped_count,
+            errored_count: run.errored_count,
+            total_duration_ms: run.total_duration_ms,
+        }
+    }
+}
+
+impl From<test_engine::RunExecutionSummary> for RunExecutionOut {
+    fn from(execution: test_engine::RunExecutionSummary) -> Self {
+        Self {
+            id: execution.id.to_string(),
+            test_id: execution.test_id.to_string(),
+            test_name: execution.test_name,
+            test_state: execution.test_state,
+            file: execution.file,
+            line_no: execution.line_no,
+            status: execution.status,
+            duration_ms: execution.duration_ms,
+            stack: execution.stack,
+            captured_at: execution.captured_at.to_rfc3339(),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct ExecutionPageRequest {
     #[serde(default = "default_execution_limit")]
@@ -511,6 +628,22 @@ pub struct TestExecutionPageOut {
     limit: i64,
     offset: i64,
     items: Vec<TestExecutionOut>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct RunPageOut {
+    total: i64,
+    limit: i64,
+    offset: i64,
+    items: Vec<RunOut>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct RunExecutionPageOut {
+    total: i64,
+    limit: i64,
+    offset: i64,
+    items: Vec<RunExecutionOut>,
 }
 
 #[derive(Debug, serde::Serialize)]

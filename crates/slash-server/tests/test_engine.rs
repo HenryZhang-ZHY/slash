@@ -14,9 +14,9 @@ use slash_server::test_engine::ExecutionStatus::{Failed, Passed};
 use slash_server::test_engine::{
     ExecutionStatus, NewExecution, NewRun, NewSuite, NewTest, TestState, TestStateChange,
     TestStateSource, find_suite_for_token, insert_executions, issue_collection_token,
-    list_collection_tokens, list_suites, parse_test_state, quarantined_tests,
-    revoke_collection_token_by_id, set_test_state, upsert_owned_suite, upsert_run, upsert_suite,
-    upsert_test,
+    list_collection_tokens, list_run_executions, list_runs, list_suites, parse_test_state,
+    quarantined_tests, revoke_collection_token_by_id, set_test_state, upsert_owned_suite,
+    upsert_run, upsert_suite, upsert_test,
 };
 
 /// `None` when `SLASH_TEST_DATABASE_URL` is unset — callers skip cleanly
@@ -306,6 +306,138 @@ async fn ingestion_writes_suite_test_run_and_executions_durably() {
             .await
             .unwrap();
     assert_eq!(run_count, 1);
+}
+
+#[serial_test::serial(db)]
+#[tokio::test]
+async fn lists_owned_runs_with_status_totals_and_their_test_executions() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let user_id = Uuid::new_v4();
+    let other_user_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO users (id, display_name, status)
+         VALUES ($1, 'Owner', 'active'), ($2, 'Other', 'active')",
+    )
+    .bind(user_id)
+    .bind(other_user_id)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    let mut tx = pool.begin().await.unwrap();
+    let suite_id = upsert_owned_suite(
+        &mut tx,
+        &NewSuite {
+            installation_id: 1,
+            owner: "acme",
+            repo: "widgets",
+            suite_key: "web",
+        },
+        user_id,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    let passing = upsert_test(
+        &mut tx,
+        suite_id,
+        &NewTest {
+            name: "cart::adds_item",
+            file: Some("src/cart.test.ts"),
+            line_no: Some(7),
+            owner_team_ids: vec![],
+        },
+    )
+    .await
+    .unwrap();
+    let failing = upsert_test(
+        &mut tx,
+        suite_id,
+        &NewTest {
+            name: "checkout::submits_order",
+            file: None,
+            line_no: None,
+            owner_team_ids: vec![],
+        },
+    )
+    .await
+    .unwrap();
+    let invocation_id = Uuid::new_v4();
+    let run = upsert_run(
+        &mut tx,
+        &NewRun {
+            suite_id,
+            installation_id: 1,
+            ci_provider: "github_actions",
+            run_ref: "run-42",
+            invocation_id: Some(invocation_id),
+        },
+    )
+    .await
+    .unwrap();
+    insert_executions(
+        &mut tx,
+        run.id,
+        &[
+            NewExecution {
+                test_id: passing.id,
+                status: Passed,
+                duration_ms: 24,
+                stack: None,
+            },
+            NewExecution {
+                test_id: failing.id,
+                status: Failed,
+                duration_ms: 76,
+                stack: Some("assertion failed"),
+            },
+        ],
+    )
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+
+    let runs = list_runs(&pool, suite_id, user_id, 100, 0).await.unwrap();
+    assert_eq!(runs.total, 1);
+    assert_eq!(runs.items[0].id, run.id);
+    assert_eq!(runs.items[0].run_ref, "run-42");
+    assert_eq!(runs.items[0].ci_provider, "github_actions");
+    assert_eq!(runs.items[0].invocation_id, Some(invocation_id));
+    assert_eq!(runs.items[0].execution_count, 2);
+    assert_eq!(runs.items[0].passed_count, 1);
+    assert_eq!(runs.items[0].failed_count, 1);
+    assert_eq!(runs.items[0].skipped_count, 0);
+    assert_eq!(runs.items[0].errored_count, 0);
+    assert_eq!(runs.items[0].total_duration_ms, 100);
+
+    let executions = list_run_executions(&pool, run.id, user_id, 100, 0)
+        .await
+        .unwrap();
+    assert_eq!(executions.total, 2);
+    assert_eq!(executions.items[0].test_name, "cart::adds_item");
+    assert_eq!(
+        executions.items[0].file.as_deref(),
+        Some("src/cart.test.ts")
+    );
+    assert_eq!(executions.items[0].line_no, Some(7));
+    assert_eq!(executions.items[1].test_name, "checkout::submits_order");
+    assert_eq!(
+        executions.items[1].stack.as_deref(),
+        Some("assertion failed")
+    );
+
+    let hidden_runs = list_runs(&pool, suite_id, other_user_id, 100, 0)
+        .await
+        .unwrap();
+    assert_eq!(hidden_runs.total, 0);
+    assert!(hidden_runs.items.is_empty());
+    let hidden_executions = list_run_executions(&pool, run.id, other_user_id, 100, 0)
+        .await
+        .unwrap();
+    assert_eq!(hidden_executions.total, 0);
+    assert!(hidden_executions.items.is_empty());
 }
 
 #[serial_test::serial(db)]

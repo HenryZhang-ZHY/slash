@@ -614,6 +614,137 @@ pub async fn list_test_executions(
     Ok(TestExecutionPage { total, items })
 }
 
+/// A CI run with execution totals for the run-oriented console view.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct RunSummary {
+    pub id: Uuid,
+    pub run_ref: String,
+    pub ci_provider: String,
+    pub invocation_id: Option<Uuid>,
+    pub started_at: chrono::DateTime<chrono::Utc>,
+    pub finished_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub last_captured: Option<chrono::DateTime<chrono::Utc>>,
+    pub execution_count: i64,
+    pub passed_count: i64,
+    pub failed_count: i64,
+    pub skipped_count: i64,
+    pub errored_count: i64,
+    pub total_duration_ms: i64,
+}
+
+pub struct RunPage {
+    pub total: i64,
+    pub items: Vec<RunSummary>,
+}
+
+/// Lists one owned suite's runs, newest first, with bounded pagination.
+pub async fn list_runs(
+    conn: &PgPool,
+    suite_id: Uuid,
+    user_id: Uuid,
+    limit: i64,
+    offset: i64,
+) -> Result<RunPage, sqlx::Error> {
+    let total = sqlx::query_scalar(
+        "SELECT count(tr.id)
+         FROM test_runs tr
+         JOIN test_suites ts ON ts.id = tr.suite_id
+         WHERE tr.suite_id = $1 AND ts.created_by_user_id = $2",
+    )
+    .bind(suite_id)
+    .bind(user_id)
+    .fetch_one(conn)
+    .await?;
+
+    let items = sqlx::query_as::<_, RunSummary>(
+        "SELECT tr.id, tr.run_ref, tr.ci_provider, tr.invocation_id,
+                tr.started_at, tr.finished_at, max(te.captured_at) AS last_captured,
+                count(te.id) AS execution_count,
+                count(te.id) FILTER (WHERE te.status = 'passed') AS passed_count,
+                count(te.id) FILTER (WHERE te.status = 'failed') AS failed_count,
+                count(te.id) FILTER (WHERE te.status = 'skipped') AS skipped_count,
+                count(te.id) FILTER (WHERE te.status = 'errored') AS errored_count,
+                coalesce(sum(te.duration_ms), 0)::bigint AS total_duration_ms
+         FROM test_runs tr
+         JOIN test_suites ts ON ts.id = tr.suite_id
+         LEFT JOIN test_executions te ON te.run_id = tr.id
+         WHERE tr.suite_id = $1 AND ts.created_by_user_id = $2
+         GROUP BY tr.id
+         ORDER BY coalesce(max(te.captured_at), tr.started_at) DESC, tr.id DESC
+         LIMIT $3 OFFSET $4",
+    )
+    .bind(suite_id)
+    .bind(user_id)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(conn)
+    .await?;
+
+    Ok(RunPage { total, items })
+}
+
+/// One test execution within a run, including the test identity needed by the
+/// run detail UI.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct RunExecutionSummary {
+    pub id: Uuid,
+    pub test_id: Uuid,
+    pub test_name: String,
+    pub test_state: String,
+    pub file: Option<String>,
+    pub line_no: Option<i32>,
+    pub status: String,
+    pub duration_ms: i64,
+    pub stack: Option<String>,
+    pub captured_at: chrono::DateTime<chrono::Utc>,
+}
+
+pub struct RunExecutionPage {
+    pub total: i64,
+    pub items: Vec<RunExecutionSummary>,
+}
+
+/// Lists the test executions in one owned run with bounded pagination.
+pub async fn list_run_executions(
+    conn: &PgPool,
+    run_id: Uuid,
+    user_id: Uuid,
+    limit: i64,
+    offset: i64,
+) -> Result<RunExecutionPage, sqlx::Error> {
+    let total = sqlx::query_scalar(
+        "SELECT count(te.id)
+         FROM test_executions te
+         JOIN test_runs tr ON tr.id = te.run_id
+         JOIN test_suites ts ON ts.id = tr.suite_id
+         WHERE te.run_id = $1 AND ts.created_by_user_id = $2",
+    )
+    .bind(run_id)
+    .bind(user_id)
+    .fetch_one(conn)
+    .await?;
+
+    let items = sqlx::query_as::<_, RunExecutionSummary>(
+        "SELECT te.id, t.id AS test_id, t.name AS test_name, t.state AS test_state,
+                t.file, t.line_no, te.status, te.duration_ms, te.stack, te.captured_at
+         FROM test_executions te
+         JOIN tests t ON t.id = te.test_id
+         JOIN test_runs tr ON tr.id = te.run_id
+         JOIN test_suites ts ON ts.id = tr.suite_id
+         WHERE te.run_id = $1 AND ts.created_by_user_id = $2
+         ORDER BY t.name, te.id
+         LIMIT $3 OFFSET $4",
+    )
+    .bind(run_id)
+    .bind(user_id)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(conn)
+    .await?;
+
+    Ok(RunExecutionPage { total, items })
+}
+
 /// Returns the observed execution statuses for a test within the last `window`
 /// seconds, oldest first. Smallest surface the flaky detector needs: the
 /// criterion is purely about the presence of a fail-then-pass recovery over a

@@ -227,6 +227,14 @@ pub async fn run() {
             get(test_engine_api::list_tests),
         )
         .route(
+            "/api/test-engine/suites/{id}/runs",
+            get(test_engine_api::list_runs),
+        )
+        .route(
+            "/api/test-engine/runs/{id}/executions",
+            get(test_engine_api::list_run_executions),
+        )
+        .route(
             "/api/test-engine/tests/{id}/executions",
             get(test_engine_api::list_test_executions),
         )
