@@ -115,12 +115,12 @@ export function PasswordSection({ email: existingEmail, onUpdated }: PasswordSec
         </div>
 
         {error ? (
-          <p className="border-l-2 border-red-500 bg-red-50 px-3 py-2 text-sm text-red-700">
+          <p className="border-l-2 border-destructive bg-destructive/10 px-3 py-2 text-sm text-destructive">
             {error}
           </p>
         ) : null}
         {success ? (
-          <p className="border-l-2 border-emerald-500 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+          <p className="border-l-2 border-emerald-500 bg-emerald-50 px-3 py-2 text-sm text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300">
             {t('settings.passwordUpdated')}
           </p>
         ) : null}

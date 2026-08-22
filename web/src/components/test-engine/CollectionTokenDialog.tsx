@@ -170,7 +170,7 @@ export function CollectionTokenDialog({
                 </div>
               ) : null}
             </div>
-            {error ? <p className="mb-4 text-sm text-red-600">{error}</p> : null}
+            {error ? <p className="mb-4 text-sm text-destructive">{error}</p> : null}
             <DialogFooter>
               <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
                 {t('dialog.cancel')}

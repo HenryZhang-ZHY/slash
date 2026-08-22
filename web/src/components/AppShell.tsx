@@ -88,7 +88,7 @@ export function AppShell() {
         </div>
 
         <div className="border-b px-3 py-3">
-          <label className="block px-2 pb-1 text-[11px] font-medium uppercase text-muted-foreground" htmlFor="workspace-switcher">{t('app.workspace')}</label>
+          <label className="block px-2 pb-1 text-xs font-medium uppercase text-muted-foreground" htmlFor="workspace-switcher">{t('app.workspace')}</label>
           <select
             id="workspace-switcher"
             className="h-9 w-full rounded-md border bg-background px-2 text-sm"
@@ -101,7 +101,7 @@ export function AppShell() {
         </div>
 
         <nav className="flex-1 space-y-1 px-3 py-3">
-          <div className="px-2 pb-1.5 text-[11px] font-medium text-muted-foreground uppercase">{t('app.workspace')}</div>
+          <div className="px-2 pb-1.5 text-xs font-medium text-muted-foreground uppercase">{t('app.workspace')}</div>
           {navItems.map((item) => {
             const Icon = item.icon
             return (
@@ -120,7 +120,7 @@ export function AppShell() {
               </NavLink>
             )
           })}
-          <div className="mt-5 px-2 pb-1.5 text-[11px] font-medium text-muted-foreground uppercase">{t('app.organization')}</div>
+          <div className="mt-5 px-2 pb-1.5 text-xs font-medium text-muted-foreground uppercase">{t('app.organization')}</div>
           <div className="flex h-8 items-center gap-2 px-2 text-sm text-muted-foreground">
             <Users className="size-4" />
             {t('app.teamCountValue', { count: me.teams.length })}

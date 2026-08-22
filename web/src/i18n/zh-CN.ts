@@ -317,6 +317,13 @@ export default {
   'testengine.state.enabled': '启用',
   'testengine.state.muted': '静音',
   'testengine.state.skipped': '跳过',
+  'testengine.status.passed': '通过',
+  'testengine.status.failed': '失败',
+  'testengine.status.errored': '错误',
+  'testengine.status.skipped': '跳过',
+  'testengine.status.enabled': '启用',
+  'testengine.status.muted': '静音',
+  'testengine.status.unknown': '未知',
 
   // Management dialog
   'dialog.createSuiteAria': '创建测试套件',

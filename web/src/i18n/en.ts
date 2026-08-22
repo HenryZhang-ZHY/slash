@@ -317,6 +317,13 @@ export default {
   'testengine.state.enabled': 'Enabled',
   'testengine.state.muted': 'Muted',
   'testengine.state.skipped': 'Skipped',
+  'testengine.status.passed': 'Passed',
+  'testengine.status.failed': 'Failed',
+  'testengine.status.errored': 'Errored',
+  'testengine.status.skipped': 'Skipped',
+  'testengine.status.enabled': 'Enabled',
+  'testengine.status.muted': 'Muted',
+  'testengine.status.unknown': 'Unknown',
 
   // Management dialog
   'dialog.createSuiteAria': 'Create test suite',
