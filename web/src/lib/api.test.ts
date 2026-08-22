@@ -163,6 +163,28 @@ describe("testEngineApi", () => {
 });
 
 describe("authentication API", () => {
+  it("updates an authenticated user's password credential", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await api.updatePassword({
+      email: "oidc@example.com",
+      currentPassword: null,
+      newPassword: "new-password-1",
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith("/api/auth/password", {
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      method: "PUT",
+      body: JSON.stringify({
+        email: "oidc@example.com",
+        currentPassword: null,
+        newPassword: "new-password-1",
+      }),
+    });
+  });
+
   it("loads the authoritative GitHub connection state", async () => {
     vi.stubGlobal(
       "fetch",
