@@ -678,14 +678,6 @@ fn parse_execution_status(status: &str) -> ExecutionStatus {
 
 // --- collection tokens (design §4) ---
 
-#[derive(Debug, thiserror::Error)]
-pub enum RecoverableTokenError {
-    #[error(transparent)]
-    Database(#[from] sqlx::Error),
-    #[error(transparent)]
-    Crypto(#[from] slash_core::TokenCryptoError),
-}
-
 /// Tenancy resolved from a collection token's suite.
 #[derive(Debug, Clone)]
 pub struct SuiteTokenIdentity {
@@ -700,28 +692,59 @@ pub struct SuiteTokenIdentity {
     pub repo: String,
 }
 
-/// Revokes a collection token for a suite (marks it `revoked`, stopping
-pub async fn issue_recoverable_collection_token(
+pub struct IssuedCollectionToken {
+    pub id: Uuid,
+    pub raw: String,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct CollectionTokenSummary {
+    pub id: Uuid,
+    pub status: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+    pub last_used_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub revoked_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Issues one show-once token and atomically revokes every previous active
+/// token for the suite.
+pub async fn issue_collection_token(
     pool: &PgPool,
     suite_id: Uuid,
-    secret: &crate::auth::AuthSecret,
-) -> Result<String, RecoverableTokenError> {
+) -> Result<IssuedCollectionToken, sqlx::Error> {
     let raw = slash_core::crypto_random_token();
     let hash = slash_core::hash_token(&raw);
-    let encrypted = slash_core::encrypt_collection_token(&raw, secret.0.as_bytes())?;
+    let id = Uuid::new_v4();
+    let mut tx = pool.begin().await?;
+    sqlx::query("SELECT id FROM test_suites WHERE id = $1 FOR UPDATE")
+        .bind(suite_id)
+        .fetch_one(&mut *tx)
+        .await?;
     sqlx::query(
-        "INSERT INTO collection_tokens
-            (id, suite_id, token_hash, status, token_ciphertext, token_nonce)
-         VALUES ($1, $2, $3, 'active', $4, $5)",
+        "UPDATE collection_tokens SET status = 'revoked', revoked_at = now() \
+         WHERE suite_id = $1 AND status = 'active'",
     )
-    .bind(Uuid::new_v4())
+    .bind(suite_id)
+    .execute(&mut *tx)
+    .await?;
+    let (expires_at,): (chrono::DateTime<chrono::Utc>,) = sqlx::query_as(
+        "INSERT INTO collection_tokens (id, suite_id, token_hash, status, expires_at) \
+         VALUES ($1, $2, $3, 'active', now() + interval '90 days') \
+         RETURNING expires_at",
+    )
+    .bind(id)
     .bind(suite_id)
     .bind(&hash[..])
-    .bind(encrypted.ciphertext)
-    .bind(encrypted.nonce)
-    .execute(pool)
+    .fetch_one(&mut *tx)
     .await?;
-    Ok(raw)
+    tx.commit().await?;
+    Ok(IssuedCollectionToken {
+        id,
+        raw,
+        expires_at,
+    })
 }
 
 pub async fn suite_owned_by(
@@ -758,38 +781,21 @@ pub async fn test_owned_by(
     .await
 }
 
-pub async fn latest_collection_token(
+pub async fn list_collection_tokens(
     pool: &PgPool,
     suite_id: Uuid,
-    user_id: Uuid,
-    secret: &crate::auth::AuthSecret,
-) -> Result<Option<String>, RecoverableTokenError> {
-    let encrypted: Option<(Vec<u8>, Vec<u8>)> = sqlx::query_as(
-        "SELECT ct.token_ciphertext, ct.token_nonce
-         FROM collection_tokens ct
-         JOIN test_suites ts ON ts.id = ct.suite_id
-         WHERE ct.suite_id = $1
-           AND ts.created_by_user_id = $2
-           AND ct.status = 'active'
-           AND ct.token_ciphertext IS NOT NULL
-           AND ct.token_nonce IS NOT NULL
-         ORDER BY ct.created_at DESC
-         LIMIT 1",
+) -> Result<Vec<CollectionTokenSummary>, sqlx::Error> {
+    sqlx::query_as::<_, CollectionTokenSummary>(
+        "SELECT id, \
+             CASE WHEN status = 'active' AND expires_at <= now() \
+                  THEN 'expired' ELSE status END AS status, \
+             created_at, expires_at, last_used_at, revoked_at \
+         FROM collection_tokens WHERE suite_id = $1 \
+         ORDER BY created_at DESC, id DESC",
     )
     .bind(suite_id)
-    .bind(user_id)
-    .fetch_optional(pool)
-    .await?;
-
-    encrypted
-        .map(|(ciphertext, nonce)| {
-            slash_core::decrypt_collection_token(
-                &slash_core::EncryptedCollectionToken { ciphertext, nonce },
-                secret.0.as_bytes(),
-            )
-        })
-        .transpose()
-        .map_err(RecoverableTokenError::from)
+    .fetch_all(pool)
+    .await
 }
 
 /// Resolves a presented collection token to its suite identity + tenancy, or
@@ -801,9 +807,11 @@ pub async fn find_suite_for_token(
 ) -> Result<Option<SuiteTokenIdentity>, sqlx::Error> {
     let hash = slash_core::hash_token(raw_token);
     let row: Option<(Uuid, String, i64, String, String)> = sqlx::query_as(
-        "SELECT ts.id, ts.suite_key, ts.installation_id, ts.owner, ts.repo
-         FROM collection_tokens ct\n         JOIN test_suites ts ON ts.id = ct.suite_id
-         WHERE ct.token_hash = $1 AND ct.status = 'active'",
+        "UPDATE collection_tokens ct SET last_used_at = now() \
+         FROM test_suites ts \
+         WHERE ct.suite_id = ts.id AND ct.token_hash = $1 \
+           AND ct.status = 'active' AND ct.expires_at > now() \
+         RETURNING ts.id, ts.suite_key, ts.installation_id, ts.owner, ts.repo",
     )
     .bind(&hash[..])
     .fetch_optional(pool)
@@ -819,22 +827,19 @@ pub async fn find_suite_for_token(
     ))
 }
 
-/// Revokes a collection token for a suite (marks it `revoked`, stopping
-/// `find_suite_for_token` from accepting it). Returns whether a matching
-/// active token was revoked. `None` result = unknown or already non-active
-/// token. Revocation is idempotent and only touches this suite.
-pub async fn revoke_collection_token(
+/// Revokes one token by its public database id, without requiring the caller
+/// to retain or resubmit its secret value.
+pub async fn revoke_collection_token_by_id(
     pool: &PgPool,
     suite_id: Uuid,
-    raw_token: &str,
+    token_id: Uuid,
 ) -> Result<bool, sqlx::Error> {
-    let hash = slash_core::hash_token(raw_token);
     let result = sqlx::query(
         "UPDATE collection_tokens SET status = 'revoked', revoked_at = now() \
-         WHERE suite_id = $1 AND token_hash = $2 AND status = 'active'",
+         WHERE suite_id = $1 AND id = $2 AND status = 'active'",
     )
     .bind(suite_id)
-    .bind(&hash[..])
+    .bind(token_id)
     .execute(pool)
     .await?;
     Ok(result.rows_affected() > 0)
@@ -846,33 +851,6 @@ pub async fn revoke_collection_token(
 #[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::expect_used)]
 mod pure_tests {
     use super::*;
-    use crate::auth::AuthSecret;
-    use std::sync::Arc;
-
-    #[test]
-    fn collection_token_encryption_round_trips() {
-        let secret = AuthSecret(Arc::from("correct-auth-secret"));
-        let encrypted =
-            slash_core::encrypt_collection_token("collector-token", secret.0.as_bytes()).unwrap();
-
-        assert_ne!(encrypted.ciphertext, b"collector-token");
-        assert_eq!(
-            slash_core::decrypt_collection_token(&encrypted, secret.0.as_bytes()).unwrap(),
-            "collector-token"
-        );
-    }
-
-    #[test]
-    fn collection_token_decryption_rejects_wrong_secret() {
-        let secret = AuthSecret(Arc::from("correct-auth-secret"));
-        let wrong_secret = AuthSecret(Arc::from("wrong-auth-secret"));
-        let encrypted =
-            slash_core::encrypt_collection_token("collector-token", secret.0.as_bytes()).unwrap();
-
-        assert!(
-            slash_core::decrypt_collection_token(&encrypted, wrong_secret.0.as_bytes()).is_err()
-        );
-    }
 
     #[test]
     fn parse_test_state_maps_each_label_and_defaults_unknown_to_enabled() {

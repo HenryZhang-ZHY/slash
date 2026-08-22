@@ -25,8 +25,9 @@ sidebar:
 
 ## 管理 Collection Tokens
 
-为 suite 签发 token，或在凭据可能泄露时吊销当前 token。明文凭据在签发时返回，
-应直接保存到负责上传结果的 CI 系统。
+为 suite 签发、轮换或吊销 token。明文凭据仅在签发时显示，应直接保存到负责上传结果
+的 CI 系统。控制台保留非 secret 的创建、到期、最后使用和吊销元数据。轮换会吊销
+此前有效的 token，token 会在 90 天后到期。
 
 状态语义见[测试与隔离](/zh-hans/test-engine/concepts/)，精确请求和错误见
 [管理 API](/zh-hans/api/test-engine/)。

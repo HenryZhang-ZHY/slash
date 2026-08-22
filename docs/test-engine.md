@@ -50,11 +50,12 @@ formats including JUnit, Cargo, and Vitest results. A run is normalized into
 the durable model before downstream flaky decisions are made. Provider-specific
 details do not leak into the reconciliation algorithm.
 
-Each suite has independently rotatable collection tokens. Slash stores a
-SHA-256 hash for bearer-token lookup and separately stores the raw value
-encrypted for the authenticated console. Tokens have an explicit active or
-revoked lifecycle; revoked tokens fail ingestion. Tokens and uploaded test
-output must never appear in logs.
+Each suite has one active collection token. Issuing a token atomically revokes
+the previous active token, and every token expires after 90 days. Slash returns
+the raw credential once, stores only its SHA-256 hash for bearer-token lookup,
+and exposes non-secret metadata for later audit and revocation by id. Expired
+or revoked tokens fail ingestion. Tokens and uploaded test output must never
+appear in logs.
 
 ## Flaky reconciliation
 

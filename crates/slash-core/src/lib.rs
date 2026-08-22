@@ -22,7 +22,4 @@ pub use pipeline::{PipelineContext, PipelineStage, StageOutput, TerminalReason};
 pub use test_flaky::{
     FLAKY_MIN_EXECUTIONS, ObservedStatus, has_fail_then_pass, is_flaky, recent_contains_failure,
 };
-pub use test_token::{
-    EncryptedCollectionToken, TokenCryptoError, crypto_random_token, decrypt_collection_token,
-    encrypt_collection_token, hash_token,
-};
+pub use test_token::{crypto_random_token, hash_token};

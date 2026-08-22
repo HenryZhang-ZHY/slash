@@ -229,11 +229,11 @@ pub async fn run() {
         )
         .route(
             "/api/test-engine/suites/{id}/tokens",
-            get(test_engine_api::get_token).post(test_engine_api::issue_token),
+            get(test_engine_api::list_tokens).post(test_engine_api::issue_token),
         )
         .route(
-            "/api/test-engine/suites/{id}/tokens/revoke",
-            post(test_engine_api::revoke_token),
+            "/api/test-engine/suites/{suite_id}/tokens/{token_id}",
+            delete(test_engine_api::revoke_token_by_id),
         )
         .route("/admin", get(admin_page))
         .route("/admin/{*path}", get(admin_page))
