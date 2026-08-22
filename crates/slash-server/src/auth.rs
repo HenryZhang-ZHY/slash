@@ -127,12 +127,14 @@ pub fn verify_token(secret: &AuthSecret, token: &str) -> Result<uuid::Uuid, Auth
 
 /// Build a `Set-Cookie` value for the session cookie.
 pub fn set_cookie_value(token: &str) -> String {
-    format!("{SESSION_COOKIE}={token}; Path=/; HttpOnly; SameSite=Lax; Max-Age={TOKEN_TTL_SECS}")
+    format!(
+        "{SESSION_COOKIE}={token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age={TOKEN_TTL_SECS}"
+    )
 }
 
 /// Build a `Set-Cookie` value that clears the session cookie (logout).
 pub fn clear_cookie_value() -> String {
-    format!("{SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0")
+    format!("{SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0")
 }
 
 /// Extract the session token from a raw `Cookie` header value.
@@ -234,6 +236,8 @@ mod tests {
         let v = set_cookie_value("abc");
         assert!(v.starts_with("slash_session=abc;"));
         assert!(v.contains("HttpOnly"));
+        assert!(v.contains("Secure"));
+        assert!(clear_cookie_value().contains("Secure"));
         let header = "something=1; slash_session=thetoken; other=2";
         assert_eq!(
             session_token_from_header(Some(header)).as_deref(),
