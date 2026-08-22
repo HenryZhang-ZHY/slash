@@ -455,8 +455,8 @@ fn parse_execution_status(status: &str) -> Option<ExecutionStatus> {
 /// skip/soft-fail them instead of running them — the bktec "skip/mute flaky"
 /// behavior, server-side.
 ///
-/// 200 with a JSON array of quarantined test names; 401 on a missing/unknown
-/// token; 500 on a storage failure.
+/// 200 with a JSON array of quarantined test names and states; 401 on a
+/// missing/unknown token; 500 on a storage failure.
 pub async fn handle_quarantined(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -475,7 +475,18 @@ pub async fn handle_quarantined(
     };
 
     match quarantined_tests(&state.pool, identity.suite_id).await {
-        Ok(names) => Ok((StatusCode::OK, axum::Json(serde_json::json!(names)))),
+        Ok(tests) => Ok((
+            StatusCode::OK,
+            axum::Json(serde_json::json!(
+                tests
+                    .into_iter()
+                    .map(|test| serde_json::json!({
+                        "name": test.name,
+                        "state": test.state.as_str(),
+                    }))
+                    .collect::<Vec<_>>()
+            )),
+        )),
         Err(error) => {
             tracing::error!(%error, suite = %identity.suite_key, "test-engine quarantined lookup failed");
             Err(StatusCode::INTERNAL_SERVER_ERROR)

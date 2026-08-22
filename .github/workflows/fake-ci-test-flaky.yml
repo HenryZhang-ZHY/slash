@@ -11,8 +11,8 @@ name: Fake CI Test Flaky
 #      (`/v1/test-engine/upload`, using the server-side collector),
 #      authenticated by a per-suite collection token.
 #   3. Consult the disposal endpoint (`/v1/test-engine/quarantined`) and, once
-#      the fake test has been muted/skipped, stop letting it fail the PR — the
-#      bktec "skip/mute flaky" behavior, server-side.
+#      the fake test has been muted, continue running and uploading it but
+#      soft-fail its result. Skip only an explicitly skipped test.
 #
 # To wire it up, a deployment must provide three bits of configuration to this
 # workflow (e.g. GitHub Actions vars/secrets on the slash repo):
@@ -46,15 +46,19 @@ jobs:
         run: |
           # Swallow failures: if the Test Engine isn't wired yet, behave as if
           # nothing is quarantined so this dogfood step still runs.
-          quarantined=""
+          quarantined="[]"
           if [ -n "${QUARANTINED_URL}" ] && [ -n "${SUITE_TOKEN}" ]; then
             quarantined="$(
               curl -sf -H "Authorization: Bearer ${SUITE_TOKEN}" "${QUARANTINED_URL}" || true
             )"
           fi
-          case "${quarantined}" in
-            *"tests::demo_flaky"*) echo "test_quarantined=true" >> "$GITHUB_ENV" ;;
-            *) echo "test_quarantined=false" >> "$GITHUB_ENV" ;;
+          test_state="$(
+            printf '%s' "${quarantined}" \
+              | jq -r '[.[] | select(.name == "tests::demo_flaky") | .state][0] // ""'
+          )"
+          case "${test_state}" in
+            muted|skipped) echo "test_state=${test_state}" >> "$GITHUB_ENV" ;;
+            *) echo "test_state=enabled" >> "$GITHUB_ENV" ;;
           esac
 
       - name: Run the fake flaky test
@@ -64,6 +68,12 @@ jobs:
           PR_NUMBER: ${{ inputs.slash_pr_number }}
         run: |
           echo "Starting fake flaky CI for PR #${PR_NUMBER} requested by ${ACTOR}"
+          if [ "${{ env.test_state }}" = "skipped" ]; then
+            echo "tests::demo_flaky skipped by an explicit operator decision"
+            echo "status=skipped" >> "$GITHUB_OUTPUT"
+            echo "exit_code=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           # Deterministic flakiness keyed on the build number: odd -> fail,
           # even -> pass. Over repeated invocations this yields a fail→pass
           # recovery for the detector.
@@ -84,7 +94,6 @@ jobs:
 
       - name: Upload results to Test Engine (ingestion hook)
         id: upload
-        if: ${{ env.test_quarantined == 'false' }}
         env:
           UPLOAD_URL: ${{ vars.TEST_ENGINE_UPLOAD_URL }}
           SUITE_TOKEN: ${{ secrets.TEST_ENGINE_SUITE_TOKEN }}
@@ -110,8 +119,11 @@ jobs:
       - name: Decide the PR outcome (disposal / bktec skip)
         id: outcome
         run: |
-          if [ "${{ env.test_quarantined }}" = "true" ]; then
-            echo "Test quarantined; marking soft-fail (does not block the PR)."
+          if [ "${{ env.test_state }}" = "muted" ]; then
+            echo "Muted test kept running and uploaded; marking soft-fail."
+            echo "conclusion=neutral" >> "$GITHUB_OUTPUT"
+          elif [ "${{ env.test_state }}" = "skipped" ]; then
+            echo "Test skipped by an explicit operator decision."
             echo "conclusion=neutral" >> "$GITHUB_OUTPUT"
           elif [ "${{ steps.test.outputs.exit_code }}" = "1" ]; then
             echo "Flaky test failed this run; block the PR (expect re-run + quarantine)."
