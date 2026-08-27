@@ -376,6 +376,7 @@ export default {
   'testengine.sortFailures': 'Most failures',
   'testengine.refreshCases': 'Refresh cases',
   'testengine.showingCases': 'Showing {{shown}} of {{total}} cases',
+  'testengine.showMoreCases': 'Show more cases ({{shown}} of {{total}})',
   'testengine.colTestCase': 'Test case',
   'testengine.colLatest': 'Latest',
   'testengine.colExecs': 'Execs',

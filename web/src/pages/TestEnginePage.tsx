@@ -43,6 +43,7 @@ export function TestEnginePage() {
   const deferredQuery = useDeferredValue(query)
   const [filter, setFilter] = useState<CaseFilter>('all')
   const [sort, setSort] = useState<CaseSort>('recent')
+  const [visibleCaseLimit, setVisibleCaseLimit] = useState(100)
   const [viewMode, setViewMode] = useState<'cases' | 'runs'>(initialLocation.view)
   const [compactView, setCompactView] = useState<'cases' | 'details'>(initialLocation.testId || initialLocation.runId ? 'details' : 'cases')
   const [panel, setPanel] = useState<ManagementPanel>(null)
@@ -130,6 +131,9 @@ export function TestEnginePage() {
       if (sort === 'failures') return right.failed_count - left.failed_count
       return new Date(right.last_captured ?? 0).getTime() - new Date(left.last_captured ?? 0).getTime()
     })
+  const visibleTests = filteredTests.slice(0, visibleCaseLimit)
+
+  useEffect(() => setVisibleCaseLimit(100), [deferredQuery, filter, selectedSuiteId, sort])
 
   const suitePassRate = selectedSuite
     ? percentage(selectedSuite.passed_executions, selectedSuite.execution_count)
@@ -234,12 +238,12 @@ export function TestEnginePage() {
               >
                 {t('testengine.createFirstSuite')}
               </button>
-            ) : (
+              ) : (
               suites.map((suite) => (
                 <button
                   key={suite.id}
                   type="button"
-                  onClick={() => setSelectedSuiteId(suite.id)}
+                  onClick={() => { setSelectedSuiteId(suite.id); setCompactView('cases') }}
                   className={`mr-2 min-w-48 rounded-lg border px-3 py-2.5 text-left transition-colors xl:mr-0 xl:mb-1 xl:w-full xl:min-w-0 ${
                     suite.id === selectedSuiteId
                       ? 'border-border bg-background shadow-sm'
@@ -329,7 +333,7 @@ export function TestEnginePage() {
 
           <div className="max-h-[70vh] overflow-auto xl:max-h-none xl:min-h-0 xl:flex-1">
             <div className="divide-y lg:hidden">
-              {loadingTests || tests === null ? <div className="px-4 py-12 text-center text-sm text-muted-foreground">{t('testengine.loadingTestCases')}</div> : filteredTests.length === 0 ? <div className="px-4 py-12 text-center text-sm text-muted-foreground">{t('testengine.noCasesMatch')}</div> : filteredTests.map((test) => (
+              {loadingTests || tests === null ? <div className="px-4 py-12 text-center text-sm text-muted-foreground">{t('testengine.loadingTestCases')}</div> : filteredTests.length === 0 ? <div className="px-4 py-12 text-center text-sm text-muted-foreground">{t('testengine.noCasesMatch')}</div> : visibleTests.map((test) => (
                 <button key={test.id} type="button" onClick={() => { setSelectedTestId(test.id); setCompactView('details') }} className={`w-full p-4 text-left transition-colors ${test.id === selectedTestId ? 'bg-muted' : 'hover:bg-muted/50'}`}>
                   <div className="flex items-start justify-between gap-3"><div className="min-w-0"><div className="truncate font-mono text-sm font-medium">{test.name}</div><div className="mt-1 truncate text-xs text-muted-foreground">{test.file ?? t('testengine.noSourceLocation')}</div></div><StatusBadge value={test.last_status} /></div>
                   <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground"><span>{t('testengine.execs', { count: test.execution_count })}</span><span>{t('testengine.passRate')}: {percentage(test.passed_count, test.execution_count)}%</span><span>{formatDuration(test.average_duration_ms)}</span>{test.state !== 'enabled' ? <StatusBadge value={test.state} /> : null}</div>
@@ -361,7 +365,7 @@ export function TestEnginePage() {
                     </td>
                   </tr>
                 ) : (
-                  filteredTests.map((test) => (
+                  visibleTests.map((test) => (
                     <tr
                       key={test.id}
                       onClick={() => {
@@ -404,6 +408,7 @@ export function TestEnginePage() {
                 )}
               </tbody>
             </table>
+            {visibleTests.length < filteredTests.length ? <div className="border-t p-4"><Button className="w-full" variant="outline" onClick={() => setVisibleCaseLimit((current) => current + 100)}>{t('testengine.showMoreCases', { shown: visibleTests.length, total: filteredTests.length })}</Button></div> : null}
           </div>
           </div>
           {viewMode === 'runs' && (

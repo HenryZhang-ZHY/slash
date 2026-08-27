@@ -376,6 +376,7 @@ export default {
   'testengine.sortFailures': '失败最多',
   'testengine.refreshCases': '刷新用例',
   'testengine.showingCases': '显示 {{shown}} / {{total}} 个用例',
+  'testengine.showMoreCases': '显示更多用例（{{shown}} / {{total}}）',
   'testengine.colTestCase': '测试用例',
   'testengine.colLatest': '最新',
   'testengine.colExecs': '执行',
