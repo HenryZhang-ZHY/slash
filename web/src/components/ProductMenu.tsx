@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
-import { Check, Info, Languages, Monitor, Moon, Settings2, Sun } from 'lucide-react'
+import { Check, Info, Languages, LogOut, Monitor, Moon, Settings, SlidersHorizontal, Sun, UserRound } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { Link } from 'react-router-dom'
 
 import { ProductMark } from '@/components/ProductMark'
 import { Button } from '@/components/ui/button'
@@ -10,7 +11,7 @@ import { SUPPORTED_LANGUAGES, currentLanguage, setLanguage } from '@/i18n'
 import { api } from '@/lib/api'
 import { initializeTheme, saveTheme, type ThemePreference } from '@/lib/theme'
 
-export function ProductMenu() {
+export function ProductMenu({ accountIdentity, onSignOut }: { accountIdentity?: string; onSignOut?: () => void }) {
   const { t } = useTranslation()
   const [theme, setTheme] = useState<ThemePreference>(() => initializeTheme())
   const [aboutOpen, setAboutOpen] = useState(false)
@@ -36,15 +37,16 @@ export function ProductMenu() {
   return (
     <>
       <Sheet>
-        <SheetTrigger render={<Button variant="ghost" size="icon-sm" aria-label={t('common.productMenu')} />}>
-          <Settings2 />
+        <SheetTrigger render={<Button variant="ghost" size="icon-sm" aria-label={accountIdentity ? t('common.accountMenu') : t('common.productMenu')} />}>
+          {accountIdentity ? <UserRound /> : <SlidersHorizontal />}
         </SheetTrigger>
         <SheetContent side="right" className="w-full sm:max-w-sm">
           <SheetHeader>
-            <SheetTitle>{t('common.preferences')}</SheetTitle>
-            <SheetDescription>{t('common.preferencesDescription')}</SheetDescription>
+            <SheetTitle>{accountIdentity ? t('common.account') : t('common.preferences')}</SheetTitle>
+            <SheetDescription>{accountIdentity ?? t('common.preferencesDescription')}</SheetDescription>
           </SheetHeader>
           <div className="space-y-6 px-4 pb-6">
+            {accountIdentity ? <section className="space-y-2"><Button className="w-full justify-start" variant="outline" render={<Link to="/settings" />}><Settings />{t('app.accountSettings')}</Button></section> : null}
             <section>
               <div className="mb-2 flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground"><Languages className="size-4" />{t('app.language')}</div>
               <div className="grid grid-cols-2 gap-2">
@@ -66,6 +68,7 @@ export function ProductMenu() {
               </div>
             </section>
             <Button className="w-full justify-start" variant="outline" onClick={() => setAboutOpen(true)}><Info />{t('about.title')}</Button>
+            {onSignOut ? <Button className="w-full justify-start" variant="ghost" onClick={onSignOut}><LogOut />{t('app.signOut')}</Button> : null}
           </div>
         </SheetContent>
       </Sheet>

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { FlaskConical, History, LayoutDashboard, LogOut, Menu, Settings, Users } from 'lucide-react'
+import { FlaskConical, History, LayoutDashboard, Menu, Users } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { NavLink, Outlet, useLocation } from 'react-router-dom'
 
@@ -8,6 +8,7 @@ import { PageTitle } from '@/components/PageTitle'
 import { ProductMark } from '@/components/ProductMark'
 import { ProductMenu } from '@/components/ProductMenu'
 import { api, type MeResponse } from '@/lib/api'
+import { activeSection, consoleSections } from '@/lib/navigation'
 import { Sheet, SheetClose, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
 
 export interface DashboardContext {
@@ -63,22 +64,11 @@ export function AppShell() {
     )
   }
 
-  const navItems = [
-    { to: '/', label: t('app.overview'), icon: LayoutDashboard, end: true },
-    { to: '/activity', label: t('app.activity'), icon: History, end: false },
-    { to: '/tests', label: t('app.testEngineSection'), icon: FlaskConical, end: false },
-    { to: '/settings', label: t('app.settings'), icon: Settings, end: false },
-  ]
-
-  const activeLabel = location.pathname.startsWith('/activity')
-    ? t('app.activity')
-    : location.pathname.startsWith('/tests')
-      ? t('app.testEngineSection')
-    : location.pathname.startsWith('/settings')
-      ? t('app.settings')
-      : location.pathname.startsWith('/teams/')
-        ? t('app.workspace')
-      : t('app.overview')
+  const icons = { overview: LayoutDashboard, activity: History, tests: FlaskConical }
+  const labels = { overview: t('app.overview'), activity: t('app.activity'), tests: t('app.testEngineSection') }
+  const navItems = consoleSections[0].items.map((item) => ({ ...item, label: labels[item.id], icon: icons[item.id] }))
+  const active = activeSection(location.pathname)
+  const activeLabel = active === 'activity' ? t('app.activity') : active === 'tests' ? t('app.testEngineSection') : active === 'account' ? t('app.accountSettings') : active === 'team' ? t('app.teamManagement') : t('app.overview')
   const accountIdentity = me.user.email ?? (me.connections.github ? `@${me.connections.github.login}` : me.user.displayName)
 
   return (
@@ -90,21 +80,8 @@ export function AppShell() {
           <span className="text-sm font-semibold">{t('app.slash')}</span>
         </div>
 
-        <div className="border-b px-3 py-3">
-          <label className="block px-2 pb-1 text-xs font-medium uppercase text-muted-foreground" htmlFor="workspace-switcher">{t('app.workspace')}</label>
-          <select
-            id="workspace-switcher"
-            className="h-9 w-full rounded-md border bg-background px-2 text-sm"
-            value={location.pathname.startsWith('/teams/') ? location.pathname.split('/')[2] : ''}
-            onChange={(event) => { window.location.href = event.target.value ? `/teams/${event.target.value}` : '/' }}
-          >
-            <option value="">{t('app.allWorkspaces')}</option>
-            {me.teams.map((team) => <option key={team.id} value={team.slug}>{team.name}</option>)}
-          </select>
-        </div>
-
         <nav className="flex-1 space-y-1 px-3 py-3">
-          <div className="px-2 pb-1.5 text-xs font-medium text-muted-foreground uppercase">{t('app.workspace')}</div>
+          <div className="px-2 pb-1.5 text-xs font-medium text-muted-foreground uppercase">{t('app.product')}</div>
           {navItems.map((item) => {
             const Icon = item.icon
             return (
@@ -123,20 +100,9 @@ export function AppShell() {
               </NavLink>
             )
           })}
-          <div className="mt-5 px-2 pb-1.5 text-xs font-medium text-muted-foreground uppercase">{t('app.organization')}</div>
-          <div className="flex h-8 items-center gap-2 px-2 text-sm text-muted-foreground">
-            <Users className="size-4" />
-            {t('app.teamCountValue', { count: me.teams.length })}
-          </div>
+          <div className="mt-5 px-2 pb-1.5 text-xs font-medium text-muted-foreground uppercase">{t('app.teams')}</div>
+          {me.teams.map((team) => <NavLink key={team.id} to={`/teams/${team.slug}`} className={({ isActive }) => `flex h-9 items-center gap-2 rounded-md px-2 text-sm transition-colors ${isActive ? 'bg-sidebar-accent font-medium text-sidebar-accent-foreground' : 'text-muted-foreground hover:bg-sidebar-accent/70 hover:text-foreground'}`}><Users className="size-4" /><span className="truncate">{team.name}</span></NavLink>)}
         </nav>
-
-        <div className="border-t p-3">
-          <div className="mb-2 truncate px-2 text-xs text-muted-foreground">{accountIdentity}</div>
-          <Button className="w-full justify-start" variant="ghost" onClick={logout}>
-            <LogOut />
-            {t('app.signOut')}
-          </Button>
-        </div>
       </aside>
 
       <div className="min-w-0 bg-background">
@@ -148,13 +114,15 @@ export function AppShell() {
             <span className="font-medium">{activeLabel}</span>
           </div>
           <div className="flex items-center gap-2">
-            <ProductMenu />
+            <ProductMenu accountIdentity={accountIdentity} onSignOut={logout} />
             <Sheet>
               <SheetTrigger className="md:hidden" render={<Button variant="ghost" size="icon-sm" aria-label={t('app.openNavigation')} />}><Menu /></SheetTrigger>
               <SheetContent side="left" className="w-[min(20rem,88vw)]">
                 <SheetHeader><SheetTitle className="flex items-center gap-2"><ProductMark />{t('app.slash')}</SheetTitle></SheetHeader>
                 <nav className="space-y-1 px-4">
                   {navItems.map((item) => { const Icon = item.icon; return <SheetClose key={item.to} render={<NavLink to={item.to} end={item.end} className={({ isActive }) => `flex h-11 items-center gap-3 rounded-lg px-3 ${isActive ? 'bg-muted font-medium' : 'text-muted-foreground'}`} />}><Icon className="size-4" />{item.label}</SheetClose> })}
+                  <div className="px-3 pt-5 pb-1 text-xs font-medium uppercase text-muted-foreground">{t('app.teams')}</div>
+                  {me.teams.map((team) => <SheetClose key={team.id} render={<NavLink to={`/teams/${team.slug}`} className={({ isActive }) => `flex h-11 items-center gap-3 rounded-lg px-3 ${isActive ? 'bg-muted font-medium' : 'text-muted-foreground'}`} />}><Users className="size-4" />{team.name}</SheetClose>)}
                 </nav>
               </SheetContent>
             </Sheet>

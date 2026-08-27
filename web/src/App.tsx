@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ArrowRight, FlaskConical, Users } from 'lucide-react'
+import { ArrowRight, FlaskConical, History, Users } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import {
   BrowserRouter,
@@ -8,6 +8,7 @@ import {
   Routes,
   useNavigate,
   useOutletContext,
+  Link,
 } from 'react-router-dom'
 
 import { Button } from '@/components/ui/button'
@@ -50,10 +51,7 @@ function HomePage() {
           <h1 className="text-2xl font-semibold">{t('app.overview')}</h1>
           <p className="mt-1 text-sm text-muted-foreground">{t('app.homeSubtitle')}</p>
         </div>
-        <Button onClick={() => navigate('/tests')}>
-          <FlaskConical />
-          {t('app.openTestEngine')}
-        </Button>
+        <div className="flex gap-2"><Button variant="outline" onClick={() => navigate('/activity')}><History />{t('app.openActivity')}</Button><Button onClick={() => navigate('/tests')}><FlaskConical />{t('app.openTestEngine')}</Button></div>
       </div>
 
       <div className="mt-8 grid border-y sm:grid-cols-2 xl:grid-cols-4">
@@ -70,7 +68,7 @@ function HomePage() {
         ))}
       </div>
 
-      <div className="mt-8 grid gap-8 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.55fr)]">
+      <div className="mt-8 grid gap-8 xl:grid-cols-[minmax(0,0.8fr)_minmax(520px,1.2fr)]">
         <section>
           <div className="mb-3 flex items-center gap-2">
             <Users className="size-4" />
@@ -81,40 +79,24 @@ function HomePage() {
               <div className="px-4 py-8 text-sm text-muted-foreground">{t('app.noTeams')}</div>
             ) : (
               me.teams.map((team, index) => (
-                <div key={team.id} className={`flex items-center justify-between px-4 py-3 ${index > 0 ? 'border-t' : ''}`}>
+                <Link to={`/teams/${team.slug}`} key={team.id} className={`flex items-center justify-between px-4 py-3 transition-colors hover:bg-muted/40 ${index > 0 ? 'border-t' : ''}`}>
                   <div>
                     <div className="text-sm font-medium">{team.name}</div>
                     <div className="text-xs text-muted-foreground">{team.slug}</div>
                   </div>
-                  <span className="text-xs text-muted-foreground">{t('app.active')}</span>
-                </div>
+                  <span className="flex items-center gap-1 text-xs text-muted-foreground">{t('app.manageTeam')}<ArrowRight className="size-3" /></span>
+                </Link>
               ))
             )}
           </div>
         </section>
 
         <section>
-          <div className="mb-3 flex items-center gap-2">
-            <FlaskConical className="size-4" />
-            <h2 className="text-sm font-semibold">{t('app.testEngineSection')}</h2>
+          <div className="mb-3 text-sm font-semibold">{t('app.engineeringAreas')}</div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <button type="button" onClick={() => navigate('/activity')} className="flex min-h-28 items-start justify-between border p-4 text-left transition-colors hover:bg-muted/40"><div><History className="mb-3 size-5" /><div className="text-sm font-medium">{t('app.commandAutomation')}</div><div className="mt-1 text-xs text-muted-foreground">{me.connections.github ? t('app.commandAutomationReady') : t('app.commandAutomationConnect')}</div></div><ArrowRight className="size-4 text-muted-foreground" /></button>
+            {error ? <StatePanel kind="error" title={t('app.testDataUnavailable')} description={error} retry={loadSuites} /> : <button type="button" onClick={() => navigate('/tests')} className="flex min-h-28 items-start justify-between border p-4 text-left transition-colors hover:bg-muted/40"><div><FlaskConical className="mb-3 size-5" /><div className="text-sm font-medium">{t('app.testEngineCta')}</div><div className="mt-1 text-xs text-muted-foreground">{t('app.suiteSummary', { count: suites?.length ?? 0, cases: testCount?.toLocaleString() ?? '—', executions: executionCount?.toLocaleString() ?? '—' })}</div></div><ArrowRight className="size-4 text-muted-foreground" /></button>}
           </div>
-          {error ? <StatePanel kind="error" title={t('app.testDataUnavailable')} description={error} retry={loadSuites} /> : <button
-            type="button"
-            onClick={() => navigate('/tests')}
-            className="flex w-full items-center justify-between border px-4 py-4 text-left transition-colors hover:bg-muted/40"
-          >
-            <div>
-              <div className="text-sm font-medium">{t('app.testEngineCta')}</div>
-              <div className="mt-1 text-xs text-muted-foreground">
-                {t('app.suiteSummary', {
-                  count: suites?.length ?? 0,
-                  cases: testCount?.toLocaleString() ?? '—',
-                  executions: executionCount?.toLocaleString() ?? '—',
-                })}
-              </div>
-            </div>
-            <ArrowRight className="size-4 text-muted-foreground" />
-          </button>}
         </section>
       </div>
     </div>
