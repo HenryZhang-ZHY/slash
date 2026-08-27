@@ -838,6 +838,7 @@ mod tests {
             github_app: None,
             web_dir: std::sync::Arc::from(""),
             github_oauth: None,
+            invitation_mailer: None,
         }
     }
 

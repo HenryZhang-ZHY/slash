@@ -15,6 +15,7 @@ pub mod config;
 pub mod correlation;
 pub mod db;
 pub mod deliveries;
+pub mod email;
 pub mod flaky;
 pub mod github_oauth;
 pub mod github_user_access;
@@ -26,6 +27,7 @@ pub mod junit;
 pub mod metrics;
 pub mod pipeline;
 pub mod sweeper;
+pub mod teams;
 pub mod test_engine;
 pub mod test_engine_api;
 pub mod test_support;
@@ -73,6 +75,9 @@ pub struct AppState {
     pub web_dir: Arc<str>,
     /// GitHub App user-auth config. `None` when it is not configured.
     pub github_oauth: Option<github_oauth::OauthState>,
+    /// Optional transactional mailer. Team invitation creation is disabled
+    /// when it is absent.
+    pub invitation_mailer: Option<email::InvitationMailer>,
 }
 
 /// Boots the server: configuration, database, metrics, GitHub App, then the
@@ -131,6 +136,22 @@ pub async fn run() {
             auth::AuthSecret(Arc::from(config.auth_secret.as_str())),
         )
     });
+    let invitation_mailer = match config.smtp.as_ref() {
+        Some(smtp) => match email::InvitationMailer::new(
+            &smtp.host,
+            smtp.port,
+            &smtp.from_address,
+            &smtp.from_name,
+            &smtp.base_url,
+        ) {
+            Ok(mailer) => Some(mailer),
+            Err(error) => {
+                tracing::error!(%error, "invalid email configuration");
+                std::process::exit(1);
+            }
+        },
+        None => None,
+    };
     let state = AppState {
         pool: pool.clone(),
         metrics: metrics.clone(),
@@ -143,6 +164,7 @@ pub async fn run() {
         github_app: Some(github_app.clone()),
         web_dir: Arc::from(web_dir.as_str()),
         github_oauth,
+        invitation_mailer,
     };
 
     worker::spawn_pool(
@@ -233,6 +255,22 @@ pub async fn run() {
         )
         .route("/api/invocations", get(command_activity::list_invocations))
         .route("/api/teams", post(userapi::create_team))
+        .route("/api/teams/{team_id}/members", get(teams::roster))
+        .route(
+            "/api/teams/{team_id}/members/{user_id}",
+            axum::routing::patch(teams::update_member).delete(teams::remove_member),
+        )
+        .route("/api/teams/{team_id}/invitations", post(teams::invite))
+        .route(
+            "/api/teams/{team_id}/invitations/{invitation_id}",
+            delete(teams::revoke),
+        )
+        .route(
+            "/api/teams/{team_id}/invitations/{invitation_id}/resend",
+            post(teams::resend),
+        )
+        .route("/api/team-invitations/preview", post(teams::preview))
+        .route("/api/team-invitations/accept", post(teams::accept))
         .route(
             "/api/test-engine/suites",
             get(test_engine_api::list_suites).post(test_engine_api::create_suite),
