@@ -84,6 +84,12 @@ impl OauthState {
     pub(crate) fn api_base_url(&self) -> &str {
         &self.endpoints.api
     }
+
+    #[cfg(test)]
+    pub(crate) fn with_api_base_url(mut self, api: impl Into<Arc<str>>) -> Self {
+        self.endpoints.api = api.into();
+        self
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]

@@ -231,6 +231,7 @@ pub async fn run() {
             "/api/github/installations/{installation_id}/repositories",
             get(command_activity::list_github_repositories),
         )
+        .route("/api/invocations", get(command_activity::list_invocations))
         .route("/api/teams", post(userapi::create_team))
         .route(
             "/api/test-engine/suites",
