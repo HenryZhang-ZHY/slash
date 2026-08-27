@@ -10,14 +10,18 @@ sidebar:
 
 ## 管理 Suites
 
-使用 suite 选择器查看 execution 总数、通过率以及 muted 或 skipped 数量。创建 suite
-需要 owner、repository 和 suite key。Slash 创建 suite 后，再明确创建它的第一个
-collection token。
+使用 suite 选择器查看全周期 execution 总数、通过率以及 muted 或 skipped 数量。创建
+suite 需要 owner、repository 和 suite key。Slash 创建 suite 后，打开**采集配置**创建
+它的第一个 collection token，并查看采集端点。
 
 ## 查找并检查测试
 
 按状态过滤，按名称、文件或 label 搜索，并按最近时间、名称、时长或失败数排序。选择
-测试后可以查看元数据、聚合历史和单条 execution。
+测试后可以查看元数据、聚合历史和单条 execution。大型筛选结果会分批渲染，使用
+**显示更多用例**展示下一批。
+
+当前 suite、视图、测试或运行都会写入 URL。刷新、收藏或分享该 URL 会恢复相同的检查
+上下文。在小屏幕上，选择测试或运行会打开详情视图；使用明确的返回操作回到列表。
 
 ## 查看运行
 

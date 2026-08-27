@@ -11,15 +11,22 @@ than only in the browser.
 
 ## Manage suites
 
-Use the suite selector to review execution totals, pass rate, and muted or
-skipped counts. Creating a suite requires an owner, repository, and suite key.
-After Slash creates the suite, create its first collection token explicitly.
+Use the suite selector to review all-time execution totals, pass rate, and
+muted or skipped counts. Creating a suite requires an owner, repository, and
+suite key. After Slash creates the suite, open **Collection setup** to create
+its first collection token and review collector endpoints.
 
 ## Find and inspect tests
 
 Filter tests by state, search by name, file, or label, and sort by recency,
 name, duration, or failure count. Select a test to inspect its metadata,
-aggregate history, and individual execution rows.
+aggregate history, and individual execution rows. Large filtered lists render
+in bounded batches; use **Show more cases** to reveal the next batch.
+
+The selected suite, view, test, or run is represented in the URL. Refreshing,
+bookmarking, or sharing that URL restores the same inspection context. On a
+small screen, selecting a test or run opens its detail view; use the explicit
+back action to return to the list.
 
 ## Inspect runs
 
