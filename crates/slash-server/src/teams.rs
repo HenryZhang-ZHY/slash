@@ -676,6 +676,7 @@ fn random_token() -> Result<String, ring::error::Unspecified> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::db;
