@@ -16,6 +16,7 @@ pub mod db;
 pub mod deliveries;
 pub mod flaky;
 pub mod github_oauth;
+pub mod github_user_access;
 mod identity;
 pub mod ingestion;
 pub mod installations;

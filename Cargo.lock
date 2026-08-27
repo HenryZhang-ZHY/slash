@@ -2881,6 +2881,7 @@ dependencies = [
  "prometheus",
  "quick-xml",
  "reqwest",
+ "ring",
  "serde",
  "serde_json",
  "serial_test",
