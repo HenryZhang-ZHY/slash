@@ -11,8 +11,44 @@ export interface User {
 
 export interface Team {
   id: string
+  organizationId: string
   name: string
   slug: string
+  role: 'member' | 'maintainer'
+}
+
+export type TeamRole = 'member' | 'maintainer'
+
+export interface TeamMember {
+  userId: string
+  displayName: string
+  email: string | null
+  role: TeamRole
+  joinedAt: string
+}
+
+export interface TeamInvitation {
+  id: string
+  email: string
+  role: TeamRole
+  invitedBy: string
+  createdAt: string
+  lastSentAt: string
+  expiresAt: string
+}
+
+export interface TeamRoster {
+  viewerRole: TeamRole
+  members: TeamMember[]
+  invitations: TeamInvitation[]
+}
+
+export interface InvitationPreview {
+  teamName: string
+  teamSlug: string
+  email: string
+  role: TeamRole
+  expiresAt: string
 }
 
 export interface GithubConnection {
@@ -97,6 +133,17 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ name, slug }),
     }),
+}
+
+export const teamApi = {
+  roster: (teamId: string) => request<TeamRoster>(`/api/teams/${encodeURIComponent(teamId)}/members`),
+  invite: (teamId: string, email: string, role: TeamRole) => request<TeamInvitation>(`/api/teams/${encodeURIComponent(teamId)}/invitations`, { method: 'POST', body: JSON.stringify({ email, role }) }),
+  resend: (teamId: string, invitationId: string) => request<void>(`/api/teams/${encodeURIComponent(teamId)}/invitations/${encodeURIComponent(invitationId)}/resend`, { method: 'POST' }),
+  revoke: (teamId: string, invitationId: string) => request<void>(`/api/teams/${encodeURIComponent(teamId)}/invitations/${encodeURIComponent(invitationId)}`, { method: 'DELETE' }),
+  updateMember: (teamId: string, userId: string, role: TeamRole) => request<void>(`/api/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(userId)}`, { method: 'PATCH', body: JSON.stringify({ role }) }),
+  removeMember: (teamId: string, userId: string) => request<void>(`/api/teams/${encodeURIComponent(teamId)}/members/${encodeURIComponent(userId)}`, { method: 'DELETE' }),
+  previewInvitation: (token: string) => request<InvitationPreview>('/api/team-invitations/preview', { method: 'POST', body: JSON.stringify({ token }) }),
+  acceptInvitation: (token: string) => request<{ teamSlug: string }>('/api/team-invitations/accept', { method: 'POST', body: JSON.stringify({ token }) }),
 }
 
 export interface AccessToken {

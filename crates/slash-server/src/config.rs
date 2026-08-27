@@ -14,6 +14,14 @@ pub enum ConfigError {
     UnreadableFile(&'static str, String),
 }
 
+pub struct SmtpConfig {
+    pub host: String,
+    pub port: u16,
+    pub from_address: String,
+    pub from_name: String,
+    pub base_url: String,
+}
+
 pub struct ServerConfig {
     pub github_app_id: u64,
     pub github_private_key_path: PathBuf,
@@ -34,6 +42,7 @@ pub struct ServerConfig {
     pub github_base_url: Option<String>,
     /// Number of durable delivery consumers started by this process.
     pub delivery_workers: usize,
+    pub smtp: Option<SmtpConfig>,
 }
 
 impl ServerConfig {
@@ -97,6 +106,35 @@ impl ServerConfig {
                 .ok_or_else(|| ConfigError::InvalidInt("SLASH_DELIVERY_WORKERS", raw.clone()))?,
             None => 8,
         };
+        let smtp = match lookup("SLASH_SMTP_HOST") {
+            Some(host) => {
+                let from_address = require(lookup, "SLASH_EMAIL_FROM")?;
+                let base_url = require(lookup, "SLASH_BASE_URL")?;
+                let port = match lookup("SLASH_SMTP_PORT") {
+                    Some(raw) => raw
+                        .parse::<u16>()
+                        .map_err(|_| ConfigError::InvalidInt("SLASH_SMTP_PORT", raw.clone()))?,
+                    None => 25,
+                };
+                Some(SmtpConfig {
+                    host,
+                    port,
+                    from_address,
+                    from_name: lookup("SLASH_EMAIL_FROM_NAME")
+                        .unwrap_or_else(|| "Slash".to_string()),
+                    base_url,
+                })
+            }
+            None => {
+                if lookup("SLASH_EMAIL_FROM").is_some()
+                    || lookup("SLASH_SMTP_PORT").is_some()
+                    || lookup("SLASH_EMAIL_FROM_NAME").is_some()
+                {
+                    return Err(ConfigError::MissingEnvVar("SLASH_SMTP_HOST"));
+                }
+                None
+            }
+        };
 
         Ok(Self {
             github_app_id,
@@ -109,6 +147,7 @@ impl ServerConfig {
             github_client_secret,
             github_base_url,
             delivery_workers,
+            smtp,
         })
     }
 }
@@ -331,6 +370,30 @@ mod tests {
             Err(ConfigError::MissingEnvVar("SLASH_BASE_URL")) => {}
             _ => panic!("expected a missing public base URL error"),
         }
+    }
+
+    #[test]
+    fn smtp_relay_configuration_is_optional_but_complete_when_enabled() {
+        let mut env = env_of(&[
+            ("SLASH_GITHUB_APP_ID", "42"),
+            ("SLASH_GITHUB_PRIVATE_KEY_PATH", "/key.pem"),
+            ("SLASH_SMTP_HOST", "smtprelay"),
+            ("SLASH_EMAIL_FROM", "noreply@example.com"),
+            ("SLASH_BASE_URL", "https://slash.example.com"),
+        ]);
+        let env = file_env(&mut env);
+        let config = load(&env).unwrap();
+        let smtp = config.smtp.unwrap();
+        assert_eq!(smtp.host, "smtprelay");
+        assert_eq!(smtp.port, 25);
+        assert_eq!(smtp.from_name, "Slash");
+
+        let mut partial = env.clone();
+        partial.remove("SLASH_SMTP_HOST");
+        assert!(matches!(
+            load(&partial),
+            Err(ConfigError::MissingEnvVar("SLASH_SMTP_HOST"))
+        ));
     }
 
     #[test]

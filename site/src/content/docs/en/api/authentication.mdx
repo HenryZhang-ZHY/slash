@@ -247,3 +247,30 @@ Success: `200 OK`.
 | `409` | The organization already has the slug |
 | `422` | Name or slug validation failed |
 | `500` | The team could not be created or read back |
+
+## Team membership and invitations
+
+`GET /api/teams/{team_id}/members` returns `viewerRole`, `members`, and pending
+`invitations`. Members can read the roster; only maintainers receive pending
+invitations. Invitation and membership mutations require the browser session.
+
+| Method | Path | Maintainer action |
+| --- | --- | --- |
+| `POST` | `/api/teams/{team_id}/invitations` | Invite `{ "email": "person@example.com", "role": "member" }` |
+| `POST` | `/api/teams/{team_id}/invitations/{invitation_id}/resend` | Rotate the credential and resend email |
+| `DELETE` | `/api/teams/{team_id}/invitations/{invitation_id}` | Revoke a pending invitation |
+| `PATCH` | `/api/teams/{team_id}/members/{user_id}` | Set `{ "role": "member" }` or `maintainer` |
+| `DELETE` | `/api/teams/{team_id}/members/{user_id}` | Remove a member |
+
+Creating an invitation returns `201`. It normalizes the email, expires after
+seven days, and replaces any pending invitation for the same Team and email.
+`503` means invitation email is disabled or delivery failed; after a delivery
+failure, the saved invitation remains available to resend. Role changes and
+removals return `409` if they would remove the last maintainer.
+
+`POST /api/team-invitations/preview` accepts `{ "token": "..." }` without
+authentication and returns the Team, invited email, role, and expiry. The Web
+App reads the token from the email URL fragment, so it is not included in the
+HTTP request URL. `POST /api/team-invitations/accept` uses the same body and a
+browser session; success returns `{ "teamSlug": "platform" }`. Invalid,
+expired, revoked, or already-used credentials return `410`.

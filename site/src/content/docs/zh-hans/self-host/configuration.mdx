@@ -17,7 +17,11 @@ sidebar:
 | `SLASH_ADMIN_SECRET_PATH` | 否 | 开启独立的实例管理表面 |
 | `SLASH_GITHUB_CLIENT_ID` | 否 | 使用同一个 App 开启 GitHub 用户登录 |
 | `SLASH_GITHUB_CLIENT_SECRET_PATH` | 设置 Client ID 时 | 包含 GitHub App Client Secret 的文件 |
-| `SLASH_BASE_URL` | 开启 GitHub 登录时 | 用于生成 callback URL 的公开 origin |
+| `SLASH_BASE_URL` | 开启 GitHub 登录或邮件时 | 用于生成 callback 与邀请 URL 的公开 origin |
+| `SLASH_SMTP_HOST` | 否 | 通过受信任、无认证的 SMTP relay 开启邀请邮件 |
+| `SLASH_SMTP_PORT` | 否 | SMTP relay 端口；默认 `25` |
+| `SLASH_EMAIL_FROM` | 开启 SMTP 时 | 发件邮箱地址 |
+| `SLASH_EMAIL_FROM_NAME` | 否 | 发件人显示名；默认 `Slash` |
 | `SLASH_WEB_DIR` | 否 | 构建后的 Web 控制台目录；默认 `web/dist` |
 | `SLASH_DELIVERY_WORKERS` | 否 | 每个 server 进程的正整数 worker 数；默认 `8` |
 | `RUST_LOG` | 否 | `tracing_subscriber` filter，例如 `info` |
@@ -58,3 +62,10 @@ Slash 可以使用同一个 GitHub App 处理仓库自动化和用户身份：
 Slash 只读取已认证的 `/user` profile，不申请 GitHub 邮箱权限、不按邮箱推断账户相同，
 也不保存 provider access token。已有密码用户应先登录要保留的账户，再从 `/settings`
 连接 GitHub。
+
+## 开启邀请邮件
+
+设置 `SLASH_SMTP_HOST`、`SLASH_EMAIL_FROM` 和 `SLASH_BASE_URL`，再把 Slash
+服务接入 relay 的私有网络。Slash 不使用 SMTP 认证；需要上游凭据的部署应把凭据保留在
+私有 relay（例如 `smtprelay`）中，而不是交给 Slash。邮件配置不完整会阻止启动。未配置
+邮件时，已有 Team 成员关系仍可使用，但 maintainer 不能创建邀请。

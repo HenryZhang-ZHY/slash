@@ -223,3 +223,26 @@ curl -b cookies.txt \
 | `409` | 组织已拥有该 slug |
 | `422` | 名称或 slug 校验失败 |
 | `500` | 团队无法被创建或读回 |
+
+## 团队成员与邀请
+
+`GET /api/teams/{team_id}/members` 返回 `viewerRole`、`members` 和待接受的
+`invitations`。成员可以读取成员列表；只有 maintainer 会收到待接受邀请。邀请与成员变更
+只接受浏览器 session。
+
+| 方法 | 路径 | Maintainer 操作 |
+| --- | --- | --- |
+| `POST` | `/api/teams/{team_id}/invitations` | 以 `{ "email": "person@example.com", "role": "member" }` 邀请 |
+| `POST` | `/api/teams/{team_id}/invitations/{invitation_id}/resend` | 轮换凭据并重新发送邮件 |
+| `DELETE` | `/api/teams/{team_id}/invitations/{invitation_id}` | 撤销待接受邀请 |
+| `PATCH` | `/api/teams/{team_id}/members/{user_id}` | 把角色设为 `member` 或 `maintainer` |
+| `DELETE` | `/api/teams/{team_id}/members/{user_id}` | 移除成员 |
+
+创建邀请返回 `201`。邮箱会被归一化，邀请七天后过期；同一 Team 和邮箱已有待接受邀请时
+会被替换。`503` 表示邀请邮件未开启或投递失败；投递失败后，已保存邀请仍可重新发送。
+如果角色变更或移除会删除最后一个 maintainer，则返回 `409`。
+
+`POST /api/team-invitations/preview` 无需认证，接受 `{ "token": "..." }`，返回 Team、
+受邀邮箱、角色和到期时间。Web App 从邮件 URL fragment 读取 token，因此 HTTP 请求 URL
+不会包含它。`POST /api/team-invitations/accept` 使用相同 body 和浏览器 session；成功返回
+`{ "teamSlug": "platform" }`。无效、过期、已撤销或已使用的凭据返回 `410`。

@@ -554,6 +554,7 @@ mod tests {
             github_app: Some(Arc::new(github_app)),
             web_dir: Arc::from("."),
             github_oauth: None,
+            invitation_mailer: None,
         })
     }
 

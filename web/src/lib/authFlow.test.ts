@@ -8,8 +8,10 @@ function me(teamCount: number): MeResponse {
     user: { id: 'user-1', email: 'user@example.com', displayName: 'User' },
     teams: Array.from({ length: teamCount }, (_, index) => ({
       id: `team-${index}`,
+      organizationId: 'org-1',
       name: `Team ${index}`,
       slug: `team-${index}`,
+      role: 'maintainer',
     })),
     connections: { github: null },
   }

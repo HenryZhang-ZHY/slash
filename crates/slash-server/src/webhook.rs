@@ -154,6 +154,7 @@ mod tests {
             github_app: None,
             web_dir: Arc::from("."),
             github_oauth: None,
+            invitation_mailer: None,
         })
     }
 

@@ -841,6 +841,7 @@ mod tests {
             )),
             web_dir: Arc::from(""),
             github_oauth: Some(oauth),
+            invitation_mailer: None,
         };
 
         let response = list_invocations(

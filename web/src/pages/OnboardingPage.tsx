@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { api } from '@/lib/api'
+import { hasPendingInvitation } from '@/lib/pendingInvitation'
 
 export function OnboardingPage() {
   const [name, setName] = useState('')
@@ -23,6 +24,10 @@ export function OnboardingPage() {
     api
       .me()
       .then((me) => {
+        if (hasPendingInvitation()) {
+          navigate('/invitations/accept', { replace: true })
+          return
+        }
         if (me.teams.length > 0) navigate('/', { replace: true })
       })
       .catch(() => navigate('/login'))
