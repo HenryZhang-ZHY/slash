@@ -31,16 +31,18 @@ GitHub 仓库权限独立决定。
 
 ## 管理团队成员
 
-从工作区切换器选择 Team。成员可以查看成员列表；maintainer 可以按邮箱邀请 member 或
+从控制台导航的**团队**分组选择 Team，也可以从概览的团队列表进入。移动端导航提供相同
+的 Team 入口。成员可以查看成员列表；maintainer 可以按邮箱邀请 member 或
 maintainer、重新发送或撤销待接受邀请、调整角色和移除成员。Slash 始终保证至少保留一个
 maintainer。
 
 无论收件人已有 Slash 账户还是需要注册，邮件链接都能使用。登录后浏览器会返回邀请页，
 由收件人确认接受。邀请七天后过期，并且只能使用一次。
 
-## 使用工作区
+## 使用控制台
 
-工作区根路径显示团队和 Test Engine 汇总、你的团队，以及前往 `/tests` 的快捷入口。
+概览把产品分为两个领域：用于仓库活动的**命令自动化**和用于测试智能的
+**Test Engine**。页面还会显示测试汇总和你所管理团队的直接入口。
 使用 [Test Engine 控制台](/zh-hans/test-engine/console/)创建 suites 并查看结果。
 
 在 `/activity` 打开**命令活动**，可以查看已连接 GitHub 身份当前可读取仓库中的已接受
@@ -49,12 +51,12 @@ maintainer。
 
 ## 连接 GitHub
 
-打开 `/settings` 查看与账户关联的 GitHub 身份。尚未关联时，可以从该页面开始连接
+打开账户菜单并选择**账户设置**，或直接打开 `/settings`，查看与账户关联的 GitHub 身份。尚未关联时，可以从该页面开始连接
 流程。Slash 根据认证后的 provider callback 解析连接结果，不信任浏览器 URL 参数。
 
 ## 管理密码
 
-打开 `/settings` 可以修改已有密码，或为目前只使用 GitHub 等外部身份的账户添加密码
+打开**账户设置**可以修改已有密码，或为目前只使用 GitHub 等外部身份的账户添加密码
 登录。已有密码的用户必须输入当前密码；只有外部身份的用户需要选择一个唯一登录邮箱，
 并设置至少八个字符的密码。
 
@@ -63,9 +65,12 @@ maintainer。
 
 ## 管理 Personal Access Tokens
 
-Settings 还允许为 Agent 和 REST API 客户端创建、吊销凭据。Token 以所属用户身份
+**账户设置**还允许为 Agent 和 REST API 客户端创建、吊销凭据。Token 以所属用户身份
 认证，不会增加权限。明文只显示一次；之后列表只显示名称、创建时间、最近使用时间和
 到期状态。
 
 请求认证、有效期和吊销行为见
 [Personal Access Token 参考](/zh-hans/api/access-tokens/)。
+
+语言、外观、发布信息、账户设置和退出登录统一放在账户菜单中。这些是账户级控制，
+不属于某个 Team 或 Test Engine suite。

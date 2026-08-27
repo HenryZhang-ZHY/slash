@@ -36,7 +36,9 @@ repository access independently controls who may invoke slash commands.
 
 ## Manage team members
 
-Choose a Team from the workspace switcher. Members can read its roster.
+Choose a Team under **Teams** in the console navigation, or select it from the
+team list on the overview. The same Team links are available in the mobile
+navigation. Members can read its roster.
 Maintainers can invite an email as a member or maintainer, resend or revoke a
 pending invitation, change roles, and remove members. Slash always preserves
 at least one maintainer.
@@ -46,11 +48,13 @@ needs to register. After sign-in, the browser returns to the invitation and
 asks the recipient to accept it. Invitations expire after seven days and can
 be used once.
 
-## Use the workspace
+## Use the console
 
-The workspace root shows team and Test Engine totals, your teams, and a
-shortcut to `/tests`. Use the [Test Engine console](/en/test-engine/console/)
-to create suites and inspect results.
+The overview separates the two product areas: **Command automation** for
+repository activity and **Test Engine** for test intelligence. It also shows
+test totals and direct links to the teams you manage. Use the
+[Test Engine console](/en/test-engine/console/) to create suites and inspect
+results.
 
 Use **Command activity** at `/activity` to inspect accepted slash commands for
 repositories your connected GitHub identity can currently read. See
@@ -59,14 +63,15 @@ and troubleshooting.
 
 ## Connect GitHub
 
-Open `/settings` to view the GitHub identity linked to the account. If none is
+Open the account menu and choose **Account settings**, or go to `/settings`, to
+view the GitHub identity linked to the account. If none is
 linked, start the connection flow from that page. Slash resolves the connection
 from the authenticated provider callback rather than trusting browser URL
 parameters.
 
 ## Manage your password
 
-Open `/settings` to change an existing password or add password login to an
+Open **Account settings** to change an existing password or add password login to an
 account that currently uses only GitHub or another external identity. Existing
 password users must enter their current password. External-identity-only users
 choose a unique login email and a password of at least eight characters.
@@ -76,10 +81,14 @@ does not merge it with an account that already uses the chosen email.
 
 ## Manage personal access tokens
 
-Settings also lets you create and revoke credentials for agents and REST API
+**Account settings** also lets you create and revoke credentials for agents and REST API
 clients. A token authenticates as its owning user and does not add permissions.
 Its plaintext value is shown once; the token list later shows only its name,
 creation time, last use, and expiry state.
 
 See the [personal access token reference](/en/api/access-tokens/) for request
 authentication, lifetime rules, and revocation behavior.
+
+Language, appearance, release information, account settings, and sign-out are
+grouped in the account menu. They are account-level controls rather than Team
+or Test Engine suite settings.

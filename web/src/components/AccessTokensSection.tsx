@@ -41,6 +41,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { accessTokenApi, type AccessToken, type IssuedAccessToken } from '@/lib/api'
+import { requestErrorKey } from '@/lib/requestError'
 
 function formatDate(value: string | null, language: string, fallback: string) {
   if (!value) return fallback
@@ -65,7 +66,7 @@ export function AccessTokensSection() {
       setError(null)
       setTokens(await accessTokenApi.list())
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : t('tokens.loadFailed'))
+      setError(t(requestErrorKey(requestError, 'tokens.loadFailed')))
     }
   }, [t])
 
@@ -95,7 +96,7 @@ export function AccessTokensSection() {
       setIssued(result)
       setTokens((current) => [result.accessToken, ...(current ?? [])])
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : t('tokens.createFailed'))
+      setError(t(requestErrorKey(requestError, 'tokens.createFailed')))
     } finally {
       setCreating(false)
     }
@@ -107,7 +108,7 @@ export function AccessTokensSection() {
       await accessTokenApi.revoke(id)
       setTokens((current) => current?.filter((token) => token.id !== id) ?? [])
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : t('tokens.revokeFailed'))
+      setError(t(requestErrorKey(requestError, 'tokens.revokeFailed')))
     }
   }
 

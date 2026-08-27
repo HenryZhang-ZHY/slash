@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { teamApi, type TeamRole, type TeamRoster } from '@/lib/api'
+import { requestErrorKey } from '@/lib/requestError'
 
 export function TeamPage() {
   const { me, refreshMe } = useOutletContext<DashboardContext>()
@@ -26,7 +27,7 @@ export function TeamPage() {
     if (!team) return
     setError(null)
     teamApi.roster(team.id).then(setRoster).catch((requestError) => {
-      setError(requestError instanceof Error ? requestError.message : t('team.loadFailed'))
+      setError(t(requestErrorKey(requestError, 'team.loadFailed')))
     })
   }, [team, t])
   useEffect(load, [load])
@@ -40,7 +41,7 @@ export function TeamPage() {
       load()
       refreshMe()
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : t('team.updateFailed'))
+      setError(t(requestErrorKey(requestError, 'team.updateFailed')))
     } finally {
       setBusy(false)
     }

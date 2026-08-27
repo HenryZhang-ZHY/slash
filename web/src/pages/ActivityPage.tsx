@@ -26,6 +26,7 @@ import {
   type InvocationStatus,
 } from '@/lib/api'
 import type { DashboardContext } from '@/components/AppShell'
+import { requestErrorKey } from '@/lib/requestError'
 
 const HISTORY_PAGE_SIZE = 50
 
@@ -271,7 +272,7 @@ export function ActivityPage() {
         </div>
       ) : discoveryError ? (
         <div className="mt-8">
-          <StatePanel kind="error" title={t('activity.discoveryUnavailable')} description={discoveryError.message} retry={() => setRefreshKey((key) => key + 1)} />
+          <StatePanel kind="error" title={t('activity.discoveryUnavailable')} description={t(requestErrorKey(discoveryError, 'activity.loadFailed'))} retry={() => setRefreshKey((key) => key + 1)} />
         </div>
       ) : (
         <>
@@ -315,7 +316,7 @@ export function ActivityPage() {
               <StatePanel
                 kind="error"
                 title={historyError instanceof ApiError && historyError.status === 404 ? t('activity.accessRemoved') : t('activity.historyUnavailable')}
-                description={historyError instanceof ApiError && historyError.status === 404 ? t('activity.accessRemovedDescription') : historyError.message}
+                description={historyError instanceof ApiError && historyError.status === 404 ? t('activity.accessRemovedDescription') : t(requestErrorKey(historyError, 'activity.loadFailed'))}
                 retry={() => void loadHistory(null, false)}
               />
             </div>

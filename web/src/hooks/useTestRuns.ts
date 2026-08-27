@@ -9,7 +9,7 @@ import {
   type TestRunPage,
 } from '@/lib/api'
 
-export function useTestRuns(suiteId: string | null, enabled: boolean) {
+export function useTestRuns(suiteId: string | null, enabled: boolean, preferredRunId: string | null = null) {
   const { t } = useTranslation()
   const [runs, setRuns] = useState<TestRunPage | null>(null)
   const [runItems, setRunItems] = useState<TestRun[]>([])
@@ -32,7 +32,7 @@ export function useTestRuns(suiteId: string | null, enabled: boolean) {
           setSelectedRunId((current) =>
             current && page.items.some((run) => run.id === current)
               ? current
-              : (page.items[0]?.id ?? null),
+              : (page.items.find((run) => run.id === preferredRunId)?.id ?? page.items[0]?.id ?? null),
           )
         }
       } catch (requestError) {
@@ -41,7 +41,7 @@ export function useTestRuns(suiteId: string | null, enabled: boolean) {
         setLoadingRuns(false)
       }
     },
-    [t],
+    [preferredRunId, t],
   )
 
   const loadRunExecutions = useCallback(
