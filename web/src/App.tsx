@@ -19,6 +19,7 @@ import { OnboardingPage } from '@/pages/OnboardingPage'
 import { SettingsPage } from '@/pages/SettingsPage'
 import { TestEnginePage } from '@/pages/TestEnginePage'
 import { AdminPage } from '@/pages/AdminPage'
+import { ActivityPage } from '@/pages/ActivityPage'
 
 function HomePage() {
   const navigate = useNavigate()
@@ -137,6 +138,7 @@ export default function App() {
         <Route element={<AppShell />}>
           <Route path="/" element={<HomePage />} />
           <Route path="/tests" element={<TestEnginePage />} />
+          <Route path="/activity" element={<ActivityPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/teams/:slug" element={<TeamPage />} />
         </Route>

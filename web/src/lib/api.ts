@@ -125,6 +125,99 @@ export const accessTokenApi = {
     }),
 }
 
+// --- Repository-scoped slash command activity ---
+
+export interface ActivityInstallation {
+  id: string
+  account: string
+  target_type: string
+}
+
+export interface ActivityRepository {
+  id: string
+  name: string
+  full_name: string
+  owner: string
+  private: boolean
+}
+
+export type InvocationStatus =
+  | 'claimed'
+  | 'dispatched'
+  | 'correlated'
+  | 'completed'
+  | 'aborted'
+  | 'dispatch_failed'
+  | 'correlation_timeout'
+  | 'superseded'
+
+export interface CommandInvocation {
+  id: string
+  attempt: number
+  pr_number: number
+  head_sha: string
+  actor: string
+  command: string
+  status: InvocationStatus
+  conclusion: string | null
+  created_at: string
+  dispatched_at: string | null
+  correlated_at: string | null
+  completed_at: string | null
+  pull_url: string
+  comment_url: string
+  check_url: string | null
+  workflow_run_url: string | null
+}
+
+export interface CursorPage<T> {
+  items: T[]
+  next_cursor: string | null
+}
+
+export interface InvocationFilters {
+  installationId: string
+  repositoryId: string
+  owner: string
+  repo: string
+  status?: InvocationStatus
+  command?: string
+  cursor?: string | null
+  limit?: number
+}
+
+function pageQuery(cursor?: string | null, limit?: number) {
+  const params = new URLSearchParams()
+  if (cursor) params.set('cursor', cursor)
+  if (limit) params.set('limit', String(limit))
+  const query = params.toString()
+  return query ? `?${query}` : ''
+}
+
+export const activityApi = {
+  listInstallations: (cursor?: string | null, limit?: number) =>
+    request<CursorPage<ActivityInstallation>>(
+      `/api/github/installations${pageQuery(cursor, limit)}`,
+    ),
+  listRepositories: (installationId: string, cursor?: string | null, limit?: number) =>
+    request<CursorPage<ActivityRepository>>(
+      `/api/github/installations/${encodeURIComponent(installationId)}/repositories${pageQuery(cursor, limit)}`,
+    ),
+  listInvocations: (filters: InvocationFilters) => {
+    const params = new URLSearchParams({
+      installation_id: filters.installationId,
+      repository_id: filters.repositoryId,
+      owner: filters.owner,
+      repo: filters.repo,
+    })
+    if (filters.status) params.set('status', filters.status)
+    if (filters.command) params.set('command', filters.command)
+    if (filters.cursor) params.set('cursor', filters.cursor)
+    if (filters.limit) params.set('limit', String(filters.limit))
+    return request<CursorPage<CommandInvocation>>(`/api/invocations?${params}`)
+  },
+}
+
 // --- Test Engine console API (docs/test-engine.md) ---
 
 export interface TestSuiteSummary {
