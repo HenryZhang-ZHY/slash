@@ -339,11 +339,15 @@ export default {
   'onboard.createTeam': '创建团队',
 
   // Test Engine page
-  'testengine.qualityLabel': '质量 / Test Engine',
+  'testengine.qualityLabel': '质量',
   'testengine.title': '测试智能',
   'testengine.subtitle': '跨 CI 提供商的用例、flaky 处置、元数据与执行历史。',
   'testengine.refresh': '刷新',
   'testengine.settings': '设置',
+  'testengine.collectionSetup': '采集配置',
+  'testengine.allTimeMetrics': '全周期指标',
+  'testengine.backToCases': '返回用例',
+  'testengine.backToRuns': '返回运行',
   'testengine.newSuite': '新建套件',
   'testengine.metricCases': '测试用例',
   'testengine.metricExecutions': '执行次数',

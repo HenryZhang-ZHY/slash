@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Sheet, SheetClose, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import {
   testEngineApi,
   type TestSuiteSummary,
@@ -50,33 +51,12 @@ export function ManagementDialog({
   }
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-start justify-end bg-black/20"
-      role="presentation"
-      onMouseDown={onClose}
-    >
-      <section
-        role="dialog"
-        aria-modal="true"
-        aria-label={mode === 'create' ? t('dialog.createSuiteAria') : t('dialog.settingsAria')}
-        className="h-full w-full max-w-lg overflow-y-auto border-l bg-background shadow-2xl"
-        onMouseDown={(event) => event.stopPropagation()}
-      >
-        <div className="flex h-14 items-center justify-between border-b px-5">
-          <div>
-            <div className="text-sm font-semibold">
-              {mode === 'create' ? t('dialog.createSuite') : t('dialog.suiteSettings')}
-            </div>
-            {activeSuite && (
-              <div className="text-xs text-muted-foreground">
-                {activeSuite.owner}/{activeSuite.repo} · {activeSuite.suite_key}
-              </div>
-            )}
-          </div>
-          <Button size="icon" variant="ghost" onClick={onClose} aria-label={t('dialog.close')}>
-            <X />
-          </Button>
-        </div>
+    <Sheet open onOpenChange={(open) => { if (!open) onClose() }}>
+      <SheetContent side="right" showCloseButton={false} className="w-full overflow-y-auto sm:max-w-lg">
+        <SheetHeader className="flex-row items-start justify-between border-b px-5">
+          <div><SheetTitle>{mode === 'create' ? t('dialog.createSuite') : t('dialog.suiteSettings')}</SheetTitle>{activeSuite ? <SheetDescription>{activeSuite.owner}/{activeSuite.repo} · {activeSuite.suite_key}</SheetDescription> : null}</div>
+          <SheetClose render={<Button size="icon" variant="ghost" aria-label={t('dialog.close')} />}><X /></SheetClose>
+        </SheetHeader>
 
         {mode === 'create' && !createdSuite ? (
           <form onSubmit={createSuite} className="space-y-5 p-5">
@@ -143,7 +123,7 @@ export function ManagementDialog({
             {error && <p className="mt-4 text-sm text-destructive">{error}</p>}
           </div>
         )}
-      </section>
-    </div>
+      </SheetContent>
+    </Sheet>
   )
 }

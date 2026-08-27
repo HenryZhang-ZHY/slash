@@ -29,3 +29,10 @@ export function testEngineLocation(search: URLSearchParams) {
     runId: search.get('run'),
   }
 }
+
+export function testEngineSearch(location: { suiteId: string; view: TestEngineView; testId: string | null; runId: string | null }) {
+  const search = new URLSearchParams({ suite: location.suiteId, view: location.view })
+  if (location.view === 'cases' && location.testId) search.set('test', location.testId)
+  if (location.view === 'runs' && location.runId) search.set('run', location.runId)
+  return search
+}

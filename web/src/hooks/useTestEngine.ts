@@ -9,7 +9,7 @@ import {
   type TestSummary,
 } from '@/lib/api'
 
-export function useTestEngine() {
+export function useTestEngine(preferredSuiteId: string | null = null, preferredTestId: string | null = null) {
   const { t } = useTranslation()
   const [suites, setSuites] = useState<TestSuiteSummary[]>([])
   const [selectedSuiteId, setSelectedSuiteId] = useState<string | null>(null)
@@ -32,14 +32,14 @@ export function useTestEngine() {
       setSelectedSuiteId((current) =>
         current && result.some((suite) => suite.id === current)
           ? current
-          : (result[0]?.id ?? null),
+          : (result.find((suite) => suite.id === preferredSuiteId)?.id ?? result[0]?.id ?? null),
       )
     } catch (requestError) {
       setError(requestError instanceof Error ? requestError.message : t('testengine.suiteLoadFailed'))
     } finally {
       setLoadingSuites(false)
     }
-  }, [t])
+  }, [preferredSuiteId, t])
 
   const loadTests = useCallback(
     async (suiteId: string) => {
@@ -51,7 +51,7 @@ export function useTestEngine() {
         setSelectedTestId((current) =>
           current && result.some((test) => test.id === current)
             ? current
-            : (result.find(
+            : (result.find((test) => test.id === preferredTestId)?.id ?? result.find(
                 (test) => test.last_status === 'failed' || test.last_status === 'errored',
               )?.id ??
               result[0]?.id ??
@@ -63,7 +63,7 @@ export function useTestEngine() {
         setLoadingTests(false)
       }
     },
-    [t],
+    [preferredTestId, t],
   )
 
   const loadExecutions = useCallback(

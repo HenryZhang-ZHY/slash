@@ -339,11 +339,15 @@ export default {
   'onboard.createTeam': 'Create team',
 
   // Test Engine page
-  'testengine.qualityLabel': 'Quality / Test Engine',
+  'testengine.qualityLabel': 'Quality',
   'testengine.title': 'Test intelligence',
   'testengine.subtitle': 'Cases, flaky disposition, metadata and execution history across CI providers.',
   'testengine.refresh': 'Refresh',
   'testengine.settings': 'Settings',
+  'testengine.collectionSetup': 'Collection setup',
+  'testengine.allTimeMetrics': 'All-time metrics',
+  'testengine.backToCases': 'Back to cases',
+  'testengine.backToRuns': 'Back to runs',
   'testengine.newSuite': 'New suite',
   'testengine.metricCases': 'Test cases',
   'testengine.metricExecutions': 'Executions',

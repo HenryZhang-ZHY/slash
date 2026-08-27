@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { activeSection, consoleSections, testEngineLocation } from './navigation'
+import { activeSection, consoleSections, testEngineLocation, testEngineSearch } from './navigation'
 
 describe('console navigation', () => {
   it('keeps product areas separate from team and account management', () => {
@@ -19,5 +19,6 @@ describe('console navigation', () => {
     const location = testEngineLocation(new URLSearchParams('suite=s1&view=runs&run=r1'))
     expect(location).toEqual({ suiteId: 's1', view: 'runs', testId: null, runId: 'r1' })
     expect(testEngineLocation(new URLSearchParams('view=unknown&test=t1')).view).toBe('cases')
+    expect(testEngineSearch({ suiteId: 's1', view: 'cases', testId: 't1', runId: 'ignored' }).toString()).toBe('suite=s1&view=cases&test=t1')
   })
 })

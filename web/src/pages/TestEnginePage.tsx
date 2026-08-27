@@ -1,6 +1,7 @@
-import { useDeferredValue, useState } from 'react'
+import { useDeferredValue, useEffect, useRef, useState } from 'react'
 import {
   Activity,
+  ArrowLeft,
   ChevronRight,
   CircleAlert,
   FileCode2,
@@ -13,6 +14,7 @@ import {
   Settings2,
 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
+import { useSearchParams } from 'react-router-dom'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -29,17 +31,20 @@ import { useTestEngine } from '@/hooks/useTestEngine'
 import { useTestRuns } from '@/hooks/useTestRuns'
 import { formatDate, formatDuration, percentage } from '@/lib/test-engine/format'
 import { runStatus } from '@/lib/test-engine/runs'
+import { testEngineLocation, testEngineSearch } from '@/lib/navigation'
 
 type CaseFilter = 'all' | 'failed' | 'passing' | 'muted' | 'skipped'
 type CaseSort = 'recent' | 'name' | 'slowest' | 'failures'
 
 export function TestEnginePage() {
+  const [searchParams, setSearchParams] = useSearchParams()
+  const initialLocation = useRef(testEngineLocation(searchParams)).current
   const [query, setQuery] = useState('')
   const deferredQuery = useDeferredValue(query)
   const [filter, setFilter] = useState<CaseFilter>('all')
   const [sort, setSort] = useState<CaseSort>('recent')
-  const [viewMode, setViewMode] = useState<'cases' | 'runs'>('cases')
-  const [compactView, setCompactView] = useState<'cases' | 'details'>('cases')
+  const [viewMode, setViewMode] = useState<'cases' | 'runs'>(initialLocation.view)
+  const [compactView, setCompactView] = useState<'cases' | 'details'>(initialLocation.testId || initialLocation.runId ? 'details' : 'cases')
   const [panel, setPanel] = useState<ManagementPanel>(null)
   const { t } = useTranslation()
 
@@ -73,7 +78,7 @@ export function TestEnginePage() {
     loadExecutions,
     createSuite,
     updateTestState,
-  } = useTestEngine()
+  } = useTestEngine(initialLocation.suiteId, initialLocation.testId)
 
   const {
     runs,
@@ -90,7 +95,13 @@ export function TestEnginePage() {
     hasMoreExecutions: hasMoreRunExecutions,
     loadRuns,
     loadRunExecutions,
-  } = useTestRuns(selectedSuiteId, viewMode === 'runs')
+  } = useTestRuns(selectedSuiteId, viewMode === 'runs', initialLocation.runId)
+
+  useEffect(() => {
+    if (!selectedSuiteId) return
+    const next = testEngineSearch({ suiteId: selectedSuiteId, view: viewMode, testId: selectedTestId, runId: selectedRunId })
+    setSearchParams((current) => current.toString() === next.toString() ? current : next, { replace: true })
+  }, [selectedRunId, selectedSuiteId, selectedTestId, setSearchParams, viewMode])
 
   const normalizedQuery = deferredQuery.trim().toLowerCase()
   const filteredTests = (tests ?? [])
@@ -132,7 +143,7 @@ export function TestEnginePage() {
       <div className="border-b px-4 py-5 md:px-6 xl:px-8">
         <div className="flex flex-wrap items-end justify-between gap-4">
           <div>
-            <div className="text-xs text-muted-foreground">{t('testengine.qualityLabel')}</div>
+            <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{t('testengine.qualityLabel')}</div>
             <h1 className="mt-1 text-2xl font-semibold">{t('testengine.title')}</h1>
             <p className="mt-1 text-sm text-muted-foreground">
               {t('testengine.subtitle')}
@@ -149,7 +160,7 @@ export function TestEnginePage() {
               disabled={!selectedSuite}
             >
               <Settings2 />
-              {t('testengine.settings')}
+              {t('testengine.collectionSetup')}
             </Button>
             <Button onClick={() => setPanel('create')}>
               <Plus />
@@ -158,7 +169,8 @@ export function TestEnginePage() {
           </div>
         </div>
 
-        <div className="mt-6 grid grid-cols-2 divide-x border-y md:grid-cols-3 xl:grid-cols-6">
+        {selectedSuite ? <div className="mt-6 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm"><span className="font-medium">{selectedSuite.owner}/{selectedSuite.repo}</span><span className="text-muted-foreground">· {selectedSuite.suite_key}</span><span className="ml-auto text-xs text-muted-foreground">{t('testengine.allTimeMetrics')}</span></div> : null}
+        <div className="mt-3 grid grid-cols-2 divide-x border-y md:grid-cols-3 xl:grid-cols-6">
           <Metric label={t('testengine.metricCases')} value={(selectedSuite?.total_tests ?? 0).toLocaleString()} />
           <Metric
             label={t('testengine.metricExecutions')}
@@ -195,26 +207,7 @@ export function TestEnginePage() {
             </button>
           ))}
         </div>
-        <div className="mt-4 grid grid-cols-2 rounded-lg border bg-muted/40 p-1 xl:hidden">
-          {(['cases', 'details'] as const).map((view) => (
-            <button
-              key={view}
-              type="button"
-              onClick={() => setCompactView(view)}
-              className={`h-8 text-xs capitalize ${
-                compactView === view ? 'rounded-md bg-background font-medium shadow-sm' : 'text-muted-foreground'
-              }`}
-            >
-              {t(
-                view === 'details'
-                  ? 'testengine.detailsView'
-                  : viewMode === 'runs'
-                    ? 'testengine.runsView'
-                    : 'testengine.casesView',
-              )}
-            </button>
-          ))}
-        </div>
+        {compactView === 'details' ? <Button className="mt-4 xl:hidden" variant="ghost" onClick={() => setCompactView('cases')}><ArrowLeft />{t(viewMode === 'runs' ? 'testengine.backToRuns' : 'testengine.backToCases')}</Button> : null}
       </div>
 
       {(error || (viewMode === 'runs' && runError)) && (
