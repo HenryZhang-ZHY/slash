@@ -60,6 +60,14 @@ The tables below list every route registered by `slash-server`.
 | `POST` | `/api/auth/github/repository-access` | Refresh repository-discovery authorization |
 | `GET` | `/api/auth/github/callback` | Complete GitHub authentication |
 | `POST` | `/api/teams` | Create a team |
+| `GET` | `/api/teams/{team_id}/members` | List a Team roster and pending invitations |
+| `PATCH` | `/api/teams/{team_id}/members/{user_id}` | Change a member role |
+| `DELETE` | `/api/teams/{team_id}/members/{user_id}` | Remove a member |
+| `POST` | `/api/teams/{team_id}/invitations` | Send an invitation |
+| `POST` | `/api/teams/{team_id}/invitations/{invitation_id}/resend` | Rotate and resend an invitation |
+| `DELETE` | `/api/teams/{team_id}/invitations/{invitation_id}` | Revoke an invitation |
+| `POST` | `/api/team-invitations/preview` | Preview a bearer invitation |
+| `POST` | `/api/team-invitations/accept` | Accept an invitation |
 
 ### [Personal access tokens](/en/api/access-tokens/)
 

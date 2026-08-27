@@ -17,7 +17,11 @@ sidebar:
 | `SLASH_ADMIN_SECRET_PATH` | no | Enables the separate instance admin surface |
 | `SLASH_GITHUB_CLIENT_ID` | no | Enables GitHub user sign-in with the same App |
 | `SLASH_GITHUB_CLIENT_SECRET_PATH` | with client ID | File containing the GitHub App client secret |
-| `SLASH_BASE_URL` | with GitHub sign-in | Public origin used to construct the callback URL |
+| `SLASH_BASE_URL` | with GitHub sign-in or email | Public origin used to construct callback and invitation URLs |
+| `SLASH_SMTP_HOST` | no | Enables invitation mail through a trusted, unauthenticated SMTP relay |
+| `SLASH_SMTP_PORT` | no | SMTP relay port; defaults to `25` |
+| `SLASH_EMAIL_FROM` | with SMTP | Sender email address |
+| `SLASH_EMAIL_FROM_NAME` | no | Sender display name; defaults to `Slash` |
 | `SLASH_WEB_DIR` | no | Built Web console directory; defaults to `web/dist` |
 | `SLASH_DELIVERY_WORKERS` | no | Positive worker count per server process; defaults to `8` |
 | `RUST_LOG` | no | `tracing_subscriber` filter, such as `info` |
@@ -65,3 +69,12 @@ Slash reads only the authenticated `/user` profile. It does not request GitHub
 email access, infer account equality from email, or persist provider access
 tokens. Existing password users should connect GitHub from `/settings` while
 signed in to the account they intend to keep.
+
+## Enable invitation email
+
+Set `SLASH_SMTP_HOST`, `SLASH_EMAIL_FROM`, and `SLASH_BASE_URL`, then place the
+Slash service on the relay's private network. Slash connects without SMTP
+authentication; a deployment that needs upstream credentials should keep them
+in a private relay such as `smtprelay`, not in Slash. Partial email
+configuration stops startup. When email is not configured, existing Team
+membership still works but maintainers cannot create invitations.

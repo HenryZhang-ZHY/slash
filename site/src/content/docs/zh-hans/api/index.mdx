@@ -56,6 +56,14 @@ JSON 响应里的时间戳是 RFC 3339 字符串。
 | `POST` | `/api/auth/github/repository-access` | 刷新仓库发现授权 |
 | `GET` | `/api/auth/github/callback` | 完成 GitHub 认证 |
 | `POST` | `/api/teams` | 创建团队 |
+| `GET` | `/api/teams/{team_id}/members` | 列出 Team 成员和待接受邀请 |
+| `PATCH` | `/api/teams/{team_id}/members/{user_id}` | 修改成员角色 |
+| `DELETE` | `/api/teams/{team_id}/members/{user_id}` | 移除成员 |
+| `POST` | `/api/teams/{team_id}/invitations` | 发送邀请 |
+| `POST` | `/api/teams/{team_id}/invitations/{invitation_id}/resend` | 轮换并重新发送邀请 |
+| `DELETE` | `/api/teams/{team_id}/invitations/{invitation_id}` | 撤销邀请 |
+| `POST` | `/api/team-invitations/preview` | 预览 bearer 邀请 |
+| `POST` | `/api/team-invitations/accept` | 接受邀请 |
 
 ### [个人 Access Token](/zh-hans/api/access-tokens/)
 

@@ -166,6 +166,13 @@ never copy authorization state. Plaintext tokens are shown once and only a
 keyed digest is persisted. Credential management remains browser-session-only;
 the complete lifecycle is in [Personal access tokens](design/personal-access-tokens.md).
 
+Team membership uses explicit `member` and `maintainer` roles and never permits
+an active Team to lose its last maintainer. Email invitations are single-use,
+seven-day bearer credentials whose plaintext appears only in the email URL
+fragment; PostgreSQL stores only a digest. SMTP credentials remain outside
+Slash behind a trusted private relay. The complete lifecycle is in
+[Team management and invitations](design/team-management.md).
+
 Repository command activity is visible to browser users only after a live
 GitHub collaborator check for the selected repository. Discovery uses a
 short-lived encrypted GitHub user credential bound to the Slash session and
