@@ -59,7 +59,7 @@ struct GithubAccount {
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct InstallationView {
-    id: u64,
+    id: String,
     account: String,
     target_type: String,
 }
@@ -81,7 +81,7 @@ struct GithubRepository {
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub struct RepositoryView {
-    id: u64,
+    id: String,
     name: String,
     full_name: String,
     owner: String,
@@ -175,7 +175,7 @@ pub async fn list_github_installations(
             .installations
             .into_iter()
             .map(|installation| InstallationView {
-                id: installation.id,
+                id: installation.id.to_string(),
                 account: installation.account.login,
                 target_type: installation.target_type,
             })
@@ -219,7 +219,7 @@ pub async fn list_github_repositories(
             .repositories
             .into_iter()
             .map(|repository| RepositoryView {
-                id: repository.id,
+                id: repository.id.to_string(),
                 name: repository.name,
                 full_name: repository.full_name,
                 owner: repository.owner.login,
