@@ -20,6 +20,8 @@ RFC 3339 strings.
   external identity, the current user, and team creation.
 - Use [Personal access tokens](/en/api/access-tokens/) to issue credentials
   for agents and other REST clients.
+- Use [Command activity](/en/api/activity/) for browser-only GitHub repository
+  discovery and authorized invocation history.
 - Use [Test Engine management](/en/api/test-engine/) for suites, tests,
   execution history, state, and collection tokens.
 - Use [Test result ingestion](/en/api/ingestion/) from CI to upload results or
@@ -34,6 +36,7 @@ RFC 3339 strings.
 | Account, team, and Test Engine management | `slash_session` cookie or personal Bearer token |
 | Password credential management | `slash_session` cookie only |
 | Personal access token management | `slash_session` cookie only |
+| Command activity and GitHub repository discovery | `slash_session` cookie only; discovery also requires the encrypted GitHub access cookie |
 | Test result ingestion and quarantine lookup | `Authorization: Bearer <collection-token>` |
 | Instance administration | Separate admin session enabled by `SLASH_ADMIN_SECRET_PATH` |
 | GitHub webhook | `X-Hub-Signature-256` HMAC signature |
@@ -54,6 +57,7 @@ The tables below list every route registered by `slash-server`.
 | `GET` | `/api/auth/me` | Read the current user, teams, and connections |
 | `GET` | `/api/auth/github/sign-in` | Start GitHub sign-in |
 | `POST` | `/api/auth/github/connect` | Connect GitHub to the current user |
+| `POST` | `/api/auth/github/repository-access` | Refresh repository-discovery authorization |
 | `GET` | `/api/auth/github/callback` | Complete GitHub authentication |
 | `POST` | `/api/teams` | Create a team |
 
@@ -64,6 +68,14 @@ The tables below list every route registered by `slash-server`.
 | `GET` | `/api/access-tokens` | List the current user's tokens |
 | `POST` | `/api/access-tokens` | Create a token and reveal it once |
 | `DELETE` | `/api/access-tokens/{id}` | Revoke a token |
+
+### [Command activity](/en/api/activity/)
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `GET` | `/api/github/installations` | Discover installations available to the connected GitHub identity |
+| `GET` | `/api/github/installations/{installation_id}/repositories` | Discover accessible repositories in one installation |
+| `GET` | `/api/invocations` | List authorized repository invocation history |
 
 ### [Test Engine management](/en/api/test-engine/)
 

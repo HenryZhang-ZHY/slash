@@ -9,7 +9,7 @@ outline:
 
 # Command invocation history
 
-Status: proposed (2026-08-27)
+Status: implemented (2026-08-27)
 
 ## Problem and product boundary
 
@@ -144,7 +144,8 @@ Each item contains only repository-user-safe fields:
 - creation, dispatch, correlation, and completion timestamps when present;
 - check-run and workflow-run links when correlation has produced their ids;
   and
-- a bounded user-facing outcome label derived from status and conclusion.
+- enough lifecycle state for the Web console to derive a bounded user-facing
+  outcome label from status and conclusion.
 
 The endpoint does not return `args`, `raw_comment_line`, `failure_reason`,
 `delivery_guid`, webhook payloads, or upstream error text. Arguments may contain
@@ -174,11 +175,11 @@ by the current GitHub user credential. The selection is represented in the URL
 so a repository view can be bookmarked; no authorization result is stored in
 browser local storage.
 
-The desktop table and mobile cards show status, command, pull request, actor,
-trigger time, and elapsed or final duration. Rows link to GitHub rather than
-adding a second invocation-detail page in the first version. The page supports
-status and command filters, **Load more** keyset pagination, and an explicit
-refresh action. It does not poll in the background.
+The responsive, horizontally scrollable table shows status, command, pull
+request, actor, trigger time, and elapsed or final duration. Rows link to
+GitHub rather than adding a second invocation-detail page in the first version.
+The page supports status and command filters, **Load more** keyset pagination,
+and an explicit refresh action. It does not poll in the background.
 
 Empty and failure states are distinct:
 
@@ -186,7 +187,8 @@ Empty and failure states are distinct:
 - missing or expired discovery credential: **Refresh GitHub access**;
 - no accepted invocation rows in the repository: explain what counts as an
   activity row;
-- repository access removed: clear the selection and return to discovery;
+- repository access removed: retain the selectors, explain the lost access,
+  and offer a fresh authorization check;
 - GitHub unavailable or rate limited: retain the selection and offer retry;
   and
 - Slash unavailable: show the normal console retry state.

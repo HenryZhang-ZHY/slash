@@ -127,9 +127,13 @@ curl -i -b cookies.txt -X PUT \
 两个入口都由 GitHub 回到 `GET /api/auth/github/callback`。callback 使用 state、PKCE
 和当前会话校验，不会把 GitHub token 返回给浏览器。
 
+`POST /api/auth/github/repository-access` 为已登录且已经连接 GitHub 身份的用户启动同一
+浏览器授权 transport。Callback 只接受同一个稳定 GitHub subject，并返回
+`/activity`。它刷新仓库发现使用的加密短期 cookie，不能替换或合并身份。
+
 ## POST `/api/auth/logout`
 
-清除浏览器会话 cookie。
+清除浏览器会话 cookie 和短期 GitHub 仓库发现 cookie。
 
 ```sh
 curl -i -b cookies.txt -X POST \

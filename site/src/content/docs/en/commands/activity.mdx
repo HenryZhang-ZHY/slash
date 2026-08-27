@@ -1,0 +1,50 @@
+---
+title: Review command activity
+description: "Inspect accepted slash commands and their outcomes without leaving the Slash console."
+sidebar:
+  order: 5
+---
+
+The authenticated Slash console keeps a repository-scoped history of accepted
+slash commands. Open **Command activity** in the navigation, or go directly to
+`/activity` on your deployment.
+
+## Authorize repository access
+
+Connect your GitHub identity from **Settings** before opening activity. Slash
+uses that identity to discover GitHub App installations and repositories that
+are available to you. When the short-lived discovery authorization expires,
+the page asks you to authorize GitHub again.
+
+Repository discovery does not grant access to history. Before every history
+response, Slash asks GitHub whether the connected identity still has at least
+read access to the selected repository. This check also applies to public
+repositories. A repository you cannot currently read is not disclosed.
+
+## Select and filter activity
+
+Choose a GitHub App installation, then a repository. The repository selection
+is stored in the URL, so you can bookmark it. You can filter rows by exact
+lifecycle status or command name, load older pages with **Load more**, and use
+**Refresh** to observe newer state transitions. The page does not poll in the
+background.
+
+Each row shows the trigger time, command, pull request, actor, current outcome,
+duration, and a link back to the most relevant GitHub check, workflow run, or
+comment. Slash deliberately does not show raw command arguments or internal
+failure diagnostics because those fields may contain sensitive input or
+upstream details.
+
+## Understand missing rows
+
+Activity begins only after Slash accepts and claims an invocation. It includes
+commands that are running, completed, aborted, superseded, or failed during
+dispatch or correlation. It does not include malformed comments, unknown
+commands, `/slash help`, permission denials, invalid configuration, or argument
+validation failures because those paths do not create an invocation record.
+
+If repository discovery returns no results, confirm that the Slash GitHub App
+is installed on an account available to your connected identity. If a selected
+repository reports lost access, choose another repository or ask its owner for
+read access. A temporary GitHub or Slash error retains your selection so you
+can retry safely.

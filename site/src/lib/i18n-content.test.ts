@@ -49,6 +49,7 @@ test("organizes command documentation around user tasks", () => {
     "commands/configuration.mdx",
     "commands/workflows.mdx",
     "commands/authorization.mdx",
+    "commands/activity.mdx",
   ];
 
   for (const page of commandPages) {
