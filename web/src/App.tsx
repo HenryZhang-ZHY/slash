@@ -20,6 +20,8 @@ import { SettingsPage } from '@/pages/SettingsPage'
 import { TestEnginePage } from '@/pages/TestEnginePage'
 import { AdminPage } from '@/pages/AdminPage'
 import { ActivityPage } from '@/pages/ActivityPage'
+import { InvitationPage } from '@/pages/InvitationPage'
+import { TeamPage } from '@/pages/TeamPage'
 
 function HomePage() {
   const navigate = useNavigate()
@@ -119,15 +121,6 @@ function HomePage() {
   )
 }
 
-function TeamPage() {
-  const { me } = useOutletContext<DashboardContext>()
-  const { t } = useTranslation()
-  const slug = window.location.pathname.split('/')[2]
-  const team = me.teams.find((candidate) => candidate.slug === slug)
-  if (!team) return <Navigate to="/" replace />
-  return <div className="mx-auto w-full max-w-5xl px-4 py-8 md:px-8"><StatePanel title={team.name} description={t('app.workspacePlaceholder', { slug: team.slug })} /></div>
-}
-
 export default function App() {
   return (
     <BrowserRouter>
@@ -135,6 +128,7 @@ export default function App() {
         <Route path="/admin/*" element={<AdminPage />} />
         <Route path="/login" element={<LoginPage />} />
         <Route path="/onboarding" element={<OnboardingPage />} />
+        <Route path="/invitations/accept" element={<InvitationPage />} />
         <Route element={<AppShell />}>
           <Route path="/" element={<HomePage />} />
           <Route path="/tests" element={<TestEnginePage />} />

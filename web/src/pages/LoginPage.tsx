@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { api } from '@/lib/api'
 import { destinationFor, githubErrorKey } from '@/lib/authFlow'
+import { hasPendingInvitation } from '@/lib/pendingInvitation'
 
 export function LoginPage() {
   const [mode, setMode] = useState<'login' | 'register'>('login')
@@ -33,10 +34,10 @@ export function LoginPage() {
     try {
       if (mode === 'register') {
         await api.register(email, password)
-        navigate('/onboarding')
+        navigate(hasPendingInvitation() ? '/invitations/accept' : '/onboarding')
       } else {
         await api.login(email, password)
-        navigate(destinationFor(await api.me()))
+        navigate(hasPendingInvitation() ? '/invitations/accept' : destinationFor(await api.me()))
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : t('auth.requestFailed'))
