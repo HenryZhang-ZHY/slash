@@ -30,6 +30,7 @@ type HmacSha256 = Hmac<Sha256>;
 const GITHUB_AUTHORIZE_URL: &str = "https://github.com/login/oauth/authorize";
 const GITHUB_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
 const GITHUB_USER_URL: &str = "https://api.github.com/user";
+const GITHUB_API_URL: &str = "https://api.github.com";
 const GITHUB_API_VERSION: &str = "2026-03-10";
 const GITHUB_CONNECTION_ID: Uuid = Uuid::from_u128(1);
 const STATE_COOKIE: &str = "slash_github_oauth";
@@ -40,6 +41,7 @@ struct OauthEndpoints {
     authorize: Arc<str>,
     token: Arc<str>,
     user: Arc<str>,
+    api: Arc<str>,
 }
 
 impl Default for OauthEndpoints {
@@ -48,6 +50,7 @@ impl Default for OauthEndpoints {
             authorize: Arc::from(GITHUB_AUTHORIZE_URL),
             token: Arc::from(GITHUB_TOKEN_URL),
             user: Arc::from(GITHUB_USER_URL),
+            api: Arc::from(GITHUB_API_URL),
         }
     }
 }
@@ -76,6 +79,10 @@ impl OauthState {
             auth_secret,
             endpoints: OauthEndpoints::default(),
         }
+    }
+
+    pub(crate) fn api_base_url(&self) -> &str {
+        &self.endpoints.api
     }
 }
 

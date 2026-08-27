@@ -10,6 +10,7 @@ pub mod admin;
 pub mod auth;
 pub mod catalog;
 pub mod collectors;
+pub mod command_activity;
 pub mod config;
 pub mod correlation;
 pub mod db;
@@ -221,6 +222,14 @@ pub async fn run() {
         .route(
             "/api/auth/github/repository-access",
             post(github_oauth::start_github_repository_access),
+        )
+        .route(
+            "/api/github/installations",
+            get(command_activity::list_github_installations),
+        )
+        .route(
+            "/api/github/installations/{installation_id}/repositories",
+            get(command_activity::list_github_repositories),
         )
         .route("/api/teams", post(userapi::create_team))
         .route(
