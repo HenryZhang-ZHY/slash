@@ -25,6 +25,8 @@ use crate::userapi::SessionUserId;
 const DEFAULT_PAGE_SIZE: u8 = 50;
 const MAX_PAGE_SIZE: u8 = 100;
 const GITHUB_API_VERSION: &str = "2026-03-10";
+
+type ActivityResult<T> = Result<T, Box<Response>>;
 const GITHUB_CONNECTION_ID: Uuid = Uuid::from_u128(1);
 
 #[derive(Debug, Deserialize)]
@@ -157,13 +159,13 @@ pub async fn list_github_installations(
     };
     let (page_number, limit) = match normalize_page(&page) {
         Ok(page) => page,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let url = format!("{}/user/installations", api_base_url(&state));
     let response = github_get(&url, &credential.access_token, page_number, limit).await;
     let response = match checked_github_response(response, true) {
         Ok(response) => response,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let payload: GithubInstallationPage = match response.json().await {
         Ok(payload) => payload,
@@ -198,7 +200,7 @@ pub async fn list_github_repositories(
     };
     let (page_number, limit) = match normalize_page(&page) {
         Ok(page) => page,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let url = format!(
         "{}/user/installations/{installation_id}/repositories",
@@ -207,7 +209,7 @@ pub async fn list_github_repositories(
     let response = github_get(&url, &credential.access_token, page_number, limit).await;
     let response = match checked_github_response(response, true) {
         Ok(response) => response,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     let payload: GithubRepositoryPage = match response.json().await {
         Ok(payload) => payload,
@@ -238,7 +240,7 @@ pub async fn list_invocations(
 ) -> Response {
     let query = match normalize_invocation_query(query) {
         Ok(query) => query,
-        Err(response) => return response,
+        Err(response) => return *response,
     };
     if let Err(response) = authorize_repository(&state, user_id, &query).await {
         return response;
@@ -306,31 +308,31 @@ pub async fn list_invocations(
     .into_response()
 }
 
-fn normalize_invocation_query(mut query: InvocationQuery) -> Result<InvocationQuery, Response> {
+fn normalize_invocation_query(mut query: InvocationQuery) -> ActivityResult<InvocationQuery> {
     if !valid_github_name(&query.owner) || !valid_github_name(&query.repo) {
-        return Err(error_response(
+        return Err(Box::new(error_response(
             StatusCode::UNPROCESSABLE_ENTITY,
             "invalid_repository",
             "invalid repository",
-        ));
+        )));
     }
     if query.installation_id > i64::MAX as u64 || query.repository_id > i64::MAX as u64 {
-        return Err(error_response(
+        return Err(Box::new(error_response(
             StatusCode::UNPROCESSABLE_ENTITY,
             "invalid_repository",
             "invalid repository",
-        ));
+        )));
     }
     if query
         .status
         .as_deref()
         .is_some_and(|status| InvocationStatus::parse(status).is_none())
     {
-        return Err(error_response(
+        return Err(Box::new(error_response(
             StatusCode::UNPROCESSABLE_ENTITY,
             "invalid_status",
             "invalid invocation status",
-        ));
+        )));
     }
     query.command = query
         .command
@@ -342,11 +344,11 @@ fn normalize_invocation_query(mut query: InvocationQuery) -> Result<InvocationQu
                 .bytes()
                 .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
     }) {
-        return Err(error_response(
+        return Err(Box::new(error_response(
             StatusCode::UNPROCESSABLE_ENTITY,
             "invalid_command",
             "invalid command",
-        ));
+        )));
     }
     Ok(query)
 }
@@ -506,18 +508,18 @@ async fn discovery_credential(
     Ok(credential)
 }
 
-fn normalize_page(page: &PageQuery) -> Result<(u32, u8), Response> {
+fn normalize_page(page: &PageQuery) -> ActivityResult<(u32, u8)> {
     let limit = page
         .limit
         .unwrap_or(DEFAULT_PAGE_SIZE)
         .clamp(1, MAX_PAGE_SIZE);
     let page_number = match page.cursor.as_deref() {
         Some(cursor) => decode_cursor(cursor).ok_or_else(|| {
-            error_response(
+            Box::new(error_response(
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "invalid_cursor",
                 "invalid cursor",
-            )
+            ))
         })?,
         None => 1,
     };
@@ -559,15 +561,15 @@ async fn github_get(
 fn checked_github_response(
     response: Result<reqwest::Response, reqwest::Error>,
     clear_on_unauthorized: bool,
-) -> Result<reqwest::Response, Response> {
-    let response = response.map_err(|_| github_unavailable())?;
+) -> ActivityResult<reqwest::Response> {
+    let response = response.map_err(|_| Box::new(github_unavailable()))?;
     match response.status() {
         status if status.is_success() => Ok(response),
         reqwest::StatusCode::UNAUTHORIZED if clear_on_unauthorized => {
-            Err(reauthorization_required_with_clear())
+            Err(Box::new(reauthorization_required_with_clear()))
         }
-        reqwest::StatusCode::NOT_FOUND => Err(not_found()),
-        _ => Err(github_unavailable()),
+        reqwest::StatusCode::NOT_FOUND => Err(Box::new(not_found())),
+        _ => Err(Box::new(github_unavailable())),
     }
 }
 
@@ -851,8 +853,19 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), 64 * 1024).await.unwrap();
         let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(json["items"][0]["id"], invocation_id.to_string());
-        assert_eq!(json["items"][0]["command"], "deploy");
+        let item = json
+            .get("items")
+            .and_then(serde_json::Value::as_array)
+            .and_then(|items| items.first())
+            .unwrap();
+        assert_eq!(
+            item.get("id").and_then(serde_json::Value::as_str),
+            Some(invocation_id.to_string().as_str())
+        );
+        assert_eq!(
+            item.get("command").and_then(serde_json::Value::as_str),
+            Some("deploy")
+        );
         let rendered = String::from_utf8(body.to_vec()).unwrap();
         assert!(!rendered.contains("/deploy secret"));
         assert!(!rendered.contains("private upstream detail"));

@@ -147,8 +147,8 @@ mod tests {
         assert!(open(&secret("different-secret"), &sealed).is_err());
 
         let mut tampered = sealed.into_bytes();
-        let last = tampered.len() - 1;
-        tampered[last] = if tampered[last] == b'A' { b'B' } else { b'A' };
+        let last = tampered.last_mut().unwrap();
+        *last = if *last == b'A' { b'B' } else { b'A' };
         assert!(
             open(
                 &secret("root-secret"),
