@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Check, Info, Languages, LogOut, Monitor, Moon, Settings, SlidersHorizontal, Sun, UserRound } from 'lucide-react'
+import { Check, ChevronDown, Info, Languages, LogOut, Monitor, Moon, Settings, SlidersHorizontal, Sun, UserRound } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { Link } from 'react-router-dom'
 
@@ -9,6 +9,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
 import { SUPPORTED_LANGUAGES, currentLanguage, setLanguage } from '@/i18n'
 import { api } from '@/lib/api'
+import { accountMenuAccessibleName } from '@/lib/productMenu'
 import { initializeTheme, saveTheme, type ThemePreference } from '@/lib/theme'
 
 export function ProductMenu({ accountIdentity, onSignOut }: { accountIdentity?: string; onSignOut?: () => void }) {
@@ -37,8 +38,25 @@ export function ProductMenu({ accountIdentity, onSignOut }: { accountIdentity?: 
   return (
     <>
       <Sheet>
-        <SheetTrigger render={<Button variant="ghost" size="icon-sm" aria-label={accountIdentity ? t('common.accountMenu') : t('common.productMenu')} />}>
-          {accountIdentity ? <UserRound /> : <SlidersHorizontal />}
+        <SheetTrigger
+          render={
+            <Button
+              variant={accountIdentity ? 'outline' : 'ghost'}
+              size={accountIdentity ? 'default' : 'icon-sm'}
+              className={accountIdentity ? 'max-w-[min(22rem,60vw)]' : undefined}
+              aria-label={accountIdentity ? accountMenuAccessibleName(t('common.accountMenu'), accountIdentity) : t('common.productMenu')}
+            />
+          }
+        >
+          {accountIdentity ? (
+            <>
+              <UserRound />
+              <span className="hidden sm:inline">{t('common.account')}</span>
+              <span className="hidden text-muted-foreground md:inline" aria-hidden="true">·</span>
+              <span className="hidden max-w-40 truncate font-normal text-muted-foreground md:inline">{accountIdentity}</span>
+              <ChevronDown className="size-3.5 text-muted-foreground transition-transform group-aria-expanded/button:rotate-180" />
+            </>
+          ) : <SlidersHorizontal />}
         </SheetTrigger>
         <SheetContent side="right" className="w-full sm:max-w-sm">
           <SheetHeader>

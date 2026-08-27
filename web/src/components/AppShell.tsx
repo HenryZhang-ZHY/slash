@@ -126,7 +126,6 @@ export function AppShell() {
                 </nav>
               </SheetContent>
             </Sheet>
-            <div className="hidden text-xs text-muted-foreground md:block">{accountIdentity}</div>
           </div>
         </header>
         <main className="min-w-0">
