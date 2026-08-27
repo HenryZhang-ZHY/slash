@@ -142,9 +142,16 @@ Both initiation routes redirect the browser to GitHub. GitHub returns to
 `/onboarding`, `/settings`, or `/login`. These routes implement a browser
 flow and do not return GitHub access tokens to API clients.
 
+`POST /api/auth/github/repository-access` starts the same browser authorization
+transport for a signed-in user whose GitHub identity is already linked. The
+callback accepts only that same stable GitHub subject and returns to
+`/activity`. It refreshes the encrypted, short-lived cookie used by repository
+discovery; it cannot replace or merge identities.
+
 ## POST `/api/auth/logout`
 
-Clears the browser session cookie.
+Clears the browser session cookie and the short-lived GitHub repository
+discovery cookie.
 
 ```sh
 curl -i -b cookies.txt -X POST \

@@ -21,14 +21,16 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::auth::{self, AuthSecret};
+use crate::github_user_access;
 use crate::identity::{self, AuthenticatedIdentity, IdentityError};
-use crate::userapi::{UserId, api_error};
+use crate::userapi::{SessionUserId, UserId, api_error};
 
 type HmacSha256 = Hmac<Sha256>;
 
 const GITHUB_AUTHORIZE_URL: &str = "https://github.com/login/oauth/authorize";
 const GITHUB_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
 const GITHUB_USER_URL: &str = "https://api.github.com/user";
+const GITHUB_API_URL: &str = "https://api.github.com";
 const GITHUB_API_VERSION: &str = "2026-03-10";
 const GITHUB_CONNECTION_ID: Uuid = Uuid::from_u128(1);
 const STATE_COOKIE: &str = "slash_github_oauth";
@@ -39,6 +41,7 @@ struct OauthEndpoints {
     authorize: Arc<str>,
     token: Arc<str>,
     user: Arc<str>,
+    api: Arc<str>,
 }
 
 impl Default for OauthEndpoints {
@@ -47,6 +50,7 @@ impl Default for OauthEndpoints {
             authorize: Arc::from(GITHUB_AUTHORIZE_URL),
             token: Arc::from(GITHUB_TOKEN_URL),
             user: Arc::from(GITHUB_USER_URL),
+            api: Arc::from(GITHUB_API_URL),
         }
     }
 }
@@ -76,6 +80,16 @@ impl OauthState {
             endpoints: OauthEndpoints::default(),
         }
     }
+
+    pub(crate) fn api_base_url(&self) -> &str {
+        &self.endpoints.api
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_api_base_url(mut self, api: impl Into<Arc<str>>) -> Self {
+        self.endpoints.api = api.into();
+        self
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq, Serialize)]
@@ -83,6 +97,7 @@ impl OauthState {
 enum OauthIntent {
     SignIn,
     Connect,
+    RepositoryAccess,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -105,7 +120,13 @@ pub struct CallbackParams {
 #[derive(Debug, Deserialize)]
 struct GithubTokenResponse {
     access_token: Option<String>,
+    expires_in: Option<u64>,
     error: Option<String>,
+}
+
+struct GithubUserCredential {
+    access_token: String,
+    ttl_secs: Option<u64>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -123,6 +144,15 @@ pub async fn start_github_sign_in(State(state): State<crate::AppState>) -> Respo
 /// `POST /api/auth/github/connect` starts connection for the current user.
 pub async fn start_github_connect(State(state): State<crate::AppState>, user: UserId) -> Response {
     start_oauth(state, OauthIntent::Connect, Some(user.0)).await
+}
+
+/// `POST /api/auth/github/repository-access` refreshes the short-lived
+/// repository-discovery credential without changing the linked identity.
+pub async fn start_github_repository_access(
+    State(state): State<crate::AppState>,
+    user: SessionUserId,
+) -> Response {
+    start_oauth(state, OauthIntent::RepositoryAccess, Some(user.0)).await
 }
 
 async fn start_oauth(
@@ -215,7 +245,7 @@ pub async fn handle_github_callback(
         None => return callback_error(oauth, Some(claims.intent), "missing_code"),
     };
 
-    let connected_user = if claims.intent == OauthIntent::Connect {
+    let connected_user = if claims.intent != OauthIntent::SignIn {
         match connection_session_user(&oauth.auth_secret, cookie_header, claims.user_id) {
             Ok(user_id) => Some(user_id),
             Err(error) => {
@@ -227,14 +257,14 @@ pub async fn handle_github_callback(
         None
     };
 
-    let access_token = match exchange_code(oauth, code, &claims).await {
+    let credential = match exchange_code(oauth, code, &claims).await {
         Ok(token) => token,
         Err(error) => {
             tracing::error!(%error, intent = ?claims.intent, "github oauth token exchange failed");
             return callback_error(oauth, Some(claims.intent), "github_unavailable");
         }
     };
-    let profile = match fetch_profile(oauth, &access_token).await {
+    let profile = match fetch_profile(oauth, &credential.access_token).await {
         Ok(profile) => profile,
         Err(error) => {
             tracing::error!(%error, intent = ?claims.intent, "github oauth profile fetch failed");
@@ -243,12 +273,20 @@ pub async fn handle_github_callback(
     };
 
     match claims.intent {
-        OauthIntent::SignIn => finish_sign_in(&state, oauth, &profile).await,
-        OauthIntent::Connect => {
+        OauthIntent::SignIn => finish_sign_in(&state, oauth, &profile, &credential).await,
+        OauthIntent::Connect | OauthIntent::RepositoryAccess => {
             let Some(user_id) = connected_user else {
                 return callback_error(oauth, Some(claims.intent), "session_expired");
             };
-            finish_connection(&state.pool, oauth, user_id, &profile).await
+            finish_connection(
+                &state.pool,
+                oauth,
+                user_id,
+                &profile,
+                &credential,
+                claims.intent,
+            )
+            .await
         }
     }
 }
@@ -257,7 +295,7 @@ async fn exchange_code(
     oauth: &OauthState,
     code: &str,
     claims: &StateClaims,
-) -> Result<String, &'static str> {
+) -> Result<GithubUserCredential, &'static str> {
     let response = reqwest::Client::new()
         .post(oauth.endpoints.token.as_ref())
         .header("accept", "application/json")
@@ -278,7 +316,10 @@ async fn exchange_code(
     if payload.error.is_some() {
         return Err("token_rejected");
     }
-    payload.access_token.ok_or("token_missing")
+    Ok(GithubUserCredential {
+        access_token: payload.access_token.ok_or("token_missing")?,
+        ttl_secs: payload.expires_in,
+    })
 }
 
 async fn fetch_profile(
@@ -326,6 +367,7 @@ async fn finish_sign_in(
     state: &crate::AppState,
     oauth: &OauthState,
     profile: &AuthenticatedIdentity,
+    credential: &GithubUserCredential,
 ) -> Response {
     let user_id = match identity::sign_in_or_create(&state.pool, profile).await {
         Ok(user_id) => user_id,
@@ -353,6 +395,10 @@ async fn finish_sign_in(
     };
     let mut response = redirect(destination);
     append_cookie(&mut response, &auth::set_cookie_value(&token));
+    if let Err(error) = append_access_cookie(&mut response, oauth, user_id, profile, credential) {
+        tracing::error!(%error, "github discovery credential encryption failed");
+        return callback_error(oauth, Some(OauthIntent::SignIn), "internal");
+    }
     append_cookie(&mut response, &clear_state_cookie_value(oauth));
     response
 }
@@ -362,25 +408,57 @@ async fn finish_connection(
     oauth: &OauthState,
     user_id: Uuid,
     profile: &AuthenticatedIdentity,
+    credential: &GithubUserCredential,
+    intent: OauthIntent,
 ) -> Response {
     match identity::connect(pool, user_id, profile).await {
-        Ok(()) => callback_success(oauth, OauthIntent::Connect),
-        Err(IdentityError::IdentityInUse) => {
-            callback_error(oauth, Some(OauthIntent::Connect), "identity_in_use")
+        Ok(()) => {
+            let mut response = callback_success(oauth, intent);
+            if let Err(error) =
+                append_access_cookie(&mut response, oauth, user_id, profile, credential)
+            {
+                tracing::error!(%error, "github discovery credential encryption failed");
+                return callback_error(oauth, Some(intent), "internal");
+            }
+            response
         }
-        Err(IdentityError::ConnectionAlreadyLinked) => callback_error(
-            oauth,
-            Some(OauthIntent::Connect),
-            "different_identity_connected",
-        ),
+        Err(IdentityError::IdentityInUse) => callback_error(oauth, Some(intent), "identity_in_use"),
+        Err(IdentityError::ConnectionAlreadyLinked) => {
+            callback_error(oauth, Some(intent), "different_identity_connected")
+        }
         Err(IdentityError::UserUnavailable) => {
-            callback_error(oauth, Some(OauthIntent::Connect), "session_expired")
+            callback_error(oauth, Some(intent), "session_expired")
         }
         Err(error) => {
             tracing::error!(%error, "github account connection persistence failed");
             callback_error(oauth, Some(OauthIntent::Connect), "internal")
         }
     }
+}
+
+fn append_access_cookie(
+    response: &mut Response,
+    oauth: &OauthState,
+    user_id: Uuid,
+    profile: &AuthenticatedIdentity,
+    credential: &GithubUserCredential,
+) -> Result<(), auth::AuthError> {
+    let exp = github_user_access::expires_at(credential.ttl_secs);
+    let sealed = github_user_access::seal(
+        &oauth.auth_secret,
+        &github_user_access::Credential {
+            user_id,
+            github_subject: profile.subject.clone(),
+            access_token: credential.access_token.clone(),
+            exp,
+        },
+    )?;
+    let ttl_secs = exp.saturating_sub(now_secs());
+    append_cookie(
+        response,
+        &github_user_access::cookie_value(&sealed, ttl_secs),
+    );
+    Ok(())
 }
 
 async fn account_destination(pool: &PgPool, user_id: Uuid) -> Result<&'static str, sqlx::Error> {
@@ -506,6 +584,7 @@ fn callback_success(oauth: &OauthState, intent: OauthIntent) -> Response {
     let location = match intent {
         OauthIntent::SignIn => "/",
         OauthIntent::Connect => "/settings?github=connected",
+        OauthIntent::RepositoryAccess => "/activity?github=authorized",
     };
     let mut response = redirect(location);
     append_cookie(&mut response, &clear_state_cookie_value(oauth));
@@ -515,6 +594,9 @@ fn callback_success(oauth: &OauthState, intent: OauthIntent) -> Response {
 fn callback_error(oauth: &OauthState, intent: Option<OauthIntent>, code: &'static str) -> Response {
     let location = match intent {
         Some(OauthIntent::Connect) => format!("/settings?github=error&reason={code}"),
+        Some(OauthIntent::RepositoryAccess) => {
+            format!("/activity?github=error&reason={code}")
+        }
         _ => format!("/login?github_error={code}"),
     };
     let mut response = redirect(&location);
@@ -618,6 +700,59 @@ mod tests {
         );
         assert!(connection_session_user(&secret(), Some(&cookie), Some(Uuid::new_v4())).is_err());
         assert!(connection_session_user(&secret(), None, Some(user_id)).is_err());
+    }
+
+    #[test]
+    fn discovery_credential_cookie_is_bound_to_user_and_subject() {
+        let user_id = Uuid::new_v4();
+        let mut response = redirect("/activity");
+        let credential = GithubUserCredential {
+            access_token: "ghu_discovery".into(),
+            ttl_secs: Some(60),
+        };
+
+        append_access_cookie(
+            &mut response,
+            &oauth(),
+            user_id,
+            &profile("42"),
+            &credential,
+        )
+        .unwrap();
+
+        let set_cookie = response
+            .headers()
+            .get_all(SET_COOKIE)
+            .iter()
+            .find_map(|value| {
+                let value = value.to_str().unwrap();
+                value
+                    .strip_prefix("slash_github_access=")
+                    .and_then(|rest| rest.split(';').next())
+            })
+            .unwrap();
+        let opened = github_user_access::open(&secret(), set_cookie).unwrap();
+        assert_eq!(opened.user_id, user_id);
+        assert_eq!(opened.github_subject, "42");
+        assert_eq!(opened.access_token, "ghu_discovery");
+    }
+
+    #[test]
+    fn repository_access_has_activity_success_and_error_destinations() {
+        let success = callback_success(&oauth(), OauthIntent::RepositoryAccess);
+        assert_eq!(
+            success.headers().get(LOCATION).unwrap(),
+            "/activity?github=authorized"
+        );
+        let error = callback_error(
+            &oauth(),
+            Some(OauthIntent::RepositoryAccess),
+            "access_denied",
+        );
+        assert_eq!(
+            error.headers().get(LOCATION).unwrap(),
+            "/activity?github=error&reason=access_denied"
+        );
     }
 
     #[tokio::test]

@@ -1,0 +1,86 @@
+---
+title: 命令活动
+description: "发现可访问的 GitHub 仓库，并读取授权后的 invocation 历史。"
+sidebar:
+  order: 4
+---
+
+这些端点支撑已认证的 `/activity` 控制台。它们只接受 `slash_session` 浏览器 cookie，
+不接受 Personal Access Token。仓库发现还需要 GitHub 登录、连接或仓库重新授权所签发
+的加密短期 GitHub access cookie。
+
+## GET `/api/github/installations`
+
+列出已连接 GitHub 身份可访问的 GitHub App 安装实例。可选的 `cursor` 和 `limit` 查询
+参数用于分页；`limit` 默认为 50，上限为 100。
+
+```json
+{
+  "items": [
+    { "id": "12345678", "account": "octo-org", "target_type": "Organization" }
+  ],
+  "next_cursor": null
+}
+```
+
+GitHub 标识符使用字符串，避免浏览器丢失 64 位整数精度。
+
+## GET `/api/github/installations/{installation_id}/repositories`
+
+列出一个 App 安装实例中已连接 GitHub 身份可访问的仓库。它使用相同的分页参数和响应
+外层结构。
+
+```json
+{
+  "items": [
+    {
+      "id": "987654321",
+      "name": "rocket",
+      "full_name": "octo-org/rocket",
+      "owner": "octo-org",
+      "private": true
+    }
+  ],
+  "next_cursor": null
+}
+```
+
+GitHub 凭据缺失、过期、无效或被撤销时，两个发现端点都返回带
+`github_reauthorization_required` 的 `403`。在浏览器中启动
+`POST /api/auth/github/repository-access`，callback 完成后重试。GitHub 依赖失败返回
+`503`。
+
+## GET `/api/invocations`
+
+在实时 GitHub collaborator 检查通过后列出已接受的 invocations。必填查询参数是
+`installation_id`、`repository_id`、`owner` 和 `repo`。可选参数包括精确 `status`、
+精确 `command`、不透明 `cursor` 和 `limit`（默认 50，上限 100）。
+
+```json
+{
+  "items": [
+    {
+      "id": "d6a8d9fb-bb9c-4107-916f-d35d4e389024",
+      "attempt": 1,
+      "pr_number": 42,
+      "head_sha": "a1b2c3d4",
+      "actor": "octocat",
+      "command": "deploy",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-08-27T10:00:00Z",
+      "dispatched_at": "2026-08-27T10:00:01Z",
+      "correlated_at": "2026-08-27T10:00:04Z",
+      "completed_at": "2026-08-27T10:03:00Z",
+      "pull_url": "https://github.com/octo-org/rocket/pull/42",
+      "comment_url": "https://github.com/octo-org/rocket/pull/42#issuecomment-1",
+      "check_url": "https://github.com/octo-org/rocket/runs/12",
+      "workflow_run_url": "https://github.com/octo-org/rocket/actions/runs/13"
+    }
+  ],
+  "next_cursor": null
+}
+```
+
+响应不包含命令参数、原始评论、webhook 标识符、失败诊断和 payload。仓库不存在与查看者
+无法读取仓库都返回 `404`；无效筛选返回 `422`；GitHub 授权依赖失败返回 `503`。

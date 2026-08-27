@@ -1,9 +1,58 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { accessTokenApi, api, testEngineApi } from "./api";
+import { accessTokenApi, activityApi, api, testEngineApi } from "./api";
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+describe("activityApi", () => {
+  it("preserves GitHub identifiers and encodes history filters", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({ items: [], next_cursor: "next-page" }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await activityApi.listInvocations({
+      installationId: "9007199254740993",
+      repositoryId: "9007199254740995",
+      owner: "octo-org",
+      repo: "rocket ship",
+      status: "completed",
+      command: "deploy",
+      cursor: "cursor+/=",
+      limit: 25,
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/invocations?installation_id=9007199254740993&repository_id=9007199254740995&owner=octo-org&repo=rocket+ship&status=completed&command=deploy&cursor=cursor%2B%2F%3D&limit=25",
+      { credentials: "same-origin", headers: undefined },
+    );
+  });
+
+  it("loads a page of repositories for an installation", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          items: [{ id: "9007199254740995", name: "slash", full_name: "octo/slash", owner: "octo", private: true }],
+          next_cursor: null,
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const page = await activityApi.listRepositories("9007199254740993", "page-2", 50);
+
+    expect(page.items[0].id).toBe("9007199254740995");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/github/installations/9007199254740993/repositories?cursor=page-2&limit=50",
+      { credentials: "same-origin", headers: undefined },
+    );
+  });
 });
 
 describe("testEngineApi", () => {

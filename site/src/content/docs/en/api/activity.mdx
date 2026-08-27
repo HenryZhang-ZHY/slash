@@ -1,0 +1,92 @@
+---
+title: Command activity
+description: "Discover accessible GitHub repositories and read authorized invocation history."
+sidebar:
+  order: 4
+---
+
+These endpoints back the authenticated `/activity` console. They accept only
+the `slash_session` browser cookie; personal access tokens are not accepted.
+Repository discovery also requires the encrypted, short-lived GitHub access
+cookie issued by GitHub sign-in, connection, or repository reauthorization.
+
+## GET `/api/github/installations`
+
+Lists GitHub App installations available to the connected GitHub identity.
+Optional `cursor` and `limit` query parameters page through results. `limit`
+defaults to 50 and is capped at 100.
+
+```json
+{
+  "items": [
+    { "id": "12345678", "account": "octo-org", "target_type": "Organization" }
+  ],
+  "next_cursor": null
+}
+```
+
+GitHub identifiers are strings so browsers do not lose 64-bit precision.
+
+## GET `/api/github/installations/{installation_id}/repositories`
+
+Lists repositories available to the connected GitHub identity within one App
+installation. It uses the same pagination parameters and response envelope.
+
+```json
+{
+  "items": [
+    {
+      "id": "987654321",
+      "name": "rocket",
+      "full_name": "octo-org/rocket",
+      "owner": "octo-org",
+      "private": true
+    }
+  ],
+  "next_cursor": null
+}
+```
+
+Both discovery endpoints return `403` with
+`github_reauthorization_required` when the GitHub credential is absent,
+expired, invalid, or revoked. Start
+`POST /api/auth/github/repository-access` in the browser and retry after the
+callback. GitHub dependency failures return `503`.
+
+## GET `/api/invocations`
+
+Lists accepted invocations after a live GitHub collaborator check. Required
+query parameters are `installation_id`, `repository_id`, `owner`, and `repo`.
+Optional parameters are an exact `status`, an exact `command`, an opaque
+`cursor`, and `limit` (default 50, maximum 100).
+
+```json
+{
+  "items": [
+    {
+      "id": "d6a8d9fb-bb9c-4107-916f-d35d4e389024",
+      "attempt": 1,
+      "pr_number": 42,
+      "head_sha": "a1b2c3d4",
+      "actor": "octocat",
+      "command": "deploy",
+      "status": "completed",
+      "conclusion": "success",
+      "created_at": "2026-08-27T10:00:00Z",
+      "dispatched_at": "2026-08-27T10:00:01Z",
+      "correlated_at": "2026-08-27T10:00:04Z",
+      "completed_at": "2026-08-27T10:03:00Z",
+      "pull_url": "https://github.com/octo-org/rocket/pull/42",
+      "comment_url": "https://github.com/octo-org/rocket/pull/42#issuecomment-1",
+      "check_url": "https://github.com/octo-org/rocket/runs/12",
+      "workflow_run_url": "https://github.com/octo-org/rocket/actions/runs/13"
+    }
+  ],
+  "next_cursor": null
+}
+```
+
+The response omits command arguments, raw comments, webhook identifiers,
+failure diagnostics, and payloads. A missing repository and a repository the
+viewer cannot read both return `404`. Invalid filters return `422`; a GitHub
+authorization dependency failure returns `503`.

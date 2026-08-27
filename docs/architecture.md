@@ -166,6 +166,15 @@ never copy authorization state. Plaintext tokens are shown once and only a
 keyed digest is persisted. Credential management remains browser-session-only;
 the complete lifecycle is in [Personal access tokens](design/personal-access-tokens.md).
 
+Repository command activity is visible to browser users only after a live
+GitHub collaborator check for the selected repository. Discovery uses a
+short-lived encrypted GitHub user credential bound to the Slash session and
+external subject; the token is never stored in PostgreSQL or exposed to
+JavaScript. History queries remain tenant-scoped by stable installation and
+repository ids and omit raw command arguments and diagnostic strings. The
+complete boundary is in
+[Command invocation history](design/command-invocation-history.md).
+
 Instance administration is a separate secret-gated trust boundary. It is
 disabled when its file-backed secret is absent and grants no repository or
 organization role. The operational surface and installation reconciliation
