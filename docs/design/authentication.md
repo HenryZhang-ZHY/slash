@@ -64,8 +64,11 @@ AuthenticatedIdentity {
 ```
 
 Only `connection_id` and `subject` participate in account resolution. Profile
-fields are mutable presentation data. Raw tokens are used during the callback
-and discarded.
+fields are mutable presentation data. In the implemented baseline, raw tokens
+are used during the callback and discarded. The proposed
+[command invocation history](command-invocation-history.md) design defines one
+narrow, short-lived exception for repository discovery without placing a token
+in identity profile data or PostgreSQL.
 
 ## Sign-in and explicit linking
 
@@ -119,6 +122,16 @@ The adapter reads only `GET /user`. The stable numeric GitHub user id is the
 subject. Slash does not request `user:email`, call `/user/emails`, or require
 GitHub email permission. GitHub login and name are display profile fields.
 
+### Proposed repository-discovery credential
+
+The command activity console needs the GitHub App's user access token to list
+only installations and repositories accessible to both the App and the signed
+in user. Its owning design permits an encrypted, HttpOnly browser cookie for no
+longer than eight hours. The credential remains bound to the authenticated
+Slash user and GitHub subject, is never stored in PostgreSQL or exposed to
+JavaScript, and has no retained refresh token. All other provider adapters and
+uses continue to discard their raw tokens at the callback boundary.
+
 ## Future providers and enterprise SSO
 
 - Google and standards-based enterprise OIDC use the validated `iss` trust
@@ -143,7 +156,9 @@ configuration, not provider columns or branches in account persistence.
 - A connection callback revalidates the current Slash session and initiating
   user before persistence.
 - Provider tokens, secret contents, callback codes, and upstream bodies are
-  never persisted, logged, or returned to browsers.
+  never logged or returned in browser-readable data. Provider tokens are not
+  persisted except for the proposed encrypted, HttpOnly GitHub discovery
+  cookie owned by the command invocation history design.
 - Disabled users cannot sign in through a still-linked identity.
 - Database uniqueness constraints are authoritative for concurrent sign-in and
   linking races.
