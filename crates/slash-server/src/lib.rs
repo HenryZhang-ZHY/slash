@@ -218,6 +218,10 @@ pub async fn run() {
             "/api/auth/github/connect",
             post(github_oauth::start_github_connect),
         )
+        .route(
+            "/api/auth/github/repository-access",
+            post(github_oauth::start_github_repository_access),
+        )
         .route("/api/teams", post(userapi::create_team))
         .route(
             "/api/test-engine/suites",

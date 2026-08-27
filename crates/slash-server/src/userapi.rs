@@ -277,6 +277,10 @@ pub async fn login(
 pub async fn logout() -> Response {
     let mut resp = (StatusCode::NO_CONTENT).into_response();
     clear_token_cookie(&mut resp);
+    #[allow(clippy::expect_used)]
+    let github_cookie = HeaderValue::from_str(&crate::github_user_access::clear_cookie_value())
+        .expect("generated cookie is valid ASCII");
+    resp.headers_mut().append(SET_COOKIE, github_cookie);
     resp
 }
 
