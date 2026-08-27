@@ -16,6 +16,7 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { testEngineApi, type CollectionTokenSummary, type TestSuiteSummary } from '@/lib/api'
+import { requestErrorKey } from '@/lib/requestError'
 import { CollectionTokenDialog } from './CollectionTokenDialog'
 
 function formatDate(value: string | null, language: string, fallback: string) {
@@ -48,7 +49,7 @@ export function CollectionTokensSection({ suite }: { suite: TestSuiteSummary }) 
       setError(null)
       setTokens(await testEngineApi.listTokens(suite.id))
     } catch (requestError) {
-      setError(requestError instanceof Error ? requestError.message : t('dialog.tokenLoadFailed'))
+      setError(t(requestErrorKey(requestError, 'dialog.tokenLoadFailed')))
     }
   }, [suite.id, t])
 
@@ -83,7 +84,7 @@ export function CollectionTokensSection({ suite }: { suite: TestSuiteSummary }) 
       await load()
     } catch (requestError) {
       setError(
-        requestError instanceof Error ? requestError.message : t('dialog.tokenRevokeFailed'),
+        t(requestErrorKey(requestError, 'dialog.tokenRevokeFailed')),
       )
     } finally {
       setRevokingTokenId(null)
